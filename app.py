@@ -139,6 +139,16 @@ st.markdown("""
             padding-left: 1rem;
             padding-right: 1rem;
         }
+        
+        /* 로딩 스피너 최적화 */
+        .stSpinner {
+            margin: 2rem auto;
+        }
+        
+        /* 폼 최적화 */
+        .stForm {
+            margin-bottom: 1rem;
+        }
     }
     
     /* 데스크톱에서는 사이드바 유지 */
@@ -181,15 +191,10 @@ if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
 def login_page():
-    """로그인 페이지"""
-    st.markdown("""
-    <div style="display: flex; justify-content: center; align-items: center; min-height: 60vh; flex-direction: column;">
-        <div style="text-align: center; max-width: 400px; padding: 2rem; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            <h1 style="color: #1f77b4; margin-bottom: 2rem;">🔐 MOS 퀀트투자 시스템</h1>
-            <p style="color: #666; margin-bottom: 2rem;">로그인하여 시스템에 접속하세요</p>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    """로그인 페이지 - 모바일 최적화"""
+    # 간단한 헤더
+    st.markdown("# 🔐 MOS 퀀트투자 시스템")
+    st.markdown("### 로그인하여 시스템에 접속하세요")
     
     with st.form("login_form"):
         st.markdown("### 🔑 로그인")
@@ -209,12 +214,18 @@ def login_page():
     
 
 def initialize_trader():
-    """트레이더 초기화"""
+    """트레이더 초기화 - 오류 처리 강화"""
     if st.session_state.trader is None:
-        with st.spinner('SOXL 퀀트투자 시스템 초기화 중...'):
-            st.session_state.trader = SOXLQuantTrader(st.session_state.initial_capital)
-            if st.session_state.test_today_override:
-                st.session_state.trader.set_test_today(st.session_state.test_today_override)
+        try:
+            with st.spinner('MOS 퀀트투자 시스템 초기화 중...'):
+                st.session_state.trader = SOXLQuantTrader(st.session_state.initial_capital)
+                if st.session_state.test_today_override:
+                    st.session_state.trader.set_test_today(st.session_state.test_today_override)
+        except Exception as e:
+            st.error(f"시스템 초기화 실패: {str(e)}")
+            st.info("페이지를 새로고침해주세요.")
+            if st.button("🔄 새로고침"):
+                st.rerun()
 
 def show_mobile_settings():
     """모바일용 설정 패널"""
@@ -288,9 +299,15 @@ def show_mobile_settings():
     """, unsafe_allow_html=True)
 
 def main():
-    # 로그인 체크
-    if not st.session_state.authenticated:
-        login_page()
+    try:
+        # 로그인 체크
+        if not st.session_state.authenticated:
+            login_page()
+            return
+    except Exception as e:
+        st.error(f"페이지 로딩 오류: {str(e)}")
+        if st.button("🔄 페이지 새로고침"):
+            st.rerun()
         return
     
     # 로그아웃 버튼 (사이드바에 추가)
