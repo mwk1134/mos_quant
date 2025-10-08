@@ -976,6 +976,9 @@ class SOXLQuantTrader:
         """
         sell_positions = []
         
+        # 디버깅: 보유 포지션 수 확인
+        print(f"🔍 매도 조건 확인: 보유 포지션 {len(self.positions)}개")
+        
         for position in self.positions:
             buy_date = position["buy_date"]
 
@@ -995,25 +998,34 @@ class SOXLQuantTrader:
             position_buy_price = position["buy_price"]
             sell_price = position_buy_price * (1 + position_config["sell_threshold"] / 100)
             
+            # 디버깅: 매도 조건 상세 정보
+            daily_close = row['Close']
+            print(f"   📦 {position['round']}회차: 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (현재가 ${daily_close:.2f})")
+            print(f"      보유기간: {hold_days}일 (최대: {position_config['max_hold_days']}일)")
             
             # 1. LOC 매도 조건: 종가가 매도목표가에 도달했을 때 (종가 >= 매도목표가)
-            daily_close = row['Close']
             if daily_close >= sell_price:
+                print(f"      ✅ 매도 조건 1: 목표가 도달 (${daily_close:.2f} >= ${sell_price:.2f})")
                 sell_positions.append({
                     "position": position,
                     "reason": "목표가 도달",
-
                     "sell_price": daily_close  # 종가에 매도
                 })
             
             # 2. 보유기간 초과 시 매도 (당일 종가에 매도)
-
             elif hold_days > position_config["max_hold_days"]:
+                print(f"      ✅ 매도 조건 2: 보유기간 초과 ({hold_days}일 > {position_config['max_hold_days']}일)")
                 sell_positions.append({
                     "position": position,
                     "reason": f"보유기간 초과 ({hold_days+1}일)",
                     "sell_price": row['Close']  # 종가에 매도
                 })
+        
+        # 디버깅: 매도 추천 결과
+        if sell_positions:
+            print(f"✅ 매도 추천 {len(sell_positions)}건 생성됨")
+        else:
+            print("❌ 매도 추천 없음")
         
         return sell_positions
     
@@ -1182,7 +1194,20 @@ class SOXLQuantTrader:
                 print(f"   {pos['round']}회차 매도: {pos['shares']}주 @ ${sell_info['sell_price']:.2f}")
                 print(f"   매도 사유: {sell_info['reason']}")
         else:
-            print("🟡 매도 추천 없음")
+            # 보유 포지션이 있으면 매도 목표가 안내
+            if self.positions:
+                print("📋 보유 포지션 매도 목표가 안내:")
+                for pos in self.positions:
+                    config = self.sf_config if pos['mode'] == "SF" else self.ag_config
+                    target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
+                    current_price = rec['soxl_current_price']
+                    price_diff = target_sell_price - current_price
+                    price_diff_pct = (price_diff / current_price) * 100
+                    
+                    print(f"   📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f}")
+                    print(f"      매수가: ${pos['buy_price']:.2f} | 보유: {pos['shares']}주")
+            else:
+                print("🟡 매도 추천 없음")
         
         print()
         print("💼 포트폴리오 현황:")
