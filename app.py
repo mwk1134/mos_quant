@@ -171,6 +171,43 @@ if 'session_start_date' not in st.session_state:
     st.session_state.session_start_date = None
 if 'test_today_override' not in st.session_state:
     st.session_state.test_today_override = None
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+
+def login_page():
+    """로그인 페이지"""
+    st.markdown("""
+    <div style="display: flex; justify-content: center; align-items: center; min-height: 60vh; flex-direction: column;">
+        <div style="text-align: center; max-width: 400px; padding: 2rem; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+            <h1 style="color: #1f77b4; margin-bottom: 2rem;">🔐 SOXL 퀀트투자 시스템</h1>
+            <p style="color: #666; margin-bottom: 2rem;">로그인하여 시스템에 접속하세요</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    with st.form("login_form"):
+        st.markdown("### 🔑 로그인")
+        
+        username = st.text_input("사용자 ID", placeholder="사용자 ID를 입력하세요")
+        password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
+        
+        submitted = st.form_submit_button("로그인", use_container_width=True)
+        
+        if submitted:
+            if username == "mosmos" and password == "mosmos!":
+                st.session_state.authenticated = True
+                st.success("✅ 로그인 성공!")
+                st.rerun()
+            else:
+                st.error("❌ 잘못된 사용자 ID 또는 비밀번호입니다.")
+    
+    # 로그인 정보 안내 (개발용)
+    with st.expander("💡 로그인 정보"):
+        st.info("""
+        **테스트 계정:**
+        - ID: mosmos
+        - PW: mosmos!
+        """)
 
 def initialize_trader():
     """트레이더 초기화"""
@@ -187,15 +224,13 @@ def show_mobile_settings():
     """, unsafe_allow_html=True)
     
     # 투자원금 설정
-    st.markdown("**💰 초기 투자금**")
     initial_capital = st.number_input(
-        "달러",
+        "💰 초기 투자금 (달러)",
         min_value=1000.0,
         max_value=1000000.0,
         value=float(st.session_state.initial_capital),
         step=1000.0,
         format="%.0f",
-        label_visibility="collapsed",
         key="mobile_capital"
     )
     
@@ -205,12 +240,10 @@ def show_mobile_settings():
         st.rerun()  # 즉시 새로고침
     
     # 시작일 설정
-    st.markdown("**📅 투자 시작일**")
     session_start_date = st.date_input(
-        "",
+        "📅 투자 시작일",
         value=datetime.now() - timedelta(days=365),
         max_value=datetime.now(),
-        label_visibility="collapsed",
         key="mobile_start_date"
     )
     
@@ -256,6 +289,19 @@ def show_mobile_settings():
     """, unsafe_allow_html=True)
 
 def main():
+    # 로그인 체크
+    if not st.session_state.authenticated:
+        login_page()
+        return
+    
+    # 로그아웃 버튼 (사이드바에 추가)
+    with st.sidebar:
+        st.markdown("---")
+        if st.button("🚪 로그아웃", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.trader = None
+            st.rerun()
+    
     # 메인 헤더
     st.markdown('<div class="main-header">📈 SOXL 퀀트투자 시스템</div>', unsafe_allow_html=True)
     
