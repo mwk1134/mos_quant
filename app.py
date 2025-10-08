@@ -86,35 +86,11 @@ st.markdown("""
     }
     
     .mobile-settings-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 1rem;
         font-weight: bold;
         font-size: 1.1rem;
         color: #495057;
-    }
-    
-    .mobile-settings-content {
-        display: none;
-    }
-    
-    .mobile-settings-content.show {
-        display: block;
-    }
-    
-    .toggle-btn {
-        background: #007bff;
-        color: white;
-        border: none;
-        border-radius: 5px;
-        padding: 0.3rem 0.8rem;
-        cursor: pointer;
-        font-size: 0.9rem;
-    }
-    
-    .toggle-btn:hover {
-        background: #0056b3;
+        margin-bottom: 1rem;
+        text-align: center;
     }
     
     /* 모바일 최적화 */
@@ -209,10 +185,8 @@ def show_mobile_settings():
     st.markdown("""
     <div class="mobile-settings-panel">
         <div class="mobile-settings-header">
-            <span>⚙️ 설정</span>
-            <button class="toggle-btn" onclick="toggleMobileSettings()">열기/닫기</button>
+            ⚙️ 설정
         </div>
-        <div class="mobile-settings-content" id="mobileSettingsContent">
     """, unsafe_allow_html=True)
     
     # 투자원금 설정
@@ -230,7 +204,8 @@ def show_mobile_settings():
     
     if initial_capital != st.session_state.initial_capital:
         st.session_state.initial_capital = initial_capital
-        st.session_state.trader = None
+        st.session_state.trader = None  # 트레이더 재초기화
+        st.rerun()  # 즉시 새로고침
     
     # 시작일 설정
     st.markdown("**📅 투자 시작일**")
@@ -241,7 +216,12 @@ def show_mobile_settings():
         label_visibility="collapsed",
         key="mobile_start_date"
     )
-    st.session_state.session_start_date = session_start_date.strftime('%Y-%m-%d')
+    
+    new_start_date = session_start_date.strftime('%Y-%m-%d')
+    if new_start_date != st.session_state.session_start_date:
+        st.session_state.session_start_date = new_start_date
+        st.session_state.trader = None  # 트레이더 재초기화
+        st.rerun()  # 즉시 새로고침
     
     # 테스트 날짜 설정
     with st.expander("🧪 테스트 설정"):
@@ -270,34 +250,12 @@ def show_mobile_settings():
     else:
         st.warning("⚠️ 초기화 필요")
     
+    # 설정 변경 안내
+    if st.session_state.initial_capital != 9000 or st.session_state.session_start_date != (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d'):
+        st.info("💡 설정이 변경되었습니다. 대시보드가 업데이트됩니다.")
+    
     st.markdown("""
-        </div>
     </div>
-    
-    <script>
-    // 페이지 로드 시 실행
-    document.addEventListener('DOMContentLoaded', function() {
-        const btn = document.querySelector('.toggle-btn');
-        if (btn) {
-            btn.textContent = '열기';
-        }
-    });
-    
-    function toggleMobileSettings() {
-        const content = document.getElementById('mobileSettingsContent');
-        const btn = document.querySelector('.toggle-btn');
-        
-        if (!content || !btn) return;
-        
-        if (content.classList.contains('show')) {
-            content.classList.remove('show');
-            btn.textContent = '열기';
-        } else {
-            content.classList.add('show');
-            btn.textContent = '닫기';
-        }
-    }
-    </script>
     """, unsafe_allow_html=True)
 
 def main():
@@ -326,7 +284,8 @@ def main():
         
         if initial_capital != st.session_state.initial_capital:
             st.session_state.initial_capital = initial_capital
-            st.session_state.trader = None  # 트레이더 재초기화 필요
+            st.session_state.trader = None  # 트레이더 재초기화
+            st.rerun()  # 즉시 새로고침
         
         # 시작일 설정
         st.markdown("**📅 투자 시작일**")
@@ -337,7 +296,12 @@ def main():
             label_visibility="collapsed",
             key="desktop_start_date"
         )
-        st.session_state.session_start_date = session_start_date.strftime('%Y-%m-%d')
+        
+        new_start_date = session_start_date.strftime('%Y-%m-%d')
+        if new_start_date != st.session_state.session_start_date:
+            st.session_state.session_start_date = new_start_date
+            st.session_state.trader = None  # 트레이더 재초기화
+            st.rerun()  # 즉시 새로고침
         
         # 테스트 날짜 설정
         with st.expander("🧪 테스트 설정"):
@@ -420,7 +384,8 @@ def show_dashboard():
     with col1:
         st.metric(
             "💰 투자원금",
-            f"${st.session_state.initial_capital:,.0f}"
+            f"${st.session_state.initial_capital:,.0f}",
+            delta=None
         )
     
     with col2:
