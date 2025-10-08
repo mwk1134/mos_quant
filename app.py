@@ -19,7 +19,7 @@ st.set_page_config(
     page_title="SOXL 퀀트투자 시스템",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"  # 모바일에서 기본적으로 접힌 상태
 )
 
 # 커스텀 CSS - 모바일 최적화
@@ -75,6 +75,48 @@ st.markdown("""
         font-weight: bold;
     }
     
+    /* 모바일 설정 패널 */
+    .mobile-settings-panel {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .mobile-settings-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 1rem;
+        font-weight: bold;
+        font-size: 1.1rem;
+        color: #495057;
+    }
+    
+    .mobile-settings-content {
+        display: none;
+    }
+    
+    .mobile-settings-content.show {
+        display: block;
+    }
+    
+    .toggle-btn {
+        background: #007bff;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        padding: 0.3rem 0.8rem;
+        cursor: pointer;
+        font-size: 0.9rem;
+    }
+    
+    .toggle-btn:hover {
+        background: #0056b3;
+    }
+    
     /* 모바일 최적화 */
     @media (max-width: 768px) {
         /* 메트릭 카드 크기 조정 */
@@ -105,9 +147,22 @@ st.markdown("""
             font-size: 0.8rem;
         }
         
-        /* 사이드바 최적화 */
+        /* 사이드바 숨기기 */
         .css-1d391kg {
-            padding-top: 1rem;
+            display: none !important;
+        }
+        
+        /* 메인 컨텐츠 전체 너비 사용 */
+        .main .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+    }
+    
+    /* 데스크톱에서는 사이드바 유지 */
+    @media (min-width: 769px) {
+        .mobile-settings-panel {
+            display: none;
         }
     }
     
@@ -149,15 +204,114 @@ def initialize_trader():
             if st.session_state.test_today_override:
                 st.session_state.trader.set_test_today(st.session_state.test_today_override)
 
+def show_mobile_settings():
+    """모바일용 설정 패널"""
+    st.markdown("""
+    <div class="mobile-settings-panel">
+        <div class="mobile-settings-header">
+            <span>⚙️ 설정</span>
+            <button class="toggle-btn" onclick="toggleMobileSettings()">열기/닫기</button>
+        </div>
+        <div class="mobile-settings-content" id="mobileSettingsContent">
+    """, unsafe_allow_html=True)
+    
+    # 투자원금 설정
+    st.markdown("**💰 초기 투자금**")
+    initial_capital = st.number_input(
+        "달러",
+        min_value=1000.0,
+        max_value=1000000.0,
+        value=float(st.session_state.initial_capital),
+        step=1000.0,
+        format="%.0f",
+        label_visibility="collapsed",
+        key="mobile_capital"
+    )
+    
+    if initial_capital != st.session_state.initial_capital:
+        st.session_state.initial_capital = initial_capital
+        st.session_state.trader = None
+    
+    # 시작일 설정
+    st.markdown("**📅 투자 시작일**")
+    session_start_date = st.date_input(
+        "",
+        value=datetime.now() - timedelta(days=365),
+        max_value=datetime.now(),
+        label_visibility="collapsed",
+        key="mobile_start_date"
+    )
+    st.session_state.session_start_date = session_start_date.strftime('%Y-%m-%d')
+    
+    # 테스트 날짜 설정
+    with st.expander("🧪 테스트 설정"):
+        test_today = st.date_input(
+            "테스트 오늘 날짜",
+            value=None,
+            help="백테스팅용 가상 날짜 설정",
+            key="mobile_test_date"
+        )
+        
+        if test_today:
+            st.session_state.test_today_override = test_today.strftime('%Y-%m-%d')
+            if st.session_state.trader:
+                st.session_state.trader.set_test_today(st.session_state.test_today_override)
+        else:
+            st.session_state.test_today_override = None
+            if st.session_state.trader:
+                st.session_state.trader.set_test_today(None)
+    
+    # 시스템 상태
+    st.markdown("**📊 상태**")
+    if st.session_state.trader:
+        st.success("✅ 준비 완료")
+        st.caption(f"💰 ${st.session_state.initial_capital:,.0f}")
+        st.caption(f"📅 {st.session_state.session_start_date}")
+    else:
+        st.warning("⚠️ 초기화 필요")
+    
+    st.markdown("""
+        </div>
+    </div>
+    
+    <script>
+    // 페이지 로드 시 실행
+    document.addEventListener('DOMContentLoaded', function() {
+        const btn = document.querySelector('.toggle-btn');
+        if (btn) {
+            btn.textContent = '열기';
+        }
+    });
+    
+    function toggleMobileSettings() {
+        const content = document.getElementById('mobileSettingsContent');
+        const btn = document.querySelector('.toggle-btn');
+        
+        if (!content || !btn) return;
+        
+        if (content.classList.contains('show')) {
+            content.classList.remove('show');
+            btn.textContent = '열기';
+        } else {
+            content.classList.add('show');
+            btn.textContent = '닫기';
+        }
+    }
+    </script>
+    """, unsafe_allow_html=True)
+
 def main():
     # 메인 헤더
     st.markdown('<div class="main-header">📈 SOXL 퀀트투자 시스템</div>', unsafe_allow_html=True)
     
-    # 사이드바 - 설정 (모바일 최적화)
+    # 모바일용 설정 패널
+    show_mobile_settings()
+    
+    # 사이드바 - 설정 (데스크톱용)
     with st.sidebar:
         st.header("⚙️ 설정")
         
-        # 투자원금 설정 - 모바일 친화적
+        # 투자원금 설정 - 데스크톱용
         st.markdown("**💰 초기 투자금**")
         initial_capital = st.number_input(
             "달러",
@@ -166,7 +320,8 @@ def main():
             value=float(st.session_state.initial_capital),
             step=1000.0,
             format="%.0f",
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="desktop_capital"
         )
         
         if initial_capital != st.session_state.initial_capital:
@@ -179,7 +334,8 @@ def main():
             "",
             value=datetime.now() - timedelta(days=365),
             max_value=datetime.now(),
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="desktop_start_date"
         )
         st.session_state.session_start_date = session_start_date.strftime('%Y-%m-%d')
         
@@ -188,7 +344,8 @@ def main():
             test_today = st.date_input(
                 "테스트 오늘 날짜",
                 value=None,
-                help="백테스팅용 가상 날짜 설정"
+                help="백테스팅용 가상 날짜 설정",
+                key="desktop_test_date"
             )
             
             if test_today:
@@ -228,7 +385,7 @@ def main():
     # 메인 네비게이션 - 모바일 친화적
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🏠 대시보드", 
-        "📊 추천", 
+        "📊 오늘의 매매", 
         "💼 포트폴리오", 
         "📈 백테스팅", 
         "⚙️ 설정"
@@ -311,7 +468,7 @@ def show_dashboard():
     col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
-        if st.button("📊 추천", use_container_width=True, key="quick_rec"):
+        if st.button("📊 오늘의 매매", use_container_width=True, key="quick_rec"):
             st.session_state.active_tab = 1
             st.rerun()
     
