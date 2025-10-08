@@ -184,9 +184,6 @@ def show_mobile_settings():
     """모바일용 설정 패널"""
     st.markdown("""
     <div class="mobile-settings-panel">
-        <div class="mobile-settings-header">
-            ⚙️ 설정
-        </div>
     """, unsafe_allow_html=True)
     
     # 투자원금 설정
@@ -242,7 +239,7 @@ def show_mobile_settings():
                 st.session_state.trader.set_test_today(None)
     
     # 시스템 상태
-    st.markdown("**📊 상태**")
+    st.markdown("****")
     if st.session_state.trader:
         st.success("✅ 준비 완료")
         st.caption(f"💰 ${st.session_state.initial_capital:,.0f}")
@@ -377,6 +374,15 @@ def show_dashboard():
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
         return
+    
+    # 시뮬레이션 실행하여 현재 상태 업데이트
+    start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    
+    with st.spinner('현재 상태 계산 중...'):
+        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        if "error" in sim_result:
+            st.error(f"시뮬레이션 실패: {sim_result['error']}")
+            return
     
     # 현재 상태 요약
     col1, col2, col3, col4 = st.columns(4)
@@ -513,7 +519,19 @@ def show_daily_recommendation():
                 st.info(f"📦 {pos['round']}회차 매도: {pos['shares']}주 @ ${sell_info['sell_price']:.2f}")
                 st.caption(f"매도 사유: {sell_info['reason']}")
         else:
-            st.info("🟡 매도 추천 없음")
+            # 보유 포지션이 있으면 매도 목표가 안내
+            if st.session_state.trader.positions:
+                st.warning("📋 보유 포지션이 있습니다. 매도 목표가를 확인하세요:")
+                for pos in st.session_state.trader.positions:
+                    config = st.session_state.trader.sf_config if pos['mode'] == "SF" else st.session_state.trader.ag_config
+                    target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
+                    current_price = recommendation['soxl_current_price']
+                    price_diff = target_sell_price - current_price
+                    price_diff_pct = (price_diff / current_price) * 100
+                    
+                    st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, {price_diff_pct:+.1f}%)")
+            else:
+                st.info("🟡 매도 추천 없음")
     
     # 포트폴리오 현황
     st.subheader("💼 포트폴리오 현황")
@@ -571,11 +589,18 @@ def show_portfolio():
         st.error("시스템이 초기화되지 않았습니다.")
         return
     
-    # 시뮬레이션 실행
+    # 시뮬레이션 실행 - 투자시작일 기준으로 재계산
     start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('포트폴리오 현황 계산 중...'):
-        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        # 투자시작일이 변경되었을 때를 대비해 트레이더 재초기화 후 시뮬레이션
+        if not st.session_state.trader.positions or len(st.session_state.trader.positions) == 0:
+            # 포지션이 없으면 새로 시뮬레이션
+            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        else:
+            # 기존 포지션이 있으면 그대로 사용
+            sim_result = {"status": "success"}
+            
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
@@ -685,19 +710,31 @@ def show_backtest():
     # 백테스팅 설정
     col1, col2 = st.columns(2)
     
+    # 세션 상태 초기화
+    if 'backtest_start_date' not in st.session_state:
+        st.session_state.backtest_start_date = datetime.now() - timedelta(days=365)
+    if 'backtest_end_date' not in st.session_state:
+        st.session_state.backtest_end_date = datetime.now()
+    
     with col1:
         start_date = st.date_input(
             "시작 날짜",
-            value=datetime.now() - timedelta(days=365),
-            max_value=datetime.now()
+            value=st.session_state.backtest_start_date,
+            max_value=datetime.now(),
+            key="backtest_start_date_input"
         )
+        if start_date != st.session_state.backtest_start_date:
+            st.session_state.backtest_start_date = start_date
     
     with col2:
         end_date = st.date_input(
             "종료 날짜",
-            value=datetime.now(),
-            max_value=datetime.now()
+            value=st.session_state.backtest_end_date,
+            max_value=datetime.now(),
+            key="backtest_end_date_input"
         )
+        if end_date != st.session_state.backtest_end_date:
+            st.session_state.backtest_end_date = end_date
     
     # 백테스팅 실행
     if st.button("🚀 백테스팅 실행", use_container_width=True):
