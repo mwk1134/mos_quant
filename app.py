@@ -77,20 +77,26 @@ st.markdown("""
     
     /* 모바일 설정 패널 */
     .mobile-settings-panel {
-        background: #f8f9fa;
-        border: 1px solid #dee2e6;
-        border-radius: 10px;
-        padding: 1rem;
         margin-bottom: 1rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     
-    .mobile-settings-header {
-        font-weight: bold;
-        font-size: 1.1rem;
-        color: #495057;
-        margin-bottom: 1rem;
-        text-align: center;
+    /* 모바일에서 빈 입력 필드 숨기기 */
+    @media (max-width: 768px) {
+        /* number_input의 빈 라벨 숨기기 */
+        .stNumberInput > div > div > div > label {
+            display: none !important;
+        }
+        
+        /* date_input의 빈 라벨 숨기기 */
+        .stDateInput > div > div > div > label {
+            display: none !important;
+        }
+        
+        /* 빈 div 요소들 숨기기 */
+        div[data-testid="stNumberInput"] > div > div > div:empty,
+        div[data-testid="stDateInput"] > div > div > div:empty {
+            display: none !important;
+        }
     }
     
     /* 모바일 최적화 */
@@ -179,7 +185,7 @@ def login_page():
     st.markdown("""
     <div style="display: flex; justify-content: center; align-items: center; min-height: 60vh; flex-direction: column;">
         <div style="text-align: center; max-width: 400px; padding: 2rem; background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-            <h1 style="color: #1f77b4; margin-bottom: 2rem;">🔐 SOXL 퀀트투자 시스템</h1>
+            <h1 style="color: #1f77b4; margin-bottom: 2rem;">🔐 MOS 퀀트투자 시스템</h1>
             <p style="color: #666; margin-bottom: 2rem;">로그인하여 시스템에 접속하세요</p>
         </div>
     </div>
