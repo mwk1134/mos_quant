@@ -442,12 +442,8 @@ def show_daily_recommendation():
     with st.spinner('현재 상태 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
         st.session_state.trader.clear_cache()
-        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
-        if "error" in sim_result:
-            st.error(f"시뮬레이션 실패: {sim_result['error']}")
-            return
         
-        # 일일 추천 생성
+        # 일일 추천 생성 (내부에서 상태 업데이트 수행)
         recommendation = st.session_state.trader.get_daily_recommendation()
     
     if "error" in recommendation:

@@ -1102,6 +1102,12 @@ class SOXLQuantTrader:
         print("🚀 SOXL 퀀트투자 일일 매매 추천")
         print("=" * 60)
         
+        # 현재 상태를 최신으로 업데이트 (시작일부터 현재까지 시뮬레이션)
+        if self.session_start_date:
+            print("🔄 트레이더 상태를 최신으로 업데이트 중...")
+            sim_result = self.simulate_from_start_to_today(self.session_start_date, quiet=True)
+            if "error" in sim_result:
+                return {"error": f"상태 업데이트 실패: {sim_result['error']}"}
 
         # 시장 휴장일 확인
         today = datetime.now()
