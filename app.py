@@ -427,27 +427,6 @@ def show_dashboard():
             st.warning("🚫 현재 시장 휴장")
         else:
             st.success("✅ 현재 시장 개장")
-    
-    # 빠른 액션 버튼 - 모바일 최적화
-    st.subheader("🚀 빠른 액션")
-    
-    # 모바일에서는 세로 배치, 데스크톱에서는 가로 배치
-    col1, col2, col3 = st.columns([1, 1, 1])
-    
-    with col1:
-        if st.button("📊 오늘의 매매", use_container_width=True, key="quick_rec"):
-            st.session_state.active_tab = 1
-            st.rerun()
-    
-    with col2:
-        if st.button("💼 포트폴리오", use_container_width=True, key="quick_port"):
-            st.session_state.active_tab = 2
-            st.rerun()
-    
-    with col3:
-        if st.button("📈 백테스팅", use_container_width=True, key="quick_back"):
-            st.session_state.active_tab = 3
-            st.rerun()
 
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
