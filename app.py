@@ -191,14 +191,17 @@ if 'test_today_override' not in st.session_state:
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# 배포 테스트 - 버전 1.3
-st.sidebar.success("🚀 앱 버전 1.3 로드됨!")
-st.sidebar.info("📅 배포 시간: 2025-01-27 15:45")
+# 배포 테스트 - 버전 1.4
+import time
+current_time = int(time.time())
+st.sidebar.success("🚀 앱 버전 1.4 로드됨!")
+st.sidebar.info(f"📅 로드 시간: {current_time}")
+st.sidebar.info("💡 캐시 문제 시 Ctrl+F5로 강제 새로고침")
 
 def login_page():
     """로그인 페이지 - 모바일 최적화"""
     # 간단한 헤더
-    st.markdown("# 🔐 MOS 퀀트투자 시스템")
+    st.markdown("# 🔐 MOSxMOS 퀀트투자 시스템")
     st.markdown("### 로그인하여 시스템에 접속하세요")
     
     with st.form("login_form"):
