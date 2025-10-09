@@ -247,12 +247,14 @@ def show_mobile_settings():
     if initial_capital != st.session_state.initial_capital:
         st.session_state.initial_capital = initial_capital
         st.session_state.trader = None  # 트레이더 재초기화
+        if st.session_state.trader:
+            st.session_state.trader.clear_cache()  # 캐시 초기화
         st.rerun()  # 즉시 새로고침
     
     # 시작일 설정
     session_start_date = st.date_input(
         "📅 투자 시작일",
-        value=datetime.now() - timedelta(days=365),
+        value=datetime(2025, 8, 27),
         max_value=datetime.now(),
         key="mobile_start_date"
     )
@@ -261,6 +263,8 @@ def show_mobile_settings():
     if new_start_date != st.session_state.session_start_date:
         st.session_state.session_start_date = new_start_date
         st.session_state.trader = None  # 트레이더 재초기화
+        if st.session_state.trader:
+            st.session_state.trader.clear_cache()  # 캐시 초기화
         st.rerun()  # 즉시 새로고침
     
     # 테스트 날짜 설정
@@ -291,7 +295,7 @@ def show_mobile_settings():
         st.warning("⚠️ 초기화 필요")
     
     # 설정 변경 안내
-    if st.session_state.initial_capital != 9000 or st.session_state.session_start_date != (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d'):
+    if st.session_state.initial_capital != 9000 or st.session_state.session_start_date != "2025-08-27":
         st.info("💡 설정이 변경되었습니다. 대시보드가 업데이트됩니다.")
     
     st.markdown("""
@@ -344,13 +348,15 @@ def main():
         if initial_capital != st.session_state.initial_capital:
             st.session_state.initial_capital = initial_capital
             st.session_state.trader = None  # 트레이더 재초기화
+            if st.session_state.trader:
+                st.session_state.trader.clear_cache()  # 캐시 초기화
             st.rerun()  # 즉시 새로고침
         
         # 시작일 설정
         st.markdown("**📅 투자 시작일**")
         session_start_date = st.date_input(
             "",
-            value=datetime.now() - timedelta(days=365),
+            value=datetime(2025, 8, 27),
             max_value=datetime.now(),
             label_visibility="collapsed",
             key="desktop_start_date"
@@ -360,6 +366,8 @@ def main():
         if new_start_date != st.session_state.session_start_date:
             st.session_state.session_start_date = new_start_date
             st.session_state.trader = None  # 트레이더 재초기화
+            if st.session_state.trader:
+                st.session_state.trader.clear_cache()  # 캐시 초기화
             st.rerun()  # 즉시 새로고침
         
         # 테스트 날짜 설정
@@ -655,13 +663,8 @@ def show_portfolio():
     start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('포트폴리오 현황 계산 중...'):
-        # 투자시작일이 변경되었을 때를 대비해 트레이더 재초기화 후 시뮬레이션
-        if not st.session_state.trader.positions or len(st.session_state.trader.positions) == 0:
-            # 포지션이 없으면 새로 시뮬레이션
-            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
-        else:
-            # 기존 포지션이 있으면 그대로 사용
-            sim_result = {"status": "success"}
+        # 항상 시뮬레이션 실행하여 최신 상태 반영
+        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
             
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")

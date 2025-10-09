@@ -339,6 +339,10 @@ class SOXLQuantTrader:
             initial_capital: 투자원금 (기본값: 9000달러)
         """
         self.initial_capital = initial_capital
+        
+        # 성능 최적화를 위한 캐시
+        self._stock_data_cache = {}  # 주식 데이터 캐시
+        self._simulation_cache = {}  # 시뮬레이션 결과 캐시
 
         self.current_mode = None  # RSI 기준에 따라 동적으로 결정
         
@@ -447,15 +451,30 @@ class SOXLQuantTrader:
         Returns:
             Dict: run_backtest 요약 결과
         """
+        # 캐시 키 생성 (시작일 + 투자금 + 테스트날짜)
+        cache_key = f"{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}"
+        
+        # 캐시된 결과가 있고 2분 이내면 재사용
+        if cache_key in self._simulation_cache:
+            cached_result, cache_time = self._simulation_cache[cache_key]
+            if (datetime.now() - cache_time).seconds < 120:  # 2분 캐시
+                print(f"⚡ 시뮬레이션 결과 캐시에서 로드 ({start_date})")
+                return cached_result
+        
         latest_trading_day = self.get_latest_trading_day()
         end_date_str = latest_trading_day.strftime('%Y-%m-%d')
+        
         if quiet:
             buf = io.StringIO()
             with redirect_stdout(buf):
                 result = self.run_backtest(start_date, end_date_str)
-            return result
         else:
-            return self.run_backtest(start_date, end_date_str)
+            result = self.run_backtest(start_date, end_date_str)
+        
+        # 캐시에 저장
+        self._simulation_cache[cache_key] = (result, datetime.now())
+        
+        return result
     
     def is_market_closed(self, date: datetime) -> bool:
         """
@@ -512,13 +531,24 @@ class SOXLQuantTrader:
         
     def get_stock_data(self, symbol: str, period: str = "1mo") -> Optional[pd.DataFrame]:
         """
-        Yahoo Finance API를 통해 주식 데이터 가져오기
+        Yahoo Finance API를 통해 주식 데이터 가져오기 (캐싱 적용)
         Args:
             symbol: 주식 심볼 (예: "SOXL", "QQQ")
             period: 기간 (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
         Returns:
             DataFrame: 주식 데이터 (Date, Open, High, Low, Close, Volume)
         """
+        # 캐시 키 생성
+        cache_key = f"{symbol}_{period}"
+        current_time = datetime.now()
+        
+        # 캐시된 데이터가 있고 5분 이내면 재사용
+        if cache_key in self._stock_data_cache:
+            cached_data, cache_time = self._stock_data_cache[cache_key]
+            if (current_time - cache_time).seconds < 300:  # 5분 캐시
+                print(f"📊 {symbol} 데이터 캐시에서 로드 (기간: {period})")
+                return cached_data
+        
         try:
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
             
@@ -564,6 +594,9 @@ class SOXLQuantTrader:
                                 df = pd.DataFrame(df_data)
                                 df = df.dropna()  # NaN 값 제거
                                 df.set_index('Date', inplace=True)
+                                
+                                # 캐시에 저장
+                                self._stock_data_cache[cache_key] = (df, current_time)
                                 
                                 print(f"✅ {symbol} 데이터 가져오기 성공! ({len(df)}일치 데이터)")
                                 return df
@@ -840,8 +873,8 @@ class SOXLQuantTrader:
         if round_num <= len(config["split_ratios"]):
             ratio = config["split_ratios"][round_num - 1]
 
-            # 현재 투자원금 사용 (10거래일마다 업데이트됨)
-            amount = self.current_investment_capital * ratio
+            # 초기 투자원금 사용 (사용자 설정에 따라 즉시 반영)
+            amount = self.initial_capital * ratio
             return amount
         else:
             return 0.0
@@ -1196,7 +1229,7 @@ class SOXLQuantTrader:
         else:
             # 보유 포지션이 있으면 매도 목표가 안내
             if self.positions:
-                print("📋 보유 포지션 매도 목표가 안내:")
+                print("📋 보유 포지션 LOC 매도 목표가 안내:")
                 for pos in self.positions:
                     config = self.sf_config if pos['mode'] == "SF" else self.ag_config
                     target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
@@ -1245,6 +1278,12 @@ class SOXLQuantTrader:
         # 투자원금 관리 초기화
         self.current_investment_capital = self.initial_capital
         self.trading_days_count = 0
+    
+    def clear_cache(self):
+        """캐시 초기화 (설정 변경 시 호출)"""
+        self._stock_data_cache.clear()
+        self._simulation_cache.clear()
+        print("🧹 캐시 초기화 완료")
     
     def check_backtest_starting_state(self, start_date: str, rsi_ref_data: dict) -> dict:
         """
