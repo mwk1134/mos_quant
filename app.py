@@ -366,6 +366,8 @@ def show_dashboard():
     start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('현재 상태 계산 중...'):
+        # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
+        st.session_state.trader.clear_cache()
         sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
@@ -448,10 +450,12 @@ def show_daily_recommendation():
         st.error("시스템이 초기화되지 않았습니다.")
         return
     
-    # 시뮬레이션 실행
+    # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
     start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('현재 상태 계산 중...'):
+        # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
+        st.session_state.trader.clear_cache()
         sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
@@ -580,7 +584,8 @@ def show_portfolio():
     start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('포트폴리오 현황 계산 중...'):
-        # 항상 시뮬레이션 실행하여 최신 상태 반영
+        # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
+        st.session_state.trader.clear_cache()
         sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
             
         if "error" in sim_result:
