@@ -278,7 +278,7 @@ def show_mobile_settings():
             default_test_date = datetime.now().date()
         
         test_today = st.date_input(
-            "테스트 오늘 날짜",
+            "테스트 오늘 날짜(투자원금,투자 시작일 변경시 재입력 필수)",
             value=default_test_date,
             help="백테스팅용 가상 날짜 설정 (초기값: 오늘)",
             key="mobile_test_date"
@@ -845,10 +845,37 @@ def show_backtest():
                 st.info("거래 내역이 없습니다.")
         
         # 엑셀 다운로드
-        if st.button("📥 엑셀 파일 다운로드"):
-            filename = st.session_state.trader.export_backtest_to_excel(backtest_result)
-            if filename:
-                st.success(f"✅ 엑셀 파일 생성 완료: {filename}")
+        if st.button("📥 엑셀 파일 생성", key="generate_excel"):
+            with st.spinner('엑셀 파일 생성 중...'):
+                # 임시 파일명 생성
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                temp_filename = f"SOXL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx"
+                
+                # 엑셀 파일 생성
+                result_filename = st.session_state.trader.export_backtest_to_excel(backtest_result, temp_filename)
+                
+                if result_filename and os.path.exists(result_filename):
+                    # 파일을 메모리로 읽기
+                    with open(result_filename, 'rb') as f:
+                        excel_data = f.read()
+                    
+                    # 임시 파일 삭제
+                    try:
+                        os.remove(result_filename)
+                    except:
+                        pass
+                    
+                    # 다운로드 버튼 표시
+                    st.download_button(
+                        label="💾 엑셀 파일 다운로드",
+                        data=excel_data,
+                        file_name=f"SOXL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_excel"
+                    )
+                    st.success("✅ 엑셀 파일이 준비되었습니다. 위 버튼을 클릭하여 다운로드하세요.")
+                else:
+                    st.error("❌ 엑셀 파일 생성에 실패했습니다.")
 
 def show_advanced_settings():
     """고급 설정 페이지"""
