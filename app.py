@@ -191,6 +191,10 @@ if 'test_today_override' not in st.session_state:
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
+# 배포 테스트 - 버전 1.3
+st.sidebar.success("🚀 앱 버전 1.3 로드됨!")
+st.sidebar.info("📅 배포 시간: 2025-01-27 15:45")
+
 def login_page():
     """로그인 페이지 - 모바일 최적화"""
     # 간단한 헤더
