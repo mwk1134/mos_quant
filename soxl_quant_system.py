@@ -872,9 +872,8 @@ class SOXLQuantTrader:
         
         if round_num <= len(config["split_ratios"]):
             ratio = config["split_ratios"][round_num - 1]
-
-            # 초기 투자원금 사용 (사용자 설정에 따라 즉시 반영)
-            amount = self.initial_capital * ratio
+            # 투자원금 사용 (10거래일마다 총자산으로 업데이트됨)
+            amount = self.current_investment_capital * ratio
             return amount
         else:
             return 0.0

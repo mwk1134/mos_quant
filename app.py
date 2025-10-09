@@ -899,7 +899,9 @@ def show_advanced_settings():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.info(f"💰 현재 투자원금: ${st.session_state.initial_capital:,.0f}")
+        st.info(f"💰 초기 투자금: ${st.session_state.initial_capital:,.0f}")
+        st.info(f"💵 현재 투자원금: ${st.session_state.trader.current_investment_capital:,.0f}")
+        st.caption("💡 투자원금은 10거래일마다 총자산으로 자동 갱신됩니다")
         st.info(f"📅 세션 시작일: {st.session_state.session_start_date}")
         st.info(f"🎯 현재 모드: {st.session_state.trader.current_mode}")
         st.info(f"📦 현재 회차: {st.session_state.trader.current_round}")
