@@ -8,6 +8,8 @@ import sys
 import io
 from contextlib import redirect_stdout
 import plotly.graph_objects as go
+
+# Force redeploy - version 1.1
 import plotly.express as px
 from plotly.subplots import make_subplots
 
@@ -277,7 +279,7 @@ def show_mobile_settings():
         default_test_date = datetime.strptime(st.session_state.test_today_override, '%Y-%m-%d').date()
         
         test_today = st.date_input(
-            "테스트 오늘 날짜",
+            "오늘 날짜 강제 변경",
             value=default_test_date,
             help="이 날짜를 '오늘'로 간주하여 시뮬레이션합니다",
             key="mobile_test_date"
