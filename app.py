@@ -18,8 +18,7 @@ from soxl_quant_system import SOXLQuantTrader
 st.set_page_config(
     page_title="SOXL 퀀트투자 시스템",
     page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="collapsed"  # 모바일에서 기본적으로 접힌 상태
+    layout="wide"
 )
 
 # 커스텀 CSS - 모바일 최적화
@@ -99,6 +98,18 @@ st.markdown("""
         }
     }
     
+    /* 사이드바 완전히 숨기기 (모든 화면) */
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
+    
+    /* 메인 컨텐츠 전체 너비 사용 */
+    .main .block-container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+        max-width: 100%;
+    }
+    
     /* 모바일 최적화 */
     @media (max-width: 768px) {
         /* 메트릭 카드 크기 조정 */
@@ -129,11 +140,6 @@ st.markdown("""
             font-size: 0.8rem;
         }
         
-        /* 사이드바 숨기기 */
-        .css-1d391kg {
-            display: none !important;
-        }
-        
         /* 메인 컨텐츠 전체 너비 사용 */
         .main .block-container {
             padding-left: 1rem;
@@ -148,13 +154,6 @@ st.markdown("""
         /* 폼 최적화 */
         .stForm {
             margin-bottom: 1rem;
-        }
-    }
-    
-    /* 데스크톱에서는 사이드바 유지 */
-    @media (min-width: 769px) {
-        .mobile-settings-panel {
-            display: none;
         }
     }
     
@@ -285,14 +284,22 @@ def show_mobile_settings():
             if st.session_state.trader:
                 st.session_state.trader.set_test_today(None)
     
-    # 시스템 상태
-    st.markdown("****")
-    if st.session_state.trader:
-        st.success("✅ 준비 완료")
-        st.caption(f"💰 ${st.session_state.initial_capital:,.0f}")
-        st.caption(f"📅 {st.session_state.session_start_date}")
-    else:
-        st.warning("⚠️ 초기화 필요")
+    # 시스템 상태와 로그아웃
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        if st.session_state.trader:
+            st.success("✅ 준비 완료")
+            st.caption(f"💰 ${st.session_state.initial_capital:,.0f}")
+            st.caption(f"📅 {st.session_state.session_start_date}")
+        else:
+            st.warning("⚠️ 초기화 필요")
+    
+    with col2:
+        if st.button("🚪 로그아웃", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.trader = None
+            st.rerun()
     
     # 설정 변경 안내
     if st.session_state.initial_capital != 9000 or st.session_state.session_start_date != "2025-08-27":
@@ -314,101 +321,11 @@ def main():
             st.rerun()
         return
     
-    # 로그아웃 버튼 (사이드바에 추가)
-    with st.sidebar:
-        st.markdown("---")
-        if st.button("🚪 로그아웃", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.trader = None
-            st.rerun()
-    
     # 메인 헤더
     st.markdown('<div class="main-header">📈 SOXL 퀀트투자 시스템</div>', unsafe_allow_html=True)
     
-    # 모바일용 설정 패널
+    # 설정 패널 (모든 화면)
     show_mobile_settings()
-    
-    # 사이드바 - 설정 (데스크톱용)
-    with st.sidebar:
-        st.header("⚙️ 설정")
-        
-        # 투자원금 설정 - 데스크톱용
-        st.markdown("**💰 초기 투자금**")
-        initial_capital = st.number_input(
-            "달러",
-            min_value=1000.0,
-            max_value=1000000.0,
-            value=float(st.session_state.initial_capital),
-            step=1000.0,
-            format="%.0f",
-            label_visibility="collapsed",
-            key="desktop_capital"
-        )
-        
-        if initial_capital != st.session_state.initial_capital:
-            st.session_state.initial_capital = initial_capital
-            st.session_state.trader = None  # 트레이더 재초기화
-            if st.session_state.trader:
-                st.session_state.trader.clear_cache()  # 캐시 초기화
-            st.rerun()  # 즉시 새로고침
-        
-        # 시작일 설정
-        st.markdown("**📅 투자 시작일**")
-        session_start_date = st.date_input(
-            "",
-            value=datetime(2025, 8, 27),
-            max_value=datetime.now(),
-            label_visibility="collapsed",
-            key="desktop_start_date"
-        )
-        
-        new_start_date = session_start_date.strftime('%Y-%m-%d')
-        if new_start_date != st.session_state.session_start_date:
-            st.session_state.session_start_date = new_start_date
-            st.session_state.trader = None  # 트레이더 재초기화
-            if st.session_state.trader:
-                st.session_state.trader.clear_cache()  # 캐시 초기화
-            st.rerun()  # 즉시 새로고침
-        
-        # 테스트 날짜 설정
-        with st.expander("🧪 테스트 설정"):
-            test_today = st.date_input(
-                "테스트 오늘 날짜",
-                value=None,
-                help="백테스팅용 가상 날짜 설정",
-                key="desktop_test_date"
-            )
-            
-            if test_today:
-                st.session_state.test_today_override = test_today.strftime('%Y-%m-%d')
-                if st.session_state.trader:
-                    st.session_state.trader.set_test_today(st.session_state.test_today_override)
-            else:
-                st.session_state.test_today_override = None
-                if st.session_state.trader:
-                    st.session_state.trader.set_test_today(None)
-        
-        st.divider()
-        
-        # 시스템 상태 - 간소화
-        st.subheader("📊 상태")
-        if st.session_state.trader:
-            st.success("✅ 준비 완료")
-            st.caption(f"💰 ${st.session_state.initial_capital:,.0f}")
-            st.caption(f"📅 {st.session_state.session_start_date}")
-        else:
-            st.warning("⚠️ 초기화 필요")
-        
-        # 모바일 도움말
-        st.divider()
-        st.markdown("""
-        <div style='font-size: 0.8rem; color: #666;'>
-        📱 모바일 사용 팁:<br>
-        • 세로 모드 권장<br>
-        • 터치로 스크롤<br>
-        • 탭으로 이동
-        </div>
-        """, unsafe_allow_html=True)
     
     # 트레이더 초기화
     initialize_trader()
