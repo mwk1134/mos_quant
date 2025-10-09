@@ -185,7 +185,7 @@ if 'initial_capital' not in st.session_state:
 if 'session_start_date' not in st.session_state:
     st.session_state.session_start_date = "2025-08-27"  # 기본값 설정
 if 'test_today_override' not in st.session_state:
-    st.session_state.test_today_override = None
+    st.session_state.test_today_override = datetime.now().strftime('%Y-%m-%d')  # 초기값: 오늘 날짜
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
@@ -271,34 +271,25 @@ def show_mobile_settings():
     
     # 테스트 날짜 설정
     with st.expander("🧪 테스트 설정"):
+        st.info("💡 기본값은 오늘 날짜입니다. 과거 날짜를 선택하여 백테스팅할 수 있습니다.")
+        
         # session_state에 저장된 값을 value로 사용하여 유지
-        if st.session_state.test_today_override:
-            default_test_date = datetime.strptime(st.session_state.test_today_override, '%Y-%m-%d').date()
-        else:
-            default_test_date = datetime.now().date()
+        default_test_date = datetime.strptime(st.session_state.test_today_override, '%Y-%m-%d').date()
         
         test_today = st.date_input(
-            "테스트 오늘 날짜(투자원금,투자 시작일 변경시 재입력 필수)",
+            "테스트 오늘 날짜",
             value=default_test_date,
-            help="백테스팅용 가상 날짜 설정 (초기값: 오늘)",
+            help="이 날짜를 '오늘'로 간주하여 시뮬레이션합니다",
             key="mobile_test_date"
         )
         
         # 테스트 날짜 업데이트 - 값이 변경되었을 때만
         new_test_date = test_today.strftime('%Y-%m-%d') if test_today else None
         
-        if new_test_date != st.session_state.test_today_override:
+        if new_test_date and new_test_date != st.session_state.test_today_override:
             st.session_state.test_today_override = new_test_date
             st.session_state.trader = None  # 트레이더 재초기화
-            st.rerun()  # 즉시 새로고침
-        
-        # 테스트 날짜 리셋 버튼 (오늘이 아닌 날짜가 설정되어 있을 때만 표시)
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        if st.session_state.test_today_override and st.session_state.test_today_override != today_str:
-            if st.button("🔄 오늘 날짜로 리셋", key="reset_test_date"):
-                st.session_state.test_today_override = today_str
-                st.session_state.trader = None
-                st.rerun()
+            st.rerun()
     
     # 시스템 상태와 로그아웃
     col1, col2 = st.columns([3, 1])
