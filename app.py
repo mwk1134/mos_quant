@@ -285,13 +285,13 @@ def show_mobile_settings():
             new_test_date = test_today.strftime('%Y-%m-%d')
             if new_test_date != st.session_state.test_today_override:
                 st.session_state.test_today_override = new_test_date
-                if st.session_state.trader:
-                    st.session_state.trader.set_test_today(st.session_state.test_today_override)
+                st.session_state.trader = None  # 트레이더 재초기화
+                st.rerun()  # 즉시 새로고침
         else:
             if st.session_state.test_today_override is not None:
                 st.session_state.test_today_override = None
-                if st.session_state.trader:
-                    st.session_state.trader.set_test_today(None)
+                st.session_state.trader = None  # 트레이더 재초기화
+                st.rerun()  # 즉시 새로고침
     
     # 시스템 상태와 로그아웃
     col1, col2 = st.columns([3, 1])
