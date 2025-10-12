@@ -391,6 +391,7 @@ def show_dashboard():
         
         # 10/10일 매수 조건 확인을 위해 quiet=False로 변경
         sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=False)
+        st.session_state.sim_result = sim_result  # 로그 표시를 위해 저장
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
@@ -515,6 +516,25 @@ def show_dashboard():
                 st.warning("⚠️ 10/9일(전일) 데이터를 찾을 수 없습니다.")
             elif daily_close is None:
                 st.warning("⚠️ 10/10일(당일) 데이터를 찾을 수 없습니다.")
+    
+    # 백테스트 로그 표시 (10/10일 관련만)
+    if hasattr(st.session_state, 'sim_result') and st.session_state.sim_result:
+        if 'logs' in st.session_state.sim_result and st.session_state.sim_result['logs']:
+            st.subheader("📋 백테스트 실행 로그 (최근 5개)")
+            
+            # 10/10일 관련 로그만 필터링
+            logs_1010 = [log for log in st.session_state.sim_result['logs'] if '2025-10-10' in log or '2025-10-09' in log]
+            
+            if logs_1010:
+                with st.expander("🔍 10/10일 매수 실행 로그", expanded=True):
+                    for log in logs_1010:
+                        st.text(log)
+            else:
+                # 10/10일 로그가 없으면 최근 5개만 표시
+                recent_logs = st.session_state.sim_result['logs'][-5:]
+                with st.expander("🔍 최근 백테스트 로그 (최근 5개)", expanded=False):
+                    for log in recent_logs:
+                        st.text(log)
 
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
