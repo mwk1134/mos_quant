@@ -389,7 +389,8 @@ def show_dashboard():
         latest_trading_day = st.session_state.trader.get_latest_trading_day()
         st.info(f"🔄 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
         
-        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        # 10/10일 매수 조건 확인을 위해 quiet=False로 변경
+        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=False)
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
@@ -441,6 +442,44 @@ def show_dashboard():
             st.warning("🚫 현재 시장 휴장")
         else:
             st.success("✅ 현재 시장 개장")
+    
+    # 10/10일 매수 조건 확인 정보 표시
+    if latest_trading_day.strftime('%Y-%m-%d') == '2025-10-10':
+        st.subheader("🔍 10/10일 매수 조건 확인")
+        
+        # SOXL 데이터 가져오기
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
+        if soxl_data is not None and len(soxl_data) > 0:
+            # 10/10일 데이터 찾기
+            target_date = pd.to_datetime('2025-10-10')
+            if target_date in soxl_data.index:
+                daily_close = soxl_data.loc[target_date, 'Close']
+                
+                # 현재 모드와 설정 가져오기
+                current_config = st.session_state.trader.sf_config if st.session_state.trader.current_mode == "SF" else st.session_state.trader.ag_config
+                buy_price = daily_close * (1 - current_config["buy_threshold"] / 100)
+                
+                # 매수 조건 확인
+                can_buy = st.session_state.trader.can_buy_next_round()
+                buy_condition = buy_price > daily_close
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.info(f"📊 10/10일 종가: ${daily_close:.2f}")
+                with col2:
+                    st.info(f"💰 매수가: ${buy_price:.2f}")
+                with col3:
+                    if buy_condition:
+                        st.success(f"✅ 매수조건: True")
+                    else:
+                        st.error(f"❌ 매수조건: False")
+                
+                # 추가 정보
+                st.info(f"🔍 매수 가능 여부: {can_buy}")
+                st.info(f"📦 현재 회차: {st.session_state.trader.current_round}")
+                st.info(f"💵 현금잔고: ${st.session_state.trader.available_cash:,.0f}")
+            else:
+                st.warning("⚠️ 10/10일 데이터를 찾을 수 없습니다.")
 
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
