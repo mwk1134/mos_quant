@@ -520,13 +520,23 @@ class SOXLQuantTrader:
     
     def get_latest_trading_day(self) -> datetime:
         """
-        가장 최근 거래일 찾기
+        가장 최근 거래일 찾기 (실제 주식 데이터 기준)
         Returns:
             datetime: 가장 최근 거래일
         """
+        # 실제 SOXL 데이터의 마지막 거래일을 기준으로 찾기
+        soxl_data = self.get_stock_data("SOXL", "1mo")
+        if soxl_data is not None and len(soxl_data) > 0:
+            # 데이터의 마지막 날짜를 최신 거래일로 사용
+            latest_date = soxl_data.index[-1].to_pydatetime()
+            print(f"📊 SOXL 데이터 기준 최신 거래일: {latest_date.strftime('%Y-%m-%d')}")
+            return latest_date
+        
+        # 데이터를 가져올 수 없는 경우 기존 로직 사용
         today = self.get_today_date()
         while self.is_market_closed(today):
             today -= timedelta(days=1)
+        print(f"⚠️ 데이터 없음, 계산된 최신 거래일: {today.strftime('%Y-%m-%d')}")
         return today
         
     def get_stock_data(self, symbol: str, period: str = "1mo") -> Optional[pd.DataFrame]:

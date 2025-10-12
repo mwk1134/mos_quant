@@ -384,6 +384,11 @@ def show_dashboard():
     with st.spinner('현재 상태 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
         st.session_state.trader.clear_cache()
+        
+        # 디버깅: 최신 거래일 확인
+        latest_trading_day = st.session_state.trader.get_latest_trading_day()
+        st.info(f"🔄 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
+        
         sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
@@ -451,6 +456,10 @@ def show_daily_recommendation():
     with st.spinner('현재 상태 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
         st.session_state.trader.clear_cache()
+        
+        # 디버깅: 최신 거래일 확인
+        latest_trading_day = st.session_state.trader.get_latest_trading_day()
+        st.info(f"🔄 일일 추천 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
         
         # 일일 추천 생성 (내부에서 상태 업데이트 수행)
         recommendation = st.session_state.trader.get_daily_recommendation()
@@ -578,6 +587,11 @@ def show_portfolio():
     with st.spinner('포트폴리오 현황 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
         st.session_state.trader.clear_cache()
+        
+        # 디버깅: 최신 거래일 확인
+        latest_trading_day = st.session_state.trader.get_latest_trading_day()
+        st.info(f"🔄 포트폴리오 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
+        
         sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
             
         if "error" in sim_result:
