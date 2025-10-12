@@ -1630,9 +1630,14 @@ class SOXLQuantTrader:
                 current_round_before_buy = self.current_round  # 매수 전 회차 저장
                 
                 if self.can_buy_next_round():
-
                     # LOC 매수 조건: 매수가가 종가보다 유리할 때 (매수가 > 종가)
                     daily_close = row['Close']
+                    
+                    # 디버깅: 매수 조건 확인
+                    print(f"🔍 {current_date.strftime('%Y-%m-%d')} 매수 조건 확인:")
+                    print(f"   매수가: ${buy_price:.2f}, 종가: ${daily_close:.2f}")
+                    print(f"   매수 조건 (매수가 > 종가): {buy_price:.2f} > {daily_close:.2f} = {buy_price > daily_close}")
+                    
                     if buy_price > daily_close:
                         if self.execute_buy(daily_close, current_date):  # 종가에 매수
                             buy_executed = True
