@@ -450,6 +450,14 @@ def show_dashboard():
         # SOXL 데이터 가져오기
         soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
         if soxl_data is not None and len(soxl_data) > 0:
+            # 디버깅: 데이터 범위 확인
+            st.info(f"📊 SOXL 데이터 범위: {soxl_data.index[0].strftime('%Y-%m-%d')} ~ {soxl_data.index[-1].strftime('%Y-%m-%d')}")
+            st.info(f"📊 총 데이터 수: {len(soxl_data)}개")
+            
+            # 최근 5개 날짜 표시
+            recent_dates = soxl_data.index[-5:].strftime('%Y-%m-%d').tolist()
+            st.info(f"📊 최근 5개 거래일: {', '.join(recent_dates)}")
+            
             # 10/10일 데이터 찾기
             target_date = pd.to_datetime('2025-10-10')
             if target_date in soxl_data.index:
