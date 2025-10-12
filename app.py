@@ -458,41 +458,50 @@ def show_dashboard():
             recent_dates = soxl_data.index[-5:].strftime('%Y-%m-%d').tolist()
             st.info(f"📊 최근 5개 거래일: {', '.join(recent_dates)}")
             
-            # 10/10일 데이터 찾기 (더 유연한 방법)
+            # 10/9일(전일)과 10/10일 데이터 찾기
+            prev_date_str = '2025-10-09'
             target_date_str = '2025-10-10'
+            prev_date = pd.to_datetime(prev_date_str)
             target_date = pd.to_datetime(target_date_str)
             
-            # 인덱스에서 날짜 문자열로 찾기
-            date_found = False
-            daily_close = None
+            # 전일(10/9) 종가 찾기
+            prev_close = None
+            if prev_date in soxl_data.index:
+                prev_close = soxl_data.loc[prev_date, 'Close']
+            else:
+                for idx in soxl_data.index:
+                    if idx.strftime('%Y-%m-%d') == prev_date_str:
+                        prev_close = soxl_data.loc[idx, 'Close']
+                        break
             
-            # 방법 1: 정확한 날짜 매칭
+            # 당일(10/10) 종가 찾기
+            daily_close = None
             if target_date in soxl_data.index:
                 daily_close = soxl_data.loc[target_date, 'Close']
-                date_found = True
             else:
-                # 방법 2: 문자열 매칭으로 찾기
                 for idx in soxl_data.index:
                     if idx.strftime('%Y-%m-%d') == target_date_str:
                         daily_close = soxl_data.loc[idx, 'Close']
-                        date_found = True
                         break
             
-            if date_found:
+            if prev_close is not None and daily_close is not None:
                 # 현재 모드와 설정 가져오기
                 current_config = st.session_state.trader.sf_config if st.session_state.trader.current_mode == "SF" else st.session_state.trader.ag_config
-                buy_price = daily_close * (1 + current_config["buy_threshold"] / 100)
+                # 매수가는 전일 종가 기준으로 계산
+                buy_price = prev_close * (1 + current_config["buy_threshold"] / 100)
                 
                 # 매수 조건 확인
                 can_buy = st.session_state.trader.can_buy_next_round()
                 buy_condition = buy_price > daily_close
                 
-                col1, col2, col3 = st.columns(3)
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.info(f"📊 10/10일 종가: ${daily_close:.2f}")
+                    st.info(f"📊 10/9일 종가: ${prev_close:.2f}")
                 with col2:
-                    st.info(f"💰 매수가: ${buy_price:.2f}")
+                    st.info(f"📊 10/10일 종가: ${daily_close:.2f}")
                 with col3:
+                    st.info(f"💰 매수가: ${buy_price:.2f}")
+                with col4:
                     if buy_condition:
                         st.success(f"✅ 매수조건: True")
                     else:
@@ -502,8 +511,10 @@ def show_dashboard():
                 st.info(f"🔍 매수 가능 여부: {can_buy}")
                 st.info(f"📦 현재 회차: {st.session_state.trader.current_round}")
                 st.info(f"💵 현금잔고: ${st.session_state.trader.available_cash:,.0f}")
-            else:
-                st.warning("⚠️ 10/10일 데이터를 찾을 수 없습니다.")
+            elif prev_close is None:
+                st.warning("⚠️ 10/9일(전일) 데이터를 찾을 수 없습니다.")
+            elif daily_close is None:
+                st.warning("⚠️ 10/10일(당일) 데이터를 찾을 수 없습니다.")
 
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
