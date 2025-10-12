@@ -481,7 +481,7 @@ def show_dashboard():
             if date_found:
                 # 현재 모드와 설정 가져오기
                 current_config = st.session_state.trader.sf_config if st.session_state.trader.current_mode == "SF" else st.session_state.trader.ag_config
-                buy_price = daily_close * (1 - current_config["buy_threshold"] / 100)
+                buy_price = daily_close * (1 + current_config["buy_threshold"] / 100)
                 
                 # 매수 조건 확인
                 can_buy = st.session_state.trader.can_buy_next_round()
