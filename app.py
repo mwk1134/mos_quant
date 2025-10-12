@@ -511,7 +511,8 @@ def show_daily_recommendation():
                     price_diff = target_sell_price - current_price
                     price_diff_pct = (price_diff / current_price) * 100
                     
-                    st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, {price_diff_pct:+.1f}%)")
+                    # 매도 목표가까지 남은 상승률을 명확하게 표시
+                    st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
             else:
                 st.info("🟡 매도 추천 없음")
     
