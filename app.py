@@ -458,11 +458,27 @@ def show_dashboard():
             recent_dates = soxl_data.index[-5:].strftime('%Y-%m-%d').tolist()
             st.info(f"📊 최근 5개 거래일: {', '.join(recent_dates)}")
             
-            # 10/10일 데이터 찾기
-            target_date = pd.to_datetime('2025-10-10')
+            # 10/10일 데이터 찾기 (더 유연한 방법)
+            target_date_str = '2025-10-10'
+            target_date = pd.to_datetime(target_date_str)
+            
+            # 인덱스에서 날짜 문자열로 찾기
+            date_found = False
+            daily_close = None
+            
+            # 방법 1: 정확한 날짜 매칭
             if target_date in soxl_data.index:
                 daily_close = soxl_data.loc[target_date, 'Close']
-                
+                date_found = True
+            else:
+                # 방법 2: 문자열 매칭으로 찾기
+                for idx in soxl_data.index:
+                    if idx.strftime('%Y-%m-%d') == target_date_str:
+                        daily_close = soxl_data.loc[idx, 'Close']
+                        date_found = True
+                        break
+            
+            if date_found:
                 # 현재 모드와 설정 가져오기
                 current_config = st.session_state.trader.sf_config if st.session_state.trader.current_mode == "SF" else st.session_state.trader.ag_config
                 buy_price = daily_close * (1 - current_config["buy_threshold"] / 100)
