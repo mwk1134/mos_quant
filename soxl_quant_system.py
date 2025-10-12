@@ -1635,11 +1635,16 @@ class SOXLQuantTrader:
                     
                     # 디버깅: 매수 조건 확인
                     print(f"🔍 {current_date.strftime('%Y-%m-%d')} 매수 조건 확인:")
-                    print(f"   매수가: ${buy_price:.2f}, 종가: ${daily_close:.2f}")
-                    print(f"   매수 조건 (매수가 > 종가): {buy_price:.2f} > {daily_close:.2f} = {buy_price > daily_close}")
+                    print(f"   전일 종가(prev_close): ${prev_close:.2f}")
+                    print(f"   당일 종가(daily_close): ${daily_close:.2f}")
+                    print(f"   매수가(buy_price): ${buy_price:.2f} = prev_close * {1 + config['buy_threshold'] / 100}")
+                    print(f"   매수 조건: {buy_price:.2f} > {daily_close:.2f} = {buy_price > daily_close}")
+                    print(f"   현재 회차: {self.current_round}, 현금잔고: ${self.available_cash:,.0f}")
                     
                     if buy_price > daily_close:
+                        print(f"✅ 매수 조건 충족! 매수 실행 시도...")
                         if self.execute_buy(daily_close, current_date):  # 종가에 매수
+                            print(f"✅ 매수 체결 성공!")
                             buy_executed = True
                             position = self.positions[-1]
                             buy_price_executed = position["buy_price"]
@@ -1654,6 +1659,12 @@ class SOXLQuantTrader:
                             # 매수 행에서 매도 정보 초기화 (나중에 매도되면 업데이트됨)
                             sell_date = ""
                             sell_executed_price = 0
+                        else:
+                            print(f"❌ 매수 실행 실패 (execute_buy returned False)")
+                    else:
+                        print(f"❌ 매수 조건 불충족: {buy_price:.2f} <= {daily_close:.2f}")
+                else:
+                    print(f"❌ 매수 불가능: can_buy_next_round() = False")
                 
                 # 현재 보유 주식수와 평가손익 계산
                 total_shares = sum([pos["shares"] for pos in self.positions])
