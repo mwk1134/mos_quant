@@ -1413,10 +1413,14 @@ class SOXLQuantTrader:
         print(f"   - 회차: {self.current_round}")
         print(f"   - 1회시드 예상: ${self.initial_capital * self.get_current_config()['split_ratios'][self.current_round-1]:,.0f}")
         
-        # 날짜 파싱
+        # 날짜 파싱 (종료일은 해당 날짜의 23:59:59로 설정하여 당일 데이터 포함)
         try:
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-            end_dt = datetime.strptime(end_date, "%Y-%m-%d") if end_date else datetime.now()
+            if end_date:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                end_dt = end_dt.replace(hour=23, minute=59, second=59)
+            else:
+                end_dt = datetime.now()
         except ValueError:
             return {"error": "날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요."}
         
