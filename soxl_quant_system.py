@@ -957,11 +957,12 @@ class SOXLQuantTrader:
         
         return True
     
-    def execute_buy(self, buy_price: float, current_date: datetime) -> bool:
+    def execute_buy(self, target_price: float, actual_price: float, current_date: datetime) -> bool:
         """
-        매수 실행
+        매수 실행 (목표가 기준 수량으로 계산하여 실제가에 매수)
         Args:
-            buy_price: 매수 가격
+            target_price: 목표 매수가 (수량 계산용)
+            actual_price: 실제 매수가 (당일 종가)
             current_date: 매수 날짜
         Returns:
             bool: 매수 성공 여부
@@ -973,36 +974,43 @@ class SOXLQuantTrader:
         # 1회시드 금액 계산
         target_amount = self.calculate_position_size(self.current_round)
         
-        # 예수금이 부족한 경우 예수금만큼만 매수
-        if target_amount > self.available_cash:
-            actual_amount = self.available_cash
-        else:
-            actual_amount = target_amount
+        # 목표가 기준으로 매수할 수량 계산
+        target_shares = int(target_amount / target_price)  # 목표가 기준 수량
         
-        shares = int(actual_amount / buy_price)  # 주식 수 (정수)
-        final_amount = shares * buy_price
-        
-        if final_amount <= 0:
+        if target_shares <= 0:
             return False
+        
+        # 실제 매수 금액 계산 (목표 수량 × 실제 가격)
+        actual_amount = target_shares * actual_price
+        
+        # 예수금이 부족한 경우 예수금으로 매수 가능한 수량 재계산
+        if actual_amount > self.available_cash:
+            max_shares = int(self.available_cash / actual_price)
+            if max_shares <= 0:
+                return False
+            actual_shares = max_shares
+            actual_amount = actual_shares * actual_price
+        else:
+            actual_shares = target_shares
         
         # 포지션 추가
         position = {
             "round": self.current_round,
             "buy_date": current_date,
-            "buy_price": buy_price,
-            "shares": shares,
-
-            "amount": final_amount,
+            "buy_price": actual_price,  # 실제 매수가
+            "shares": actual_shares,    # 실제 매수 수량
+            "target_price": target_price,  # 목표가 (참조용)
+            "amount": actual_amount,    # 실제 투자금액
             "mode": self.current_mode
         }
         
         self.positions.append(position)
 
-        self.available_cash -= final_amount
+        self.available_cash -= actual_amount
         self.current_round += 1  # 매수 성공 시에만 회차 증가
         
 
-        print(f"✅ {self.current_round-1}회차 매수 실행: {shares}주 @ ${buy_price:.2f} (총 ${final_amount:,.0f})")
+        print(f"✅ {self.current_round-1}회차 매수 실행: {actual_shares}주 @ ${actual_price:.2f} (목표가: ${target_price:.2f}, 실제투자: ${actual_amount:,.0f})")
         
         return True
     
@@ -1666,7 +1674,7 @@ class SOXLQuantTrader:
                         print(success_msg)
                         self.backtest_logs.append(success_msg)
                         
-                        if self.execute_buy(daily_close, current_date):  # 종가에 매수
+                        if self.execute_buy(buy_price, daily_close, current_date):  # 목표가 기준 수량으로 계산하여 종가에 매수
                             exec_msg = f"✅ 매수 체결 성공!"
                             print(exec_msg)
                             self.backtest_logs.append(exec_msg)
