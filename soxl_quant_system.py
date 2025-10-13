@@ -1464,8 +1464,9 @@ class SOXLQuantTrader:
         
         # 정규장 미마감이고, 마지막 인덱스 날짜가 오늘이면 무조건 제외 (공급사 조기 생성 일봉 방지)
         try:
-            if not self.is_regular_session_closed_now():
-                today_date = datetime.now().date()
+            today_date = datetime.now().date()
+            # 오늘이 거래일이고 정규장이 아직 마감되지 않았다면 오늘 데이터 제외
+            if self.is_trading_day(datetime.now()) and not self.is_regular_session_closed_now():
                 if len(soxl_data) > 0 and soxl_data.index.max().date() == today_date:
                     soxl_data = soxl_data[soxl_data.index.date < today_date]
                 if len(qqq_data) > 0 and qqq_data.index.max().date() == today_date:
@@ -1474,13 +1475,22 @@ class SOXLQuantTrader:
             pass
 
         # 종료일이 데이터의 마지막 날짜와 같고, 정규장이 아직 마감되지 않았다면 마지막 행 제외
+        # 단, 백테스팅 종료일이 과거 날짜라면 이미 확정된 데이터이므로 포함
         try:
             if end_date:
                 end_d = datetime.strptime(end_date, "%Y-%m-%d").date()
                 last_date = soxl_data.index.max().date() if len(soxl_data) > 0 else None
-                if last_date and end_d == last_date and not self.is_regular_session_closed_now():
-                    soxl_data = soxl_data[soxl_data.index.date < last_date]
-                    qqq_data = qqq_data[qqq_data.index.date < last_date]
+                today_date = datetime.now().date()
+                
+                # 종료일이 오늘이 아니거나, 오늘이더라도 정규장이 마감되었다면 포함
+                if last_date and end_d == last_date:
+                    if end_d < today_date or (end_d == today_date and self.is_regular_session_closed_now()):
+                        # 과거 날짜이거나 오늘 정규장이 마감되었다면 포함
+                        pass
+                    else:
+                        # 오늘이고 정규장이 아직 마감되지 않았다면 제외
+                        soxl_data = soxl_data[soxl_data.index.date < last_date]
+                        qqq_data = qqq_data[qqq_data.index.date < last_date]
         except Exception:
             pass
         
