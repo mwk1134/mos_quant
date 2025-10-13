@@ -1166,9 +1166,21 @@ class SOXLQuantTrader:
         current_price = latest_soxl['Close']
         current_date = soxl_data.index[-1]
 
-        
         # 전일 종가 계산
-        prev_close = soxl_data.iloc[-2]['Close']
+        # - 데이터의 마지막 날짜가 오늘보다 이전(주말/휴장/장전)인 경우: 마지막 종가를 기준으로 매수가 계산
+        # - 데이터의 마지막 날짜가 오늘(이미 오늘 종가가 존재)인 경우: 그 전날 종가를 기준으로 계산
+        last_data_date = current_date.date()
+        today_date = datetime.now().date()
+        if last_data_date < today_date:
+            # 최신 거래일 종가를 전일 종가로 간주
+            prev_close = soxl_data.iloc[-1]['Close']
+            prev_close_basis_date = soxl_data.index[-1].strftime("%Y-%m-%d")
+            display_date = today_date.strftime("%Y-%m-%d")  # 장중/휴장일에도 화면 날짜는 오늘로 표시
+        else:
+            # 오늘 종가가 포함되어 있으므로 바로 전날 종가 사용
+            prev_close = soxl_data.iloc[-2]['Close']
+            prev_close_basis_date = soxl_data.index[-2].strftime("%Y-%m-%d")
+            display_date = current_date.strftime("%Y-%m-%d")
         
         # 5. 매수/매도 가격 계산
 
@@ -1188,7 +1200,8 @@ class SOXLQuantTrader:
         unrealized_pnl = total_position_value - total_invested
         
         recommendation = {
-            "date": current_date.strftime("%Y-%m-%d"),
+            "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
+            "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜
             "mode": self.current_mode,
             "qqq_weekly_rsi": weekly_rsi,
             "soxl_current_price": current_price,
