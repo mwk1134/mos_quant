@@ -1725,7 +1725,7 @@ class SOXLQuantTrader:
                 realized_pnl_final = 0
                 
                 daily_record = {
-                    "date": current_date.strftime(f"%y.%m.%d.({weekday_korean})"),
+                    "date": current_date.strftime("%Y-%m-%d"),  # 표준 ISO 형식으로 변경
                     "week": current_week,
                     "rsi": current_week_rsi or 50.0,
                     "mode": current_mode,

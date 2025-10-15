@@ -520,7 +520,7 @@ def show_dashboard():
     # 백테스트 로그 표시 (10/10일 관련만)
     if hasattr(st.session_state, 'sim_result') and st.session_state.sim_result:
         if 'logs' in st.session_state.sim_result and st.session_state.sim_result['logs']:
-            st.subheader("📋 백테스트 실행 로그 (최근 5개)")
+            st.subheader("📋 백테스트 실행 로그 ")
             
             # 10/10일 관련 로그만 필터링
             logs_1010 = [log for log in st.session_state.sim_result['logs'] if '2025-10-10' in log or '2025-10-09' in log]
@@ -873,7 +873,9 @@ def show_backtest():
             st.subheader("📊 자산 변화")
             
             df_backtest = pd.DataFrame(backtest_result['daily_records'])
-            df_backtest['date'] = pd.to_datetime(df_backtest['date'].str.replace(r'\([^)]*\)', '', regex=True), format='%y.%m.%d', errors='coerce')
+            
+            # 날짜 파싱 - ISO 형식 (YYYY-MM-DD)으로 간단하게 처리
+            df_backtest['date'] = pd.to_datetime(df_backtest['date'], errors='coerce')
             
             fig = go.Figure()
             fig.add_trace(go.Scatter(
@@ -916,6 +918,9 @@ def show_backtest():
                     '매수가', '수량', '매수금액',
                     '매도가', '실현손익'
                 ]
+                
+                # 날짜 컬럼을 문자열로 변환하여 표시
+                df_display['날짜'] = df_display['날짜'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '')
                 
                 # 숫자 포맷팅
                 for col in ['매수가', '매도가']:
