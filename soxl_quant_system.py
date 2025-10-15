@@ -1549,9 +1549,16 @@ class SOXLQuantTrader:
                 print("⚠️ 백테스팅 시작 전일 데이터를 찾을 수 없습니다.")
         
         current_week_friday = None  # 현재 주차의 금요일
+        previous_day_sold_rounds = 0  # 전날 매도된 회차 수 추적
         
         for i, (current_date, row) in enumerate(soxl_backtest.iterrows()):
             current_price = row['Close']
+            
+            # 전날 매도된 회차를 현재 날짜의 current_round에 반영
+            if previous_day_sold_rounds > 0:
+                self.current_round = max(1, self.current_round - previous_day_sold_rounds)
+                print(f"🔄 전날 매도 반영: {previous_day_sold_rounds}개 회차 매도 → current_round: {self.current_round}")
+                previous_day_sold_rounds = 0  # 반영 후 초기화
             
 
             # 거래일 카운터 증가 (거래일인 경우에만)
@@ -1653,14 +1660,7 @@ class SOXLQuantTrader:
                         "realized_pnl": realized_pnl
                     })
                 
-                # 매도된 회차 수만큼 current_round 감소
-                if sold_rounds:
-                    sold_count = len(sold_rounds)
-                    self.current_round = max(1, self.current_round - sold_count)
-                    print(f"🔄 매도 완료: {sold_count}개 회차 매도 → current_round: {self.current_round}")
-                
-                # 매수 조건 확인 및 실행
-
+                # 매수 조건 확인 및 실행 (매도와 관계없이 순차적으로 회차 증가)
                 buy_executed = False
                 buy_price_executed = 0
                 buy_quantity = 0
@@ -1718,6 +1718,12 @@ class SOXLQuantTrader:
                     nobuy_msg = f"❌ 매수 불가능: can_buy_next_round() = False"
                     print(nobuy_msg)
                     self.backtest_logs.append(nobuy_msg)
+                
+                # 매도된 회차를 다음날 current_round 계산에 반영
+                if sold_rounds:
+                    sold_count = len(sold_rounds)
+                    previous_day_sold_rounds = sold_count  # 다음날 반영을 위해 저장
+                    print(f"🔄 매도 완료: {sold_count}개 회차 매도 → 다음날 current_round에 반영 예정")
                 
                 # 현재 보유 주식수와 평가손익 계산
                 total_shares = sum([pos["shares"] for pos in self.positions])
