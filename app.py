@@ -191,12 +191,13 @@ if 'test_today_override' not in st.session_state:
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 
-# 배포 테스트 - 버전 1.4
+# 배포 테스트 - 버전 1.5 - FORCE REDEPLOY
 import time
 current_time = int(time.time())
-st.sidebar.success("🚀 앱 버전 1.4 로드됨!")
+st.sidebar.success("🚀 앱 버전 1.5 로드됨!")
 st.sidebar.info(f"📅 로드 시간: {current_time}")
 st.sidebar.info("💡 캐시 문제 시 Ctrl+F5로 강제 새로고침")
+st.sidebar.error("🔴 강제 재배포 테스트 중...")
 
 def login_page():
     """로그인 페이지 - 모바일 최적화"""
@@ -578,6 +579,14 @@ def show_daily_recommendation():
     
     # 매매 추천
     st.subheader("📋 오늘의 매매 추천")
+    # 기준 종가 날짜 안내(장중/휴장 시 전 거래일 기준 표시)
+    if 'basis_date' in recommendation:
+        basis_date = recommendation['basis_date']
+        display_date = recommendation.get('date')
+        if display_date and basis_date and display_date != basis_date:
+            st.caption(f"오늘({display_date}) 기준 • 가격 계산은 전 거래일 종가({basis_date}) 기준")
+        elif basis_date:
+            st.caption(f"가격 계산 기준: {basis_date} 종가")
     
     col1, col2 = st.columns(2)
     
@@ -589,6 +598,13 @@ def show_daily_recommendation():
             st.info(f"💵 매수금액: ${recommendation['next_buy_amount']:,.0f}")
             shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
+            # 장중 주문 가이드(현재가가 존재하는 경우 간단 안내)
+            current_price = recommendation.get('soxl_current_price')
+            if current_price:
+                if current_price >= recommendation['buy_price']:
+                    st.caption("현재가가 매수가 이상입니다. 즉시 체결 원하면 지정가/시장가, 또는 슬리피지 제한을 원하면 스톱-리밋(Stop=매수가, Limit≈매수가×1.002) 고려")
+                else:
+                    st.caption("현재가가 매수가 미만입니다. 당일 유효(DAY) 지정가로 매수가를 걸어두면 터치 시 체결")
         else:
             if st.session_state.trader.current_round > st.session_state.trader.get_current_config()["split_count"]:
                 st.warning("🔴 매수 불가: 모든 분할매수 완료")
