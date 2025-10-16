@@ -1844,6 +1844,12 @@ class SOXLQuantTrader:
             prev_close = current_price
         
         # 최종 결과 계산
+        
+        # 백테스팅 완료 후 current_round를 올바르게 설정
+        # 보유 중인 회차 수 + 1 = 다음 매수 회차
+        holding_rounds = len(self.positions)
+        self.current_round = holding_rounds + 1
+        print(f"🔄 백테스팅 완료 후 current_round 설정: 보유 {holding_rounds}개 → 다음 매수 {self.current_round}회차")
 
         final_value = daily_records[-1]["total_assets"] if daily_records else self.initial_capital
         total_return = ((final_value - self.initial_capital) / self.initial_capital) * 100
