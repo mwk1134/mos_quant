@@ -573,7 +573,7 @@ class SOXLQuantTrader:
             else:
                 params_list = [{'range': period, 'interval': '1d'}]
             
-            print(f"📊 {symbol} 데이터 가져오는 중...")
+            print(f"[INFO] {symbol} 데이터 가져오는 중...")
             
             # 여러 파라미터 시도
             for i, params in enumerate(params_list):
@@ -608,7 +608,7 @@ class SOXLQuantTrader:
                                 # 캐시에 저장
                                 self._stock_data_cache[cache_key] = (df, current_time)
                                 
-                                print(f"✅ {symbol} 데이터 가져오기 성공! ({len(df)}일치 데이터)")
+                                print(f"[SUCCESS] {symbol} 데이터 가져오기 성공! ({len(df)}일치 데이터)")
                                 return df
                             else:
                                 print(f"   ❌ 차트 데이터 구조 오류")
@@ -1554,10 +1554,13 @@ class SOXLQuantTrader:
         for i, (current_date, row) in enumerate(soxl_backtest.iterrows()):
             current_price = row['Close']
             
-            # 전날 매도된 회차를 현재 날짜의 current_round에 반영
+            # 매도 후 current_round를 보유 중인 회차 수 + 1로 재계산
             if previous_day_sold_rounds > 0:
-                self.current_round = max(1, self.current_round - previous_day_sold_rounds)
-                print(f"🔄 전날 매도 반영: {previous_day_sold_rounds}개 회차 매도 → current_round: {self.current_round}")
+                # 현재 보유 중인 회차 수 계산
+                holding_rounds = len(self.positions)
+                # 다음 매수 회차 = 보유 회차 수 + 1
+                self.current_round = holding_rounds + 1
+                print(f"🔄 전날 매도 완료: {previous_day_sold_rounds}개 회차 매도 → 보유: {holding_rounds}개 → 다음 매수: {self.current_round}회차")
                 previous_day_sold_rounds = 0  # 반영 후 초기화
             
 
