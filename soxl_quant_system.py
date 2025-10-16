@@ -17,7 +17,7 @@ class SOXLQuantTrader:
     """SOXL 퀀트투자 시스템"""
 
     
-    def load_rsi_reference_data(self, filename: str = "data/weekly_rsi_reference.json") -> dict:
+    def load_rsi_reference_data(self, filename: str = "data/weekly_rsi_reference copy.json") -> dict:
         """
         RSI 참조 데이터 로드 (JSON 형식)
         Args:
@@ -55,7 +55,7 @@ class SOXLQuantTrader:
                 total_weeks = metadata.get('total_weeks', 0)
                 last_updated = metadata.get('last_updated', 'Unknown')
                 
-                print(f"📊 RSI 참조 데이터 로드 완료")
+                print(f"[INFO] RSI 참조 데이터 로드 완료")
                 print(f"   - 파일 경로: {file_path}")
                 print(f"   - 총 {len(rsi_data)-1}개 연도 데이터 ({total_weeks}주차)")
                 print(f"   - 마지막 업데이트: {last_updated}")
@@ -65,7 +65,7 @@ class SOXLQuantTrader:
                 print(f"⚠️ RSI 참조 파일이 없습니다: {file_path}")
                 return {}
         except Exception as e:
-            print(f"❌ RSI 참조 데이터 로드 오류: {e}")
+            print(f"[ERROR] RSI 참조 데이터 로드 오류: {e}")
             return {}
     
     def get_rsi_from_reference(self, date: datetime, rsi_data: dict) -> float:
@@ -126,7 +126,7 @@ class SOXLQuantTrader:
             
             return None
         except Exception as e:
-            print(f"❌ RSI 참조 데이터 조회 오류: {e}")
+            print(f"[ERROR] RSI 참조 데이터 조회 오류: {e}")
             return None
     
     def check_and_update_rsi_data(self, filename: str = "data/weekly_rsi_reference.json") -> bool:
@@ -162,7 +162,7 @@ class SOXLQuantTrader:
                     existing_data = json.load(f)
                 
                 # 디버깅: 로드된 데이터 구조 확인
-                print(f"✅ JSON 파일 로드 성공!")
+                print(f"[SUCCESS] JSON 파일 로드 성공!")
                 #print(f"   - 파일 크기: {os.path.getsize(file_path)} bytes")
                 #print(f"   - 로드된 키들: {list(existing_data.keys())}")
                 #print(f"   - 총 연도 수: {len([k for k in existing_data.keys() if k != 'metadata'])}")
@@ -182,7 +182,7 @@ class SOXLQuantTrader:
                     
                     # 마지막 업데이트가 오늘로부터 1주일 이내면 업데이트 불필요
                     if (today - last_update_date).days <= 7:
-                        print("✅ RSI 참조 데이터가 최신 상태입니다.")
+                        print("[SUCCESS] RSI 참조 데이터가 최신 상태입니다.")
                         return True
                     
                     print(f"⚠️ RSI 참조 데이터가 {(today - last_update_date).days}일 전 데이터입니다. 업데이트가 필요합니다.")
@@ -192,14 +192,14 @@ class SOXLQuantTrader:
                 print("⚠️ RSI 참조 파일이 없습니다. 전체 데이터 생성이 필요합니다.")
             
             # 사용자에게 업데이트 확인
-            print("\n🔄 RSI 참조 데이터 업데이트가 필요합니다.")
-            print("📝 제공해주신 2010년~2025년 RSI 데이터를 모두 추가하시겠습니까?")
+            print("\n[INFO] RSI 참조 데이터 업데이트가 필요합니다.")
+            print("[INFO] 제공해주신 2010년~2025년 RSI 데이터를 모두 추가하시겠습니까?")
             print("   (이 작업은 한 번만 수행하면 됩니다)")
             
             return False
             
         except Exception as e:
-            print(f"❌ RSI 데이터 확인 오류: {e}")
+            print(f"[ERROR] RSI 데이터 확인 오류: {e}")
             return False
     
     def update_rsi_reference_file(self, filename: str = "data/weekly_rsi_reference.json") -> bool:
@@ -212,8 +212,8 @@ class SOXLQuantTrader:
             bool: 업데이트 성공 여부
         """
         try:
-            print("🔄 RSI 참조 데이터 업데이트 중...")
-            print("📝 오늘 날짜까지의 주간 RSI를 자동 계산하여 업데이트합니다.")
+            print("[INFO] RSI 참조 데이터 업데이트 중...")
+            print("[INFO] 오늘 날짜까지의 주간 RSI를 자동 계산하여 업데이트합니다.")
             
             # PyInstaller 실행파일에서 파일 경로 처리
             if getattr(sys, 'frozen', False):
@@ -241,10 +241,10 @@ class SOXLQuantTrader:
             current_year = today.strftime('%Y')
             
             # QQQ 데이터 가져오기 (최근 1년)
-            print("📊 QQQ 데이터 가져오는 중...")
+            print("[INFO] QQQ 데이터 가져오는 중...")
             qqq_data = self.get_stock_data("QQQ", "1y")
             if qqq_data is None:
-                print("❌ QQQ 데이터를 가져올 수 없습니다.")
+                print("[ERROR] QQQ 데이터를 가져올 수 없습니다.")
                 return False
             
             # 주간 데이터로 변환
@@ -256,7 +256,7 @@ class SOXLQuantTrader:
                 'Volume': 'sum'
             }).dropna()
             
-            print(f"📈 주간 데이터 {len(weekly_data)}주 계산 완료")
+            print(f"[INFO] 주간 데이터 {len(weekly_data)}주 계산 완료")
             
             # 현재 연도 데이터 초기화
             if current_year not in existing_data:
@@ -321,7 +321,7 @@ class SOXLQuantTrader:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(existing_data, f, ensure_ascii=False, indent=2)
             
-            print("✅ RSI 참조 데이터 업데이트 완료!")
+            print("[SUCCESS] RSI 참조 데이터 업데이트 완료!")
             print(f"   - {current_year}년 데이터 업데이트")
             print(f"   - 총 {total_weeks}개 주차 데이터")
             print(f"   - 마지막 업데이트: {today.strftime('%Y-%m-%d')}")
@@ -329,7 +329,7 @@ class SOXLQuantTrader:
             return True
             
         except Exception as e:
-            print(f"❌ RSI 참조 파일 업데이트 오류: {e}")
+            print(f"[ERROR] RSI 참조 파일 업데이트 오류: {e}")
             return False
     
     def __init__(self, initial_capital: float = 9000):
@@ -378,11 +378,11 @@ class SOXLQuantTrader:
         
         # RSI 참조 데이터 확인 및 업데이트
         if not self.check_and_update_rsi_data():
-            print("📊 RSI 참조 데이터 업데이트 중...")
+            print("[INFO] RSI 참조 데이터 업데이트 중...")
             if self.update_rsi_reference_file():
-                print("✅ RSI 참조 데이터 업데이트 완료")
+                print("[SUCCESS] RSI 참조 데이터 업데이트 완료")
             else:
-                print("❌ RSI 참조 데이터 업데이트 실패")
+                print("[ERROR] RSI 참조 데이터 업데이트 실패")
         
         # SF모드 설정
         self.sf_config = {
@@ -1353,7 +1353,7 @@ class SOXLQuantTrader:
             if prev_week_rsi is not None and two_weeks_ago_rsi is not None:
                 start_mode = self.determine_mode(prev_week_rsi, two_weeks_ago_rsi, "SF")
             else:
-                print(f"❌ 백테스팅 시작 시점의 RSI 데이터가 없습니다.")
+                print(f"[ERROR] 백테스팅 시작 시점의 RSI 데이터가 없습니다.")
                 print(f"   시작 주차 RSI: {start_week_rsi}")
                 print(f"   1주전 RSI: {prev_week_rsi}")
                 print(f"   2주전 RSI: {two_weeks_ago_rsi}")
@@ -1370,7 +1370,7 @@ class SOXLQuantTrader:
             # (실제로는 과거 매수 기록이 있어야 정확하지만, 여기서는 간단히 추정)
             estimated_round = 1  # 기본값
             
-            print(f"📊 백테스팅 시작 상태:")
+            print(f"[INFO] 백테스팅 시작 상태:")
             print(f"   - 시작일: {start_date}")
             print(f"   - 시작 주차 RSI: {start_week_rsi:.2f}")
             print(f"   - 1주전 RSI: {prev_week_rsi:.2f}")
@@ -1387,7 +1387,7 @@ class SOXLQuantTrader:
             }
             
         except Exception as e:
-            print(f"❌ 백테스팅 시작 상태 확인 오류: {e}")
+            print(f"[ERROR] 백테스팅 시작 상태 확인 오류: {e}")
             return {
                 "start_mode": "SF",
                 "start_round": 1,
@@ -2211,10 +2211,12 @@ class SOXLQuantTrader:
             cell = ws_detail.cell(row=row_idx, column=22, value=f"${cash_balance:,.0f}")
             cell.alignment = center_alignment
             
-            # 총자산
+            # 총자산 (숫자 형식으로 저장)
             total_assets = record.get('total_assets', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=23, value=f"${total_assets:,.0f}")
+            cell = ws_detail.cell(row=row_idx, column=23, value=total_assets)
             cell.alignment = center_alignment
+            # 숫자 형식으로 표시 (천 단위 구분자 포함)
+            cell.number_format = '#,##0'
         
         # 열 너비 자동 조정
         for ws in [ws_summary, ws_detail]:
