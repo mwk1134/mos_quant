@@ -16,7 +16,7 @@ try:
     from soxl_quant_system import SOXLQuantTrader
     
     # 트레이더 초기화
-    trader = SOXLQuantTrader(9000)
+    trader = SOXLQuantTrader(40000)
     st.write(f"초기 투자원금: ${trader.current_investment_capital:,.0f}")
     st.write(f"1회차 매수금액: ${trader.calculate_position_size(1):,.0f}")
     

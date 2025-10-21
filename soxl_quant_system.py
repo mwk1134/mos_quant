@@ -332,11 +332,11 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 참조 파일 업데이트 오류: {e}")
             return False
     
-    def __init__(self, initial_capital: float = 9000):
+    def __init__(self, initial_capital: float = 40000):
         """
         초기화
         Args:
-            initial_capital: 투자원금 (기본값: 9000달러)
+            initial_capital: 투자원금 (기본값: 40000달러)
         """
         self.initial_capital = initial_capital
         
@@ -1127,8 +1127,8 @@ class SOXLQuantTrader:
             if "error" in sim_result:
                 return {"error": f"상태 업데이트 실패: {sim_result['error']}"}
 
-        # 시장 휴장일 확인
-        today = datetime.now()
+        # 시장 휴장일 확인 (테스트 날짜 오버라이드 고려)
+        today = self.get_today_date()
         is_market_closed = self.is_market_closed(today)
         
         if is_market_closed:
@@ -1170,7 +1170,7 @@ class SOXLQuantTrader:
         # - 데이터의 마지막 날짜가 오늘보다 이전(주말/휴장/장전)인 경우: 마지막 종가를 기준으로 매수가 계산
         # - 데이터의 마지막 날짜가 오늘(이미 오늘 종가가 존재)인 경우: 그 전날 종가를 기준으로 계산
         last_data_date = current_date.date()
-        today_date = datetime.now().date()
+        today_date = today.date()  # 테스트 날짜 오버라이드 고려
         if last_data_date < today_date:
             # 최신 거래일 종가를 전일 종가로 간주
             prev_close = soxl_data.iloc[-1]['Close']
@@ -2262,7 +2262,7 @@ def main():
         try:
             initial_capital_input = input("💰 초기 투자금을 입력하세요 (달러): ").strip()
             if not initial_capital_input:
-                initial_capital = 9000  # 기본값
+                initial_capital = 40000  # 기본값
                 print(f"💰 투자원금: ${initial_capital:,.0f} (기본값)")
                 break
             

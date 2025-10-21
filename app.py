@@ -183,7 +183,7 @@ st.markdown("""
 if 'trader' not in st.session_state:
     st.session_state.trader = None
 if 'initial_capital' not in st.session_state:
-    st.session_state.initial_capital = 9000
+    st.session_state.initial_capital = 40000
 if 'session_start_date' not in st.session_state:
     st.session_state.session_start_date = "2025-08-27"  # 기본값 설정
 if 'test_today_override' not in st.session_state:
@@ -279,47 +279,10 @@ def show_mobile_settings():
             st.session_state.trader.clear_cache()  # 캐시 초기화
         st.rerun()  # 즉시 새로고침
     
-    # 테스트 날짜 설정
-    with st.expander("🧪 테스트 설정"):
-        st.info("💡 기본값은 오늘 날짜입니다. 과거 날짜를 선택하여 백테스팅할 수 있습니다.")
-        
-        # session_state에 저장된 값을 value로 사용하여 유지
-        default_test_date = datetime.strptime(st.session_state.test_today_override, '%Y-%m-%d').date()
-        
-        test_today = st.date_input(
-            "오늘 날짜 강제 변경",
-            value=default_test_date,
-            help="이 날짜를 '오늘'로 간주하여 시뮬레이션합니다",
-            key="mobile_test_date"
-        )
-        
-        # 테스트 날짜 업데이트 - 값이 변경되었을 때만
-        new_test_date = test_today.strftime('%Y-%m-%d') if test_today else None
-        
-        if new_test_date and new_test_date != st.session_state.test_today_override:
-            st.session_state.test_today_override = new_test_date
-            st.session_state.trader = None  # 트레이더 재초기화
-            st.rerun()
     
-    # 시스템 상태와 로그아웃
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        if st.session_state.trader:
-            st.success("✅ 준비 완료")
-            st.caption(f"💰 ${st.session_state.initial_capital:,.0f}")
-            st.caption(f"📅 {st.session_state.session_start_date}")
-        else:
-            st.warning("⚠️ 초기화 필요")
-    
-    with col2:
-        if st.button("🚪 로그아웃", use_container_width=True):
-            st.session_state.authenticated = False
-            st.session_state.trader = None
-            st.rerun()
     
     # 설정 변경 안내
-    if st.session_state.initial_capital != 9000 or st.session_state.session_start_date != "2025-08-27":
+    if st.session_state.initial_capital != 40000 or st.session_state.session_start_date != "2025-08-27":
         st.info("💡 설정이 변경되었습니다. 대시보드가 업데이트됩니다.")
     
     st.markdown("""
@@ -380,7 +343,11 @@ def show_dashboard():
         return
     
     # 시뮬레이션 실행하여 현재 상태 업데이트
-    start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    # 테스트 날짜 오버라이드 고려
+    today_for_calc = datetime.now()
+    if st.session_state.trader and st.session_state.trader.test_today_override:
+        today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+    start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('현재 상태 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
@@ -528,7 +495,11 @@ def show_daily_recommendation():
         return
     
     # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
-    start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    # 테스트 날짜 오버라이드 고려
+    today_for_calc = datetime.now()
+    if st.session_state.trader and st.session_state.trader.test_today_override:
+        today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+    start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('현재 상태 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
@@ -647,7 +618,11 @@ def show_daily_recommendation():
         
         positions_data = []
         for pos in st.session_state.trader.positions:
-            hold_days = (datetime.now() - pos['buy_date']).days
+            # 테스트 날짜 오버라이드 고려
+            today_for_hold_days = datetime.now()
+            if st.session_state.trader and st.session_state.trader.test_today_override:
+                today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+            hold_days = (today_for_hold_days - pos['buy_date']).days
             current_value = pos['shares'] * recommendation['soxl_current_price']
             pnl = current_value - pos['amount']
             pnl_rate = (pnl / pos['amount']) * 100
@@ -674,7 +649,11 @@ def show_portfolio():
         return
     
     # 시뮬레이션 실행 - 투자시작일 기준으로 재계산
-    start_date = st.session_state.session_start_date or (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    # 테스트 날짜 오버라이드 고려
+    today_for_calc = datetime.now()
+    if st.session_state.trader and st.session_state.trader.test_today_override:
+        today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+    start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
     
     with st.spinner('포트폴리오 현황 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
@@ -724,7 +703,11 @@ def show_portfolio():
         
         positions_data = []
         for pos in st.session_state.trader.positions:
-            hold_days = (datetime.now() - pos['buy_date']).days
+            # 테스트 날짜 오버라이드 고려
+            today_for_hold_days = datetime.now()
+            if st.session_state.trader and st.session_state.trader.test_today_override:
+                today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+            hold_days = (today_for_hold_days - pos['buy_date']).days
             current_value = pos['shares'] * current_price if 'current_price' in locals() else pos['amount']
             pnl = current_value - pos['amount']
             pnl_rate = (pnl / pos['amount']) * 100
