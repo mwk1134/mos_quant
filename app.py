@@ -505,7 +505,13 @@ def show_daily_recommendation():
         latest_trading_day = st.session_state.trader.get_latest_trading_day()
         st.info(f"🔄 일일 추천 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
         
-        # 일일 추천 생성 (내부에서 상태 업데이트 수행)
+        # 먼저 시뮬레이션 실행하여 트레이더 상태 업데이트
+        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        if "error" in sim_result:
+            st.error(f"시뮬레이션 실패: {sim_result['error']}")
+            return
+        
+        # 일일 추천 생성
         recommendation = st.session_state.trader.get_daily_recommendation()
     
     if "error" in recommendation:
