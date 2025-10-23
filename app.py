@@ -311,9 +311,8 @@ def main():
     initialize_trader()
     
     # 메인 네비게이션 - 모바일 친화적
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3 = st.tabs([
         "📊 오늘의 매매", 
-        "💼 포트폴리오", 
         "📈 백테스팅", 
         "⚙️ 설정"
     ])
@@ -322,12 +321,9 @@ def main():
         show_daily_recommendation()
     
     with tab2:
-        show_portfolio()
-    
-    with tab3:
         show_backtest()
     
-    with tab4:
+    with tab3:
         show_advanced_settings()
 
 def show_dashboard():
