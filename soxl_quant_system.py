@@ -415,6 +415,9 @@ class SOXLQuantTrader:
         self.current_investment_capital = initial_capital
         self.trading_days_count = 0  # 거래일 카운터
         
+        # 시드증액 관리
+        self.seed_increases = []  # [{"date": "2025-10-21", "amount": 31000, "description": "시드증액"}]
+        
         # 세션 상태: 사용자 입력 시작일 (파일 저장 없음)
         self.session_start_date: Optional[str] = None
         
@@ -441,6 +444,22 @@ class SOXLQuantTrader:
             d = datetime.strptime(self.test_today_override, "%Y-%m-%d").date()
             return datetime(d.year, d.month, d.day)
         return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    def add_seed_increase(self, date: str, amount: float, description: str = ""):
+        """시드증액 추가"""
+        seed_increase = {
+            "date": date,
+            "amount": amount,
+            "description": description
+        }
+        self.seed_increases.append(seed_increase)
+        # 날짜순으로 정렬
+        self.seed_increases.sort(key=lambda x: x["date"])
+        print(f"시드증액 추가: {date} - ${amount:,.0f} ({description})")
+    
+    def get_seed_increases_for_date(self, date: str) -> List[Dict]:
+        """특정 날짜의 시드증액 목록 반환"""
+        return [si for si in self.seed_increases if si["date"] == date]
 
     def simulate_from_start_to_today(self, start_date: str, quiet: bool = True) -> Dict:
         """

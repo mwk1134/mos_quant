@@ -230,6 +230,15 @@ def initialize_trader():
                 st.session_state.trader = SOXLQuantTrader(st.session_state.initial_capital)
                 if st.session_state.test_today_override:
                     st.session_state.trader.set_test_today(st.session_state.test_today_override)
+                
+                # 시드증액 데이터 전달
+                if 'seed_increases' in st.session_state and st.session_state.seed_increases:
+                    for seed in st.session_state.seed_increases:
+                        st.session_state.trader.add_seed_increase(
+                            seed['date'], 
+                            seed['amount'], 
+                            f"시드증액 {seed['date']}"
+                        )
         except Exception as e:
             st.error(f"시스템 초기화 실패: {str(e)}")
             st.info("페이지를 새로고침해주세요.")
@@ -278,6 +287,61 @@ def show_mobile_settings():
         if st.session_state.trader:
             st.session_state.trader.clear_cache()  # 캐시 초기화
         st.rerun()  # 즉시 새로고침
+    
+    # 시드증액 설정
+    st.subheader("💰 시드증액")
+    
+    # 시드증액 목록 표시
+    if 'seed_increases' not in st.session_state:
+        st.session_state.seed_increases = []
+    
+    if st.session_state.seed_increases:
+        st.write("**등록된 시드증액:**")
+        for i, seed in enumerate(st.session_state.seed_increases):
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                st.write(f"📅 {seed['date']}")
+            with col2:
+                st.write(f"💰 ${seed['amount']:,.0f}")
+            with col3:
+                if st.button("🗑️", key=f"delete_seed_{i}"):
+                    st.session_state.seed_increases.pop(i)
+                    st.rerun()
+    
+    # 시드증액 추가
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        seed_date = st.date_input(
+            "📅 시드증액 날짜",
+            value=datetime.now(),
+            max_value=datetime.now(),
+            key="seed_date"
+        )
+    
+    with col2:
+        seed_amount = st.number_input(
+            "💰 증액 금액 (달러)",
+            min_value=1000.0,
+            max_value=1000000.0,
+            value=31000.0,
+            step=1000.0,
+            format="%.0f",
+            key="seed_amount"
+        )
+    
+    if st.button("➕ 시드증액 추가", use_container_width=True):
+        if seed_amount > 0:
+            seed_increase = {
+                "date": seed_date.strftime('%Y-%m-%d'),
+                "amount": seed_amount
+            }
+            st.session_state.seed_increases.append(seed_increase)
+            st.session_state.trader = None  # 트레이더 재초기화
+            st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
+            st.rerun()
+        else:
+            st.error("❌ 증액 금액을 입력해주세요.")
     
     
     
