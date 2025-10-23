@@ -1587,6 +1587,29 @@ class SOXLQuantTrader:
             if self.is_trading_day(current_date):
                 self.trading_days_count += 1
                 
+                # 시드증액 반영 (해당 날짜에 시드증액이 있는 경우)
+                current_date_str = current_date.strftime('%Y-%m-%d')
+                seed_increases_today = self.get_seed_increases_for_date(current_date_str)
+                if seed_increases_today:
+                    # 현재 총자산 계산 (현금 + 보유주식 평가금액)
+                    total_shares = sum([pos["shares"] for pos in self.positions])
+                    current_total_assets = self.available_cash + (total_shares * current_price)
+                    
+                    # 시드증액 총합 계산
+                    total_seed_increase = sum([si["amount"] for si in seed_increases_today])
+                    
+                    # 시드증액을 현금잔고에 추가
+                    self.available_cash += total_seed_increase
+                    
+                    # 투자원금을 현재 총자산 + 시드증액으로 갱신
+                    new_investment_capital = current_total_assets + total_seed_increase
+                    old_capital = self.current_investment_capital
+                    self.current_investment_capital = new_investment_capital
+                    
+                    print(f"💰 시드증액 반영: {current_date_str} - ${total_seed_increase:,.0f} 추가")
+                    print(f"   현재 총자산: ${current_total_assets:,.0f} + 시드증액: ${total_seed_increase:,.0f} = ${new_investment_capital:,.0f}")
+                    print(f"   투자원금 갱신: ${old_capital:,.0f} → ${new_investment_capital:,.0f}")
+                
                 # 10거래일마다 투자원금 업데이트 (10, 20, 30, ... 거래일째)
                 if self.trading_days_count % 10 == 0 and self.trading_days_count > 0:
                     # 현재 총자산 계산 (현금 + 보유주식 평가금액)
