@@ -272,11 +272,18 @@ def show_profile_management():
         if st.button("📂 프로필1 불러오기", help="프로필1의 설정을 불러옵니다"):
             if 'profile1' in st.session_state.profiles:
                 profile_data = st.session_state.profiles['profile1']
+                
+                # 세션 상태 업데이트
                 st.session_state.initial_capital = profile_data['initial_capital']
                 st.session_state.start_date = profile_data['start_date']
                 st.session_state.seed_increases = profile_data['seed_increases']
+                
+                # 시작일을 문자열로 변환하여 저장
+                st.session_state.session_start_date = profile_data['start_date'].strftime('%Y-%m-%d')
+                
                 # 트레이더 재초기화
                 st.session_state.trader = None
+                
                 st.success("✅ 프로필1이 불러와졌습니다!")
                 st.rerun()
             else:
@@ -309,8 +316,7 @@ def show_mobile_settings():
         max_value=1000000.0,
         value=float(st.session_state.initial_capital),
         step=1000.0,
-        format="%.0f",
-        key="mobile_capital"
+        format="%.0f"
     )
     
     if initial_capital != st.session_state.initial_capital:
@@ -327,8 +333,7 @@ def show_mobile_settings():
     session_start_date = st.date_input(
         "📅 투자 시작일",
         value=default_start_date,
-        max_value=datetime.now(),
-        key="mobile_start_date"
+        max_value=datetime.now()
     )
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
