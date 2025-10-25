@@ -245,6 +245,57 @@ def initialize_trader():
             if st.button("🔄 새로고침"):
                 st.rerun()
 
+def show_profile_management():
+    """프로필 저장/불러오기 관리"""
+    st.markdown("---")
+    st.markdown("### 📁 프로필 관리")
+    
+    # 프로필 데이터 초기화
+    if 'profiles' not in st.session_state:
+        st.session_state.profiles = {}
+    
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        if st.button("💾 프로필1 저장", help="현재 설정을 프로필1에 저장합니다"):
+            # 현재 설정을 프로필1에 저장
+            profile_data = {
+                'initial_capital': st.session_state.get('initial_capital', 9000),
+                'start_date': st.session_state.get('start_date', datetime(2024, 8, 27).date()),
+                'seed_increases': st.session_state.get('seed_increases', [])
+            }
+            st.session_state.profiles['profile1'] = profile_data
+            st.success("✅ 프로필1이 저장되었습니다!")
+            st.rerun()
+    
+    with col2:
+        if st.button("📂 프로필1 불러오기", help="프로필1의 설정을 불러옵니다"):
+            if 'profile1' in st.session_state.profiles:
+                profile_data = st.session_state.profiles['profile1']
+                st.session_state.initial_capital = profile_data['initial_capital']
+                st.session_state.start_date = profile_data['start_date']
+                st.session_state.seed_increases = profile_data['seed_increases']
+                # 트레이더 재초기화
+                st.session_state.trader = None
+                st.success("✅ 프로필1이 불러와졌습니다!")
+                st.rerun()
+            else:
+                st.error("❌ 저장된 프로필1이 없습니다.")
+    
+    with col3:
+        if st.button("🗑️ 프로필1 삭제", help="프로필1을 삭제합니다"):
+            if 'profile1' in st.session_state.profiles:
+                del st.session_state.profiles['profile1']
+                st.success("✅ 프로필1이 삭제되었습니다!")
+                st.rerun()
+            else:
+                st.error("❌ 삭제할 프로필1이 없습니다.")
+    
+    # 저장된 프로필 정보 표시
+    if 'profile1' in st.session_state.profiles:
+        profile_data = st.session_state.profiles['profile1']
+        st.info(f"📋 **프로필1 정보**: 초기투자금 ${profile_data['initial_capital']:,}, 시작일 {profile_data['start_date']}, 시드증액 {len(profile_data['seed_increases'])}건")
+
 def show_mobile_settings():
     """모바일용 설정 패널"""
     st.markdown("""
@@ -368,40 +419,17 @@ def main():
     # 메인 헤더
     st.markdown('<div class="main-header">📈 SOXL 퀀트투자 시스템</div>', unsafe_allow_html=True)
     
-    # 실시간 시간 표시
-    from datetime import datetime
+    # 실시간 시간 표시 (한국시간)
+    from datetime import datetime, timezone, timedelta
     
-    # 현재 시간 표시
-    korea_time = datetime.now()
+    # 한국시간 (UTC+9)
+    korea_tz = timezone(timedelta(hours=9))
+    korea_time = datetime.now(korea_tz)
     st.info(f"🕐 한국시간: {korea_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 자동 새로고침 옵션
-    col1, col2 = st.columns([1, 1])
     
-    with col1:
-        if st.button("🔄 새로고침", help="현재 시간으로 페이지를 새로고침합니다"):
-            st.rerun()
-    
-    with col2:
-        # 자동 새로고침 설정 (세션 상태에 저장)
-        if 'auto_refresh' not in st.session_state:
-            st.session_state.auto_refresh = False
-        
-        auto_refresh = st.checkbox(
-            "⏰ 자동 새로고침", 
-            value=st.session_state.auto_refresh,
-            help="체크하면 30초마다 자동으로 새로고침됩니다"
-        )
-        
-        if auto_refresh != st.session_state.auto_refresh:
-            st.session_state.auto_refresh = auto_refresh
-            st.rerun()
-    
-    # 자동 새로고침 실행
-    if st.session_state.auto_refresh:
-        import time
-        time.sleep(30)
-        st.rerun()
+    # 프로필 관리 섹션
+    show_profile_management()
     
     # 설정 패널 (모든 화면)
     show_mobile_settings()
