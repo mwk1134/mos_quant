@@ -476,7 +476,7 @@ class SOXLQuantTrader:
         # 캐시된 결과가 있고 2분 이내면 재사용
         if cache_key in self._simulation_cache:
             cached_result, cache_time = self._simulation_cache[cache_key]
-            if (datetime.now() - cache_time).seconds < 120:  # 2분 캐시
+            if (datetime.now() - cache_time).seconds < 30:  # 30초 캐시
                 print(f"⚡ 시뮬레이션 결과 캐시에서 로드 ({start_date})")
                 return cached_result
         
@@ -539,17 +539,21 @@ class SOXLQuantTrader:
     
     def get_latest_trading_day(self) -> datetime:
         """
-        가장 최근 거래일 찾기 (실제 주식 데이터 기준)
+        가장 최근 거래일 찾기 (미국 시장 마감 기준)
         Returns:
             datetime: 가장 최근 거래일
         """
-        # 실제 SOXL 데이터의 마지막 거래일을 기준으로 찾기
-        soxl_data = self.get_stock_data("SOXL", "1mo")
-        if soxl_data is not None and len(soxl_data) > 0:
-            # 데이터의 마지막 날짜를 최신 거래일로 사용
-            latest_date = soxl_data.index[-1].to_pydatetime()
-            print(f"📊 SOXL 데이터 기준 최신 거래일: {latest_date.strftime('%Y-%m-%d')}")
-            return latest_date
+        # 미국 시장이 마감되었는지 확인
+        if self.is_regular_session_closed_now():
+            # 시장이 마감되었으면 오늘을 최신 거래일로 사용
+            today = self.get_today_date()
+            print(f"📊 미국 시장 마감됨 - 오늘을 최신 거래일로 사용: {today.strftime('%Y-%m-%d')}")
+            return today
+        else:
+            # 시장이 아직 열려있으면 어제를 최신 거래일로 사용
+            yesterday = self.get_today_date() - timedelta(days=1)
+            print(f"📊 미국 시장 개장 중 - 어제를 최신 거래일로 사용: {yesterday.strftime('%Y-%m-%d')}")
+            return yesterday
         
         # 데이터를 가져올 수 없는 경우 기존 로직 사용
         today = self.get_today_date()
@@ -571,10 +575,10 @@ class SOXLQuantTrader:
         cache_key = f"{symbol}_{period}"
         current_time = datetime.now()
         
-        # 캐시된 데이터가 있고 5분 이내면 재사용
+        # 캐시된 데이터가 있고 1분 이내면 재사용 (더 자주 업데이트)
         if cache_key in self._stock_data_cache:
             cached_data, cache_time = self._stock_data_cache[cache_key]
-            if (current_time - cache_time).seconds < 300:  # 5분 캐시
+            if (current_time - cache_time).seconds < 60:  # 1분 캐시
                 print(f"📊 {symbol} 데이터 캐시에서 로드 (기간: {period})")
                 return cached_data
         

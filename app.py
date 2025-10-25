@@ -368,6 +368,11 @@ def main():
     # 메인 헤더
     st.markdown('<div class="main-header">📈 SOXL 퀀트투자 시스템</div>', unsafe_allow_html=True)
     
+    # 실시간 시간 표시
+    from datetime import datetime
+    korea_time = datetime.now()
+    st.info(f"🕐 한국시간: {korea_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
     # 설정 패널 (모든 화면)
     show_mobile_settings()
     
