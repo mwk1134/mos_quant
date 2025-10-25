@@ -370,8 +370,38 @@ def main():
     
     # 실시간 시간 표시
     from datetime import datetime
+    
+    # 현재 시간 표시
     korea_time = datetime.now()
     st.info(f"🕐 한국시간: {korea_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    # 자동 새로고침 옵션
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        if st.button("🔄 새로고침", help="현재 시간으로 페이지를 새로고침합니다"):
+            st.rerun()
+    
+    with col2:
+        # 자동 새로고침 설정 (세션 상태에 저장)
+        if 'auto_refresh' not in st.session_state:
+            st.session_state.auto_refresh = False
+        
+        auto_refresh = st.checkbox(
+            "⏰ 자동 새로고침", 
+            value=st.session_state.auto_refresh,
+            help="체크하면 30초마다 자동으로 새로고침됩니다"
+        )
+        
+        if auto_refresh != st.session_state.auto_refresh:
+            st.session_state.auto_refresh = auto_refresh
+            st.rerun()
+    
+    # 자동 새로고침 실행
+    if st.session_state.auto_refresh:
+        import time
+        time.sleep(30)
+        st.rerun()
     
     # 설정 패널 (모든 화면)
     show_mobile_settings()
