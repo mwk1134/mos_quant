@@ -273,8 +273,8 @@ def show_mobile_settings():
     # session_state에 값이 있으면 사용, 없으면 기본값
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
-    # 날짜 입력 + 오늘 버튼
-    start_col1, start_col2 = st.columns([3, 1])
+    # 날짜 입력 + 오늘 버튼 + KMW 프리셋 버튼
+    start_col1, start_col2, start_col3 = st.columns([3, 1, 1])
     with start_col1:
         session_start_date = st.date_input(
             "📅 투자 시작일",
@@ -286,6 +286,23 @@ def show_mobile_settings():
             today = datetime.now().date()
             st.session_state.session_start_date = today.strftime('%Y-%m-%d')
             st.session_state.trader = None
+            st.rerun()
+    with start_col3:
+        if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000"):
+            # 초기 투자금
+            st.session_state.initial_capital = 9000.0
+            
+            # 투자 시작일
+            st.session_state.session_start_date = "2025-08-27"
+            
+            # 시드증액 프리셋
+            st.session_state.seed_increases = [
+                {"date": "2025-10-21", "amount": 31000.0}
+            ]
+            
+            # 트레이더 재초기화 후 즉시 적용
+            st.session_state.trader = None
+            st.success("✅ KMW 프리셋이 적용되었습니다.")
             st.rerun()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
