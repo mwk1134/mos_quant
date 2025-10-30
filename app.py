@@ -245,63 +245,6 @@ def initialize_trader():
             if st.button("🔄 새로고침"):
                 st.rerun()
 
-def show_profile_management():
-    """프로필 저장/불러오기 관리"""
-    st.markdown("---")
-    st.markdown("### 📁 프로필 관리")
-    
-    # 프로필 데이터 초기화
-    if 'profiles' not in st.session_state:
-        st.session_state.profiles = {}
-    
-    col1, col2, col3 = st.columns([1, 1, 1])
-    
-    with col1:
-        if st.button("💾 프로필1 저장", help="현재 설정을 프로필1에 저장합니다"):
-            # 현재 설정을 프로필1에 저장
-            profile_data = {
-                'initial_capital': st.session_state.get('initial_capital', 9000),
-                'start_date': st.session_state.get('start_date', datetime(2024, 8, 27).date()),
-                'seed_increases': st.session_state.get('seed_increases', [])
-            }
-            st.session_state.profiles['profile1'] = profile_data
-            st.success("✅ 프로필1이 저장되었습니다!")
-            st.rerun()
-    
-    with col2:
-        if st.button("📂 프로필1 불러오기", help="프로필1의 설정을 불러옵니다"):
-            if 'profile1' in st.session_state.profiles:
-                profile_data = st.session_state.profiles['profile1']
-                
-                # 세션 상태 업데이트
-                st.session_state.initial_capital = profile_data['initial_capital']
-                st.session_state.start_date = profile_data['start_date']
-                st.session_state.seed_increases = profile_data['seed_increases']
-                
-                # 시작일을 문자열로 변환하여 저장
-                st.session_state.session_start_date = profile_data['start_date'].strftime('%Y-%m-%d')
-                
-                # 트레이더 재초기화
-                st.session_state.trader = None
-                
-                st.success("✅ 프로필1이 불러와졌습니다!")
-                st.rerun()
-            else:
-                st.error("❌ 저장된 프로필1이 없습니다.")
-    
-    with col3:
-        if st.button("🗑️ 프로필1 삭제", help="프로필1을 삭제합니다"):
-            if 'profile1' in st.session_state.profiles:
-                del st.session_state.profiles['profile1']
-                st.success("✅ 프로필1이 삭제되었습니다!")
-                st.rerun()
-            else:
-                st.error("❌ 삭제할 프로필1이 없습니다.")
-    
-    # 저장된 프로필 정보 표시
-    if 'profile1' in st.session_state.profiles:
-        profile_data = st.session_state.profiles['profile1']
-        st.info(f"📋 **프로필1 정보**: 초기투자금 ${profile_data['initial_capital']:,}, 시작일 {profile_data['start_date']}, 시드증액 {len(profile_data['seed_increases'])}건")
 
 def show_mobile_settings():
     """모바일용 설정 패널"""
@@ -432,9 +375,6 @@ def main():
     korea_time = datetime.now(korea_tz)
     st.info(f"🕐 한국시간: {korea_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
-    
-    # 프로필 관리 섹션
-    show_profile_management()
     
     # 설정 패널 (모든 화면)
     show_mobile_settings()
