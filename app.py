@@ -235,8 +235,8 @@ def initialize_trader():
                 if 'seed_increases' in st.session_state and st.session_state.seed_increases:
                     for seed in st.session_state.seed_increases:
                         st.session_state.trader.add_seed_increase(
-                            seed['date'], 
-                            seed['amount'], 
+                            seed['date'],
+                            seed['amount'],
                             f"시드증액 {seed['date']}"
                         )
         except Exception as e:
@@ -273,11 +273,20 @@ def show_mobile_settings():
     # session_state에 값이 있으면 사용, 없으면 기본값
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
-    session_start_date = st.date_input(
-        "📅 투자 시작일",
-        value=default_start_date,
-        max_value=datetime.now()
-    )
+    # 날짜 입력 + 오늘 버튼
+    start_col1, start_col2 = st.columns([3, 1])
+    with start_col1:
+        session_start_date = st.date_input(
+            "📅 투자 시작일",
+            value=default_start_date,
+            max_value=datetime.now()
+        )
+    with start_col2:
+        if st.button("오늘", help="투자 시작일을 오늘 날짜로 설정"):
+            today = datetime.now().date()
+            st.session_state.session_start_date = today.strftime('%Y-%m-%d')
+            st.session_state.trader = None
+            st.rerun()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
@@ -309,15 +318,13 @@ def show_mobile_settings():
     
     # 시드증액 추가
     col1, col2 = st.columns(2)
-    
     with col1:
         seed_date = st.date_input(
             "📅 시드증액 날짜",
-            value=datetime.now(),
-            max_value=datetime.now(),
+            value=datetime.now().date(),
+            max_value=datetime.now().date(),
             key="seed_date"
         )
-    
     with col2:
         seed_amount = st.number_input(
             "💰 증액 금액 (달러)",
@@ -328,7 +335,7 @@ def show_mobile_settings():
             format="%.0f",
             key="seed_amount"
         )
-    
+
     if st.button("➕ 시드증액 추가", use_container_width=True):
         if seed_amount > 0:
             seed_increase = {
