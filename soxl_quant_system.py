@@ -482,6 +482,21 @@ class SOXLQuantTrader:
         
         latest_trading_day = self.get_latest_trading_day()
         end_date_str = latest_trading_day.strftime('%Y-%m-%d')
+
+        # 시작일이 최신 거래일보다 늦는 경우(예: 시작일=오늘, 장 미마감으로 최신 거래일=어제)
+        # 백테스트를 건너뛰고 포트폴리오만 초기화하여 당일 추천이 가능하도록 처리
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_dt = latest_trading_day.date()
+            if start_dt > end_dt:
+                if not quiet:
+                    print(f"⚠️ 백테스트 스킵: 시작일({start_dt})이 최신 거래일({end_dt})보다 늦음")
+                self.reset_portfolio()
+                minimal_result = {"skipped": True, "start_date": start_date, "end_date": end_date_str}
+                self._simulation_cache[cache_key] = (minimal_result, datetime.now())
+                return minimal_result
+        except Exception:
+            pass
         
         if quiet:
             buf = io.StringIO()
