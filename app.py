@@ -336,13 +336,16 @@ def show_mobile_settings():
         st.session_state.seed_increases = []
     
     if st.session_state.seed_increases:
-        st.write("**등록된 시드증액:**")
+        st.write("**등록된 시드증액/인출:**")
         for i, seed in enumerate(st.session_state.seed_increases):
             col1, col2, col3 = st.columns([3, 2, 1])
             with col1:
                 st.write(f"📅 {seed['date']}")
             with col2:
-                st.write(f"💰 ${seed['amount']:,.0f}")
+                if seed['amount'] > 0:
+                    st.write(f"💰 +${seed['amount']:,.0f}")
+                else:
+                    st.write(f"🔴 -${abs(seed['amount']):,.0f}")
             with col3:
                 if st.button("🗑️", key=f"delete_seed_{i}"):
                     st.session_state.seed_increases.pop(i)
@@ -359,27 +362,31 @@ def show_mobile_settings():
         )
     with col2:
         seed_amount = st.number_input(
-            "💰 증액 금액 (달러)",
-            min_value=1000.0,
+            "💰 증액/인출 금액 (달러)",
+            min_value=-1000000.0,
             max_value=1000000.0,
             value=31000.0,
             step=1000.0,
             format="%.0f",
+            help="양수: 시드증액, 음수: 시드인출",
             key="seed_amount"
         )
 
-    if st.button("➕ 시드증액 추가", use_container_width=True):
-        if seed_amount > 0:
+    if st.button("➕ 시드증액/인출 추가", use_container_width=True):
+        if seed_amount != 0:
             seed_increase = {
                 "date": seed_date.strftime('%Y-%m-%d'),
                 "amount": seed_amount
             }
             st.session_state.seed_increases.append(seed_increase)
             st.session_state.trader = None  # 트레이더 재초기화
-            st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
+            if seed_amount > 0:
+                st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
+            else:
+                st.warning(f"⚠️ 시드인출이 추가되었습니다: {seed_increase['date']} - ${abs(seed_amount):,.0f}")
             st.rerun()
         else:
-            st.error("❌ 증액 금액을 입력해주세요.")
+            st.error("❌ 금액을 입력해주세요. (0은 불가)")
     
     
     
