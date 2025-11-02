@@ -1221,6 +1221,7 @@ def show_advanced_settings():
         if config_changed:
             st.session_state.sf_config = new_sf_config
             st.session_state.trader = None  # 트레이더 재초기화 필요
+            st.rerun()  # 즉시 재실행하여 트레이더 재초기화
     
     with col2:
         st.subheader("AG 모드 (공세모드)")
@@ -1313,9 +1314,15 @@ def show_advanced_settings():
         if ag_config_changed:
             st.session_state.ag_config = new_ag_config
             st.session_state.trader = None  # 트레이더 재초기화 필요
+            st.rerun()  # 즉시 재실행하여 트레이더 재초기화
     
     # 시스템 정보
     st.subheader("ℹ️ 시스템 정보")
+    
+    # 트레이더가 초기화되지 않은 경우 체크
+    if not st.session_state.trader:
+        st.warning("⚠️ 시스템이 재초기화 중입니다. 잠시 후 새로고침해주세요.")
+        return
     
     col1, col2 = st.columns(2)
     
