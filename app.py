@@ -443,6 +443,38 @@ def main():
         "⚙️ 설정"
     ])
     
+    # 백테스팅 탭으로 복원 (JavaScript 사용)
+    if st.session_state.get('active_tab') == 1:
+        st.markdown("""
+        <script>
+        function selectBacktestTab() {
+            // Streamlit 탭 요소 찾기
+            const tabs = document.querySelectorAll('[data-baseweb="tab"]');
+            if (tabs.length > 1 && tabs[1]) {
+                // 백테스팅 탭(인덱스 1) 클릭
+                tabs[1].click();
+                return true;
+            }
+            return false;
+        }
+        
+        // 즉시 시도
+        if (!selectBacktestTab()) {
+            // 실패 시 DOMContentLoaded 후 재시도
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', function() {
+                    setTimeout(selectBacktestTab, 100);
+                });
+            } else {
+                // 이미 로드된 경우 약간의 지연 후 시도
+                setTimeout(selectBacktestTab, 100);
+            }
+        }
+        </script>
+        """, unsafe_allow_html=True)
+        # 플래그 리셋 (한 번만 실행되도록)
+        st.session_state.active_tab = None
+    
     with tab1:
         show_daily_recommendation()
     
@@ -930,6 +962,9 @@ def show_backtest():
     
     # 백테스팅 실행
     if st.button("🚀 백테스팅 실행", use_container_width=True):
+        # 백테스팅 탭을 활성화하도록 플래그 설정
+        st.session_state.active_tab = 1  # 백테스팅 탭 인덱스
+        
         with st.spinner('백테스팅 실행 중...'):
             backtest_result = st.session_state.trader.run_backtest(
                 start_date.strftime('%Y-%m-%d'),
