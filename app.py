@@ -937,8 +937,25 @@ def show_backtest():
             )
         
         if "error" in backtest_result:
-            st.error(f"백테스팅 실패: {backtest_result['error']}")
-            return
+            st.session_state.backtest_result = None
+            st.session_state.backtest_error = backtest_result['error']
+        else:
+            # 결과를 session_state에 저장 (페이지 새로고침 후에도 유지)
+            st.session_state.backtest_result = backtest_result
+            st.session_state.backtest_error = None
+            st.session_state.backtest_start_date_saved = start_date.strftime('%Y-%m-%d')
+            st.session_state.backtest_end_date_saved = end_date.strftime('%Y-%m-%d')
+        
+        # 페이지 새로고침 없이 결과 표시를 위해 rerun 호출하지 않음
+        # (버튼 클릭 시 자동으로 페이지가 새로고침됨)
+    
+    # 에러 표시
+    if 'backtest_error' in st.session_state and st.session_state.backtest_error:
+        st.error(f"백테스팅 실패: {st.session_state.backtest_error}")
+    
+    # 백테스팅 결과 표시
+    if 'backtest_result' in st.session_state and st.session_state.backtest_result:
+        backtest_result = st.session_state.backtest_result
         
         # 결과 표시
         st.success("✅ 백테스팅 완료!")
