@@ -332,11 +332,13 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 참조 파일 업데이트 오류: {e}")
             return False
     
-    def __init__(self, initial_capital: float = 40000):
+    def __init__(self, initial_capital: float = 40000, sf_config: Optional[Dict] = None, ag_config: Optional[Dict] = None):
         """
         초기화
         Args:
             initial_capital: 투자원금 (기본값: 40000달러)
+            sf_config: SF 모드 설정 (None이면 기본값 사용)
+            ag_config: AG 모드 설정 (None이면 기본값 사용)
         """
         self.initial_capital = initial_capital
         
@@ -384,26 +386,29 @@ class SOXLQuantTrader:
             else:
                 print("[ERROR] RSI 참조 데이터 업데이트 실패")
         
-        # SF모드 설정
-        self.sf_config = {
-
-            "buy_threshold": 3.5,   # 전일 종가 대비 +3.5%에 매수 (매수가)
-            "sell_threshold": 1.4,  # 전일 종가 대비 +1.4%에 매도 (매도가)
-            "max_hold_days": 30,    # 최대 보유기간 30일
-            
-            "split_count": 7,       # 7회 분할매수
-            "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
-        }
+        # SF모드 설정 (사용자 지정 또는 기본값)
+        if sf_config is not None:
+            self.sf_config = sf_config.copy()
+        else:
+            self.sf_config = {
+                "buy_threshold": 3.5,   # 전일 종가 대비 +3.5%에 매수 (매수가)
+                "sell_threshold": 1.4,  # 전일 종가 대비 +1.4%에 매도 (매도가)
+                "max_hold_days": 30,    # 최대 보유기간 30일
+                "split_count": 7,       # 7회 분할매수
+                "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
+            }
         
-        # AG모드 설정 (나중에 사용)
-        self.ag_config = {
-
-            "buy_threshold": 3.6,   # 전일 종가 대비 +3.6%에 매수 (매수가)
-            "sell_threshold": 3.5,  # 전일 종가 대비 +3.5%에 매도 (매도가)
-            "max_hold_days": 7,     # 최대 보유기간 7일
-            "split_count": 8,       # 8회 분할매수
-            "split_ratios": [0.062, 0.134, 0.118, 0.148, 0.150, 0.182, 0.186, 0.020]
-        }
+        # AG모드 설정 (사용자 지정 또는 기본값)
+        if ag_config is not None:
+            self.ag_config = ag_config.copy()
+        else:
+            self.ag_config = {
+                "buy_threshold": 3.6,   # 전일 종가 대비 +3.6%에 매수 (매수가)
+                "sell_threshold": 3.5,  # 전일 종가 대비 +3.5%에 매도 (매도가)
+                "max_hold_days": 7,     # 최대 보유기간 7일
+                "split_count": 8,       # 8회 분할매수
+                "split_ratios": [0.062, 0.134, 0.118, 0.148, 0.150, 0.182, 0.186, 0.020]
+            }
         
         # 포지션 관리 (회차별)
         self.positions = []  # [{"round": 1, "buy_date": date, "buy_price": price, "shares": shares, "amount": amount}]

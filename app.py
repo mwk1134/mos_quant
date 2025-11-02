@@ -227,7 +227,15 @@ def initialize_trader():
     if st.session_state.trader is None:
         try:
             with st.spinner('MOS 퀀트투자 시스템 초기화 중...'):
-                st.session_state.trader = SOXLQuantTrader(st.session_state.initial_capital)
+                # 사용자 지정 파라미터 가져오기 (없으면 None = 기본값 사용)
+                sf_config = st.session_state.get('sf_config')
+                ag_config = st.session_state.get('ag_config')
+                
+                st.session_state.trader = SOXLQuantTrader(
+                    initial_capital=st.session_state.initial_capital,
+                    sf_config=sf_config,
+                    ag_config=ag_config
+                )
                 if st.session_state.test_today_override:
                     st.session_state.trader.set_test_today(st.session_state.test_today_override)
                 
@@ -1094,20 +1102,217 @@ def show_advanced_settings():
                 else:
                     st.warning("⚠️ RSI 데이터 업데이트가 필요합니다")
     
-    # 모드 설정 확인
+    # 모드 설정 확인 및 수정
     st.subheader("🎯 모드 설정")
+    
+    # 기본값 정의
+    default_sf_config = {
+        "buy_threshold": 3.5,
+        "sell_threshold": 1.4,
+        "max_hold_days": 30,
+        "split_count": 7,
+        "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
+    }
+    
+    default_ag_config = {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 7,
+        "split_count": 8,
+        "split_ratios": [0.062, 0.134, 0.118, 0.148, 0.150, 0.182, 0.186, 0.020]
+    }
+    
+    # session_state에 파라미터 저장 (초기화)
+    if 'sf_config' not in st.session_state:
+        st.session_state.sf_config = default_sf_config.copy()
+    if 'ag_config' not in st.session_state:
+        st.session_state.ag_config = default_ag_config.copy()
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("SF 모드 (안전모드)")
-        sf_config = st.session_state.trader.sf_config
-        st.json(sf_config)
+        
+        # SF 모드 파라미터 편집
+        sf_config = st.session_state.sf_config
+        
+        sf_buy_threshold = st.number_input(
+            "매수 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(sf_config.get("buy_threshold", 3.5)),
+            step=0.1,
+            key="sf_buy_threshold"
+        )
+        
+        sf_sell_threshold = st.number_input(
+            "매도 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(sf_config.get("sell_threshold", 1.4)),
+            step=0.1,
+            key="sf_sell_threshold"
+        )
+        
+        sf_max_hold_days = st.number_input(
+            "최대 보유일수",
+            min_value=1,
+            max_value=365,
+            value=int(sf_config.get("max_hold_days", 30)),
+            step=1,
+            key="sf_max_hold_days"
+        )
+        
+        sf_split_count = st.number_input(
+            "분할매수 횟수",
+            min_value=1,
+            max_value=20,
+            value=int(sf_config.get("split_count", 7)),
+            step=1,
+            key="sf_split_count"
+        )
+        
+        # 분할 비율 입력
+        st.write("**분할 비율:**")
+        sf_split_ratios = []
+        split_count = int(sf_split_count)
+        
+        # 기존 비율이 있으면 사용, 없으면 기본값
+        existing_ratios = sf_config.get("split_ratios", default_sf_config["split_ratios"])
+        
+        for i in range(split_count):
+            default_ratio = existing_ratios[i] if i < len(existing_ratios) else (1.0 / split_count)
+            ratio = st.number_input(
+                f"회차 {i+1}",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(default_ratio),
+                step=0.001,
+                format="%.3f",
+                key=f"sf_split_ratio_{i}"
+            )
+            sf_split_ratios.append(ratio)
+        
+        # 비율 합이 1이 아니면 경고
+        ratio_sum = sum(sf_split_ratios)
+        if abs(ratio_sum - 1.0) > 0.01:
+            st.warning(f"⚠️ 분할 비율의 합이 {ratio_sum:.3f}입니다. 1.0이 되도록 조정해주세요.")
+        
+        # 파라미터 변경 감지 및 업데이트
+        new_sf_config = {
+            "buy_threshold": sf_buy_threshold,
+            "sell_threshold": sf_sell_threshold,
+            "max_hold_days": sf_max_hold_days,
+            "split_count": split_count,
+            "split_ratios": sf_split_ratios
+        }
+        
+        # 변경 감지 (딕셔너리 깊은 비교)
+        config_changed = (
+            new_sf_config["buy_threshold"] != sf_config.get("buy_threshold") or
+            new_sf_config["sell_threshold"] != sf_config.get("sell_threshold") or
+            new_sf_config["max_hold_days"] != sf_config.get("max_hold_days") or
+            new_sf_config["split_count"] != sf_config.get("split_count") or
+            len(new_sf_config["split_ratios"]) != len(sf_config.get("split_ratios", [])) or
+            any(abs(new_sf_config["split_ratios"][i] - sf_config.get("split_ratios", [])[i]) > 0.0001 
+                for i in range(min(len(new_sf_config["split_ratios"]), len(sf_config.get("split_ratios", [])))))
+        )
+        
+        if config_changed:
+            st.session_state.sf_config = new_sf_config
+            st.session_state.trader = None  # 트레이더 재초기화 필요
     
     with col2:
         st.subheader("AG 모드 (공세모드)")
-        ag_config = st.session_state.trader.ag_config
-        st.json(ag_config)
+        
+        # AG 모드 파라미터 편집
+        ag_config = st.session_state.ag_config
+        
+        ag_buy_threshold = st.number_input(
+            "매수 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(ag_config.get("buy_threshold", 3.6)),
+            step=0.1,
+            key="ag_buy_threshold"
+        )
+        
+        ag_sell_threshold = st.number_input(
+            "매도 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(ag_config.get("sell_threshold", 3.5)),
+            step=0.1,
+            key="ag_sell_threshold"
+        )
+        
+        ag_max_hold_days = st.number_input(
+            "최대 보유일수",
+            min_value=1,
+            max_value=365,
+            value=int(ag_config.get("max_hold_days", 7)),
+            step=1,
+            key="ag_max_hold_days"
+        )
+        
+        ag_split_count = st.number_input(
+            "분할매수 횟수",
+            min_value=1,
+            max_value=20,
+            value=int(ag_config.get("split_count", 8)),
+            step=1,
+            key="ag_split_count"
+        )
+        
+        # 분할 비율 입력
+        st.write("**분할 비율:**")
+        ag_split_ratios = []
+        ag_split_count = int(ag_split_count)
+        
+        # 기존 비율이 있으면 사용, 없으면 기본값
+        existing_ag_ratios = ag_config.get("split_ratios", default_ag_config["split_ratios"])
+        
+        for i in range(ag_split_count):
+            default_ratio = existing_ag_ratios[i] if i < len(existing_ag_ratios) else (1.0 / ag_split_count)
+            ratio = st.number_input(
+                f"회차 {i+1}",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(default_ratio),
+                step=0.001,
+                format="%.3f",
+                key=f"ag_split_ratio_{i}"
+            )
+            ag_split_ratios.append(ratio)
+        
+        # 비율 합이 1이 아니면 경고
+        ag_ratio_sum = sum(ag_split_ratios)
+        if abs(ag_ratio_sum - 1.0) > 0.01:
+            st.warning(f"⚠️ 분할 비율의 합이 {ag_ratio_sum:.3f}입니다. 1.0이 되도록 조정해주세요.")
+        
+        # 파라미터 변경 감지 및 업데이트
+        new_ag_config = {
+            "buy_threshold": ag_buy_threshold,
+            "sell_threshold": ag_sell_threshold,
+            "max_hold_days": ag_max_hold_days,
+            "split_count": ag_split_count,
+            "split_ratios": ag_split_ratios
+        }
+        
+        # 변경 감지 (딕셔너리 깊은 비교)
+        ag_config_changed = (
+            new_ag_config["buy_threshold"] != ag_config.get("buy_threshold") or
+            new_ag_config["sell_threshold"] != ag_config.get("sell_threshold") or
+            new_ag_config["max_hold_days"] != ag_config.get("max_hold_days") or
+            new_ag_config["split_count"] != ag_config.get("split_count") or
+            len(new_ag_config["split_ratios"]) != len(ag_config.get("split_ratios", [])) or
+            any(abs(new_ag_config["split_ratios"][i] - ag_config.get("split_ratios", [])[i]) > 0.0001 
+                for i in range(min(len(new_ag_config["split_ratios"]), len(ag_config.get("split_ratios", [])))))
+        )
+        
+        if ag_config_changed:
+            st.session_state.ag_config = new_ag_config
+            st.session_state.trader = None  # 트레이더 재초기화 필요
     
     # 시스템 정보
     st.subheader("ℹ️ 시스템 정보")
