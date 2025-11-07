@@ -1014,6 +1014,57 @@ class SOXLQuantTrader:
         
         return True
     
+    def reconcile_positions_with_close_history(self, soxl_data: pd.DataFrame):
+        """
+        과거 종가가 매도 목표가를 터치한 포지션을 보정하여 자동 매도 처리한다.
+        LOC 매도 특성상 종가가 목표가 이상이면 체결되는 것을 반영하기 위함.
+        Args:
+            soxl_data (DataFrame): 최근 SOXL 일별 데이터 (Close 필수)
+        """
+        if not self.positions or soxl_data is None or len(soxl_data) == 0:
+            return
+
+        sold_rounds = []
+        # 리스트 복사본을 사용하여 반복 중 안전하게 제거
+        for position in list(self.positions):
+            buy_date = position["buy_date"]
+
+            # 매수일 이후(엄격하게 초과) 데이터만 확인
+            future_data = soxl_data[soxl_data.index > buy_date]
+            if future_data.empty:
+                continue
+
+            position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
+            target_price = position["buy_price"] * (1 + position_config["sell_threshold"] / 100)
+
+            hit_rows = future_data[future_data["Close"] >= target_price]
+            if hit_rows.empty:
+                continue
+
+            sell_row = hit_rows.iloc[0]
+            sell_date = sell_row.name
+            sell_close = sell_row["Close"]
+
+            proceeds = position["shares"] * sell_close
+            profit = proceeds - position["amount"]
+            profit_rate = (profit / position["amount"]) * 100 if position["amount"] else 0.0
+
+            self.positions.remove(position)
+            self.available_cash += proceeds
+            sold_rounds.append(position["round"])
+
+            print("🧾 과거 종가 매도 보정 실행")
+            print(f"   - 회차: {position['round']}회차")
+            print(f"   - 매수일: {buy_date.strftime('%Y-%m-%d')} | 매수가: ${position['buy_price']:.2f}")
+            print(f"   - 목표가: ${target_price:.2f}")
+            print(f"   - sell_date: {sell_date.strftime('%Y-%m-%d')} | 종가: ${sell_close:.2f}")
+            print(f"   - 실현손익: ${profit:,.0f} ({profit_rate:+.2f}%)")
+
+        if sold_rounds:
+            sold_count = len(sold_rounds)
+            self.current_round = max(1, self.current_round - sold_count)
+            print(f"🔄 보정 후 current_round: {self.current_round} (총 {sold_count}개 회차 보정 매도)")
+
     def check_sell_conditions(self, row: pd.Series, current_date: datetime, prev_close: float) -> List[Dict]:
         """
         매도 조건 확인
@@ -1050,12 +1101,13 @@ class SOXLQuantTrader:
             
             # 디버깅: 매도 조건 상세 정보
             daily_close = row['Close']
-            print(f"   📦 {position['round']}회차: 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (현재가 ${daily_close:.2f})")
+            daily_high = row['High'] if 'High' in row and not pd.isna(row['High']) else daily_close
+            print(f"   📦 {position['round']}회차: 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (고가 ${daily_high:.2f}, 종가 ${daily_close:.2f})")
             print(f"      보유기간: {hold_days}일 (최대: {position_config['max_hold_days']}일)")
             
             # 1. LOC 매도 조건: 종가가 매도목표가에 도달했을 때 (종가 >= 매도목표가)
             if daily_close >= sell_price:
-                print(f"      ✅ 매도 조건 1: 목표가 도달 (${daily_close:.2f} >= ${sell_price:.2f})")
+                print(f"      ✅ 매도 조건 1: 목표가 도달 (종가 ${daily_close:.2f} >= ${sell_price:.2f})")
                 sell_positions.append({
                     "position": position,
                     "reason": "목표가 도달",
@@ -1143,6 +1195,15 @@ class SOXLQuantTrader:
         if soxl_data is None:
             return {"error": "SOXL 데이터를 가져올 수 없습니다."}
         
+        # 보유 기간이 1개월을 넘어가는 포지션이 있으면 데이터를 확장해서 로드
+        if self.positions:
+            earliest_buy = min(pos["buy_date"] for pos in self.positions)
+            if earliest_buy < soxl_data.index.min():
+                # 최대 보유기간(30일)을 감안하여 2개월치 데이터로 확장
+                extended_data = self.get_stock_data("SOXL", "2mo")
+                if extended_data is not None and len(extended_data) > 0:
+                    soxl_data = extended_data
+
         # 2. QQQ 데이터 가져오기 (주간 RSI 계산용)
         qqq_data = self.get_stock_data("QQQ", "6mo")  # 충분한 데이터 확보
         if qqq_data is None:
@@ -1162,6 +1223,9 @@ class SOXLQuantTrader:
         if len(soxl_data) < 2:
             return {"error": "데이터가 부족합니다. 최소 2일의 데이터가 필요합니다."}
         
+        # 매도 목표가를 이미 터치한 포지션 보정
+        self.reconcile_positions_with_close_history(soxl_data)
+
         latest_soxl = soxl_data.iloc[-1]
         current_price = latest_soxl['Close']
         current_date = soxl_data.index[-1]
