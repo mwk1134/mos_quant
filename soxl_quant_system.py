@@ -1057,6 +1057,57 @@ class SOXLQuantTrader:
         
         return True
     
+    def reconcile_positions_with_close_history(self, soxl_data: pd.DataFrame):
+        """
+        과거 종가가 매도 목표가를 터치한 포지션을 보정하여 자동 매도 처리한다.
+        LOC 매도 특성상 종가가 목표가 이상이면 체결되는 것을 반영하기 위함.
+        Args:
+            soxl_data (DataFrame): 최근 SOXL 일별 데이터 (Close 필수)
+        """
+        if not self.positions or soxl_data is None or len(soxl_data) == 0:
+            return
+
+        sold_rounds = []
+        # 리스트 복사본을 사용하여 반복 중 안전하게 제거
+        for position in list(self.positions):
+            buy_date = position["buy_date"]
+
+            # 매수일 이후(엄격하게 초과) 데이터만 확인
+            future_data = soxl_data[soxl_data.index > buy_date]
+            if future_data.empty:
+                continue
+
+            position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
+            target_price = position["buy_price"] * (1 + position_config["sell_threshold"] / 100)
+
+            hit_rows = future_data[future_data["Close"] >= target_price]
+            if hit_rows.empty:
+                continue
+
+            sell_row = hit_rows.iloc[0]
+            sell_date = sell_row.name
+            sell_close = sell_row["Close"]
+
+            proceeds = position["shares"] * sell_close
+            profit = proceeds - position["amount"]
+            profit_rate = (profit / position["amount"]) * 100 if position["amount"] else 0.0
+
+            self.positions.remove(position)
+            self.available_cash += proceeds
+            sold_rounds.append(position["round"])
+
+            print("🧾 과거 종가 매도 보정 실행")
+            print(f"   - 회차: {position['round']}회차")
+            print(f"   - 매수일: {buy_date.strftime('%Y-%m-%d')} | 매수가: ${position['buy_price']:.2f}")
+            print(f"   - 목표가: ${target_price:.2f}")
+            print(f"   - sell_date: {sell_date.strftime('%Y-%m-%d')} | 종가: ${sell_close:.2f}")
+            print(f"   - 실현손익: ${profit:,.0f} ({profit_rate:+.2f}%)")
+
+        if sold_rounds:
+            sold_count = len(sold_rounds)
+            self.current_round = max(1, self.current_round - sold_count)
+            print(f"🔄 보정 후 current_round: {self.current_round} (총 {sold_count}개 회차 보정 매도)")
+
     def check_sell_conditions(self, row: pd.Series, current_date: datetime, prev_close: float) -> List[Dict]:
         """
         매도 조건 확인
