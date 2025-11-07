@@ -7,11 +7,17 @@ import os
 import sys
 import io
 from contextlib import redirect_stdout
+from pathlib import Path
 import plotly.graph_objects as go
 
 # Force redeploy - version 1.1
 import plotly.express as px
 from plotly.subplots import make_subplots
+
+# ensure local mos_quant modules take precedence
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
 # 기존 SOXLQuantTrader 클래스 import
 from soxl_quant_system import SOXLQuantTrader
