@@ -1248,9 +1248,11 @@ class SOXLQuantTrader:
         qqq_data = self.get_stock_data("QQQ", "6mo")  # 충분한 데이터 확보
         if qqq_data is None:
             return {"error": "QQQ 데이터를 가져올 수 없습니다."}
-        
 
-        # 3. QQQ 주간 RSI 기반 모드 자동 전환
+        # 3. 과거 종가 기반 포지션 보정 (LOC 매도)
+        self.reconcile_positions_with_close_history(soxl_data)
+
+        # 4. QQQ 주간 RSI 기반 모드 자동 전환
         self.update_mode(qqq_data)
         
         # QQQ 주간 RSI 계산 (표시용)
@@ -1259,7 +1261,7 @@ class SOXLQuantTrader:
             return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
         
 
-        # 4. 최신 SOXL 가격 정보 (최소 2일 데이터 필요)
+        # 5. 최신 SOXL 가격 정보 (최소 2일 데이터 필요)
         if len(soxl_data) < 2:
             return {"error": "데이터가 부족합니다. 최소 2일의 데이터가 필요합니다."}
         
@@ -1283,19 +1285,19 @@ class SOXLQuantTrader:
             prev_close_basis_date = soxl_data.index[-2].strftime("%Y-%m-%d")
             display_date = current_date.strftime("%Y-%m-%d")
         
-        # 5. 매수/매도 가격 계산
+        # 6. 매수/매도 가격 계산
 
         buy_price, sell_price = self.calculate_buy_sell_prices(prev_close)
         
-        # 6. 매도 조건 확인
+        # 7. 매도 조건 확인
 
         sell_recommendations = self.check_sell_conditions(latest_soxl, current_date, prev_close)
         
-        # 7. 매수 조건 확인
+        # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round()
         next_buy_amount = self.calculate_position_size(self.current_round) if can_buy else 0
         
-        # 8. 포트폴리오 현황
+        # 9. 포트폴리오 현황
         total_position_value = sum([pos["shares"] * current_price for pos in self.positions])
         total_invested = sum([pos["amount"] for pos in self.positions])
         unrealized_pnl = total_position_value - total_invested
