@@ -11,13 +11,20 @@ import os
 import sys
 import io
 from contextlib import redirect_stdout
+from pathlib import Path
 
 
 class SOXLQuantTrader:
     """SOXL 퀀트투자 시스템"""
 
     
-    def load_rsi_reference_data(self, filename: str = "data/weekly_rsi_reference copy.json") -> dict:
+    def _resolve_data_path(self, filename: str) -> Path:
+        base_dir = Path(__file__).resolve().parent
+        data_dir = base_dir / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir / filename
+
+    def load_rsi_reference_data(self, filename: str = "weekly_rsi_reference.json") -> dict:
         """
         RSI 참조 데이터 로드 (JSON 형식)
         Args:
@@ -38,7 +45,7 @@ class SOXLQuantTrader:
                 file_path = os.path.join(application_path, filename)
             else:
                 # 스크립트로 실행된 경우
-                file_path = filename
+                file_path = str(self._resolve_data_path(filename))
             
             # data 폴더가 없으면 생성
             data_dir = os.path.dirname(file_path)
@@ -129,7 +136,7 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 참조 데이터 조회 오류: {e}")
             return None
     
-    def check_and_update_rsi_data(self, filename: str = "data/weekly_rsi_reference.json") -> bool:
+    def check_and_update_rsi_data(self, filename: str = "weekly_rsi_reference.json") -> bool:
         """
         RSI 참조 데이터가 최신인지 확인하고 필요시 업데이트 (JSON 형식)
         Args:
@@ -147,7 +154,7 @@ class SOXLQuantTrader:
                 file_path = os.path.join(application_path, filename)
             else:
                 # 스크립트로 실행된 경우
-                file_path = filename
+                file_path = str(self._resolve_data_path(filename))
             
             # data 폴더가 없으면 생성
             data_dir = os.path.dirname(file_path)
@@ -202,7 +209,7 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 데이터 확인 오류: {e}")
             return False
     
-    def update_rsi_reference_file(self, filename: str = "data/weekly_rsi_reference.json") -> bool:
+    def update_rsi_reference_file(self, filename: str = "weekly_rsi_reference.json") -> bool:
         """
         RSI 참조 파일을 최신 데이터로 업데이트 (JSON 형식)
         오늘 날짜까지의 주간 RSI를 자동으로 계산하여 업데이트
@@ -222,7 +229,7 @@ class SOXLQuantTrader:
                 file_path = os.path.join(application_path, filename)
             else:
                 # 스크립트로 실행된 경우
-                file_path = filename
+                file_path = str(self._resolve_data_path(filename))
             
             # data 폴더가 없으면 생성
             data_dir = os.path.dirname(file_path)
