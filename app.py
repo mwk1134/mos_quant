@@ -732,7 +732,19 @@ def show_daily_recommendation():
             st.success(f"✅ 매도 추천: {len(recommendation['sell_recommendations'])}건")
             for sell_info in recommendation['sell_recommendations']:
                 pos = sell_info['position']
+                buy_date = pos.get('buy_date')
+                if isinstance(buy_date, pd.Timestamp):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                elif isinstance(buy_date, datetime):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                elif hasattr(buy_date, "strftime"):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                else:
+                    buy_date_str = str(buy_date) if buy_date else "-"
+                buy_price = pos.get('buy_price')
+                buy_price_text = f"${buy_price:.2f}" if isinstance(buy_price, (int, float)) else "-"
                 st.info(f"📦 {pos['round']}회차 매도: {pos['shares']}주 @ ${sell_info['sell_price']:.2f}")
+                st.caption(f"매수체결일: {buy_date_str} • 매수가 {buy_price_text}")
                 st.caption(f"매도 사유: {sell_info['reason']}")
         else:
             # 보유 포지션이 있으면 매도 목표가 안내
@@ -744,9 +756,19 @@ def show_daily_recommendation():
                     current_price = recommendation['soxl_current_price']
                     price_diff = target_sell_price - current_price
                     price_diff_pct = (price_diff / current_price) * 100
+                    buy_date = pos.get('buy_date')
+                    if isinstance(buy_date, pd.Timestamp):
+                        buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    elif isinstance(buy_date, datetime):
+                        buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    elif hasattr(buy_date, "strftime"):
+                        buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    else:
+                        buy_date_str = str(buy_date) if buy_date else "-"
                     
                     # 매도 목표가까지 남은 상승률을 명확하게 표시 (보유 수량 정보 추가)
                     st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주")
+                    st.caption(f"매수체결일: {buy_date_str} • 매수가 ${pos['buy_price']:.2f}")
             else:
                 st.info("🟡 매도 추천 없음")
     
