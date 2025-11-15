@@ -1068,11 +1068,21 @@ class SOXLQuantTrader:
         """
         과거 종가가 매도 목표가를 터치한 포지션을 보정하여 자동 매도 처리한다.
         LOC 매도 특성상 종가가 목표가 이상이면 체결되는 것을 반영하기 위함.
+        장중에는 오늘 날짜 데이터를 제외하고 과거 확정된 데이터만 사용한다.
         Args:
             soxl_data (DataFrame): 최근 SOXL 일별 데이터 (Close 필수)
         """
         if not self.positions or soxl_data is None or len(soxl_data) == 0:
             return
+
+        # 장중에는 오늘 날짜 데이터를 제외 (종가가 확정되지 않았으므로)
+        today = self.get_today_date()
+        today_date = today.date()
+        
+        # 정규장이 아직 마감되지 않았고, 데이터에 오늘 날짜가 포함되어 있으면 제외
+        if not self.is_regular_session_closed_now() and len(soxl_data) > 0:
+            if soxl_data.index.max().date() == today_date:
+                soxl_data = soxl_data[soxl_data.index.date < today_date]
 
         sold_rounds = []
         # 리스트 복사본을 사용하여 반복 중 안전하게 제거
