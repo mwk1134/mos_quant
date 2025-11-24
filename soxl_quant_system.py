@@ -385,13 +385,17 @@ class SOXLQuantTrader:
             "2025-01-09",  # Jimmy Carter National Day of Mourning
         ]
         
-        # RSI 참조 데이터 확인 및 업데이트
-        if not self.check_and_update_rsi_data():
-            print("[INFO] RSI 참조 데이터 업데이트 중...")
-            if self.update_rsi_reference_file():
-                print("[SUCCESS] RSI 참조 데이터 업데이트 완료")
-            else:
-                print("[ERROR] RSI 참조 데이터 업데이트 실패")
+        # RSI 참조 데이터 확인 및 업데이트 (오류 발생 시에도 계속 진행)
+        try:
+            if not self.check_and_update_rsi_data():
+                print("[INFO] RSI 참조 데이터 업데이트 중...")
+                if self.update_rsi_reference_file():
+                    print("[SUCCESS] RSI 참조 데이터 업데이트 완료")
+                else:
+                    print("[ERROR] RSI 참조 데이터 업데이트 실패")
+        except Exception as e:
+            # RSI 업데이트 실패해도 백테스트는 계속 진행
+            print(f"[WARNING] RSI 업데이트 중 오류 발생 (무시하고 계속 진행): {str(e)[:100]}")
         
         # SF모드 설정 (사용자 지정 또는 기본값)
         if sf_config is not None:
@@ -1000,9 +1004,9 @@ class SOXLQuantTrader:
         if self.current_round > config["split_count"]:
             return False
         
-        # 시드 확인
-        next_amount = self.calculate_position_size(self.current_round)
-        if self.available_cash < next_amount:
+        # 예수금이 있으면 가능한 만큼이라도 매수 가능
+        # (실제 매수 시 예수금 부족 처리는 execute_buy()에서 수행)
+        if self.available_cash <= 0:
             return False
         
         return True
@@ -1253,6 +1257,12 @@ class SOXLQuantTrader:
         soxl_data = self.get_stock_data("SOXL", "1mo")
         if soxl_data is None:
             return {"error": "SOXL 데이터를 가져올 수 없습니다."}
+        
+        # 장중에는 오늘 날짜 데이터 제외 (종가가 확정되지 않았으므로)
+        today_date = today.date()
+        if not self.is_regular_session_closed_now() and len(soxl_data) > 0:
+            if soxl_data.index.max().date() == today_date:
+                soxl_data = soxl_data[soxl_data.index.date < today_date]
         
         # 2. QQQ 데이터 가져오기 (주간 RSI 계산용)
         qqq_data = self.get_stock_data("QQQ", "6mo")  # 충분한 데이터 확보
