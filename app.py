@@ -842,29 +842,32 @@ def show_daily_recommendation():
         st.subheader("✏️ 포지션 수정")
         st.caption("💡 실제 주문 수량이 추천과 다를 경우 수정하세요")
         
-        # 수정할 포지션 선택
-        position_rounds = [f"{pos['round']}회차" for pos in st.session_state.trader.positions]
-        if position_rounds:
-            selected_round_str = st.selectbox(
-                "수정할 포지션 선택",
-                position_rounds,
-                key="position_edit_select"
-            )
-            selected_round = int(selected_round_str.replace("회차", ""))
+        # 수정할 포지션 선택 (인덱스 기반, 매수일과 회차로 구분)
+        if st.session_state.trader.positions:
+            position_options = []
+            for idx, pos in enumerate(st.session_state.trader.positions):
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                position_label = f"{pos['round']}회차 - {buy_date_str} - {pos['shares']}주 @ ${pos['buy_price']:.2f}"
+                position_options.append((idx, position_label))
             
-            # 선택된 포지션 정보 가져오기
-            selected_position = None
-            for pos in st.session_state.trader.positions:
-                if pos['round'] == selected_round:
-                    selected_position = pos
-                    break
+            if position_options:
+                selected_option = st.selectbox(
+                    "수정할 포지션 선택",
+                    options=range(len(position_options)),
+                    format_func=lambda x: position_options[x][1],
+                    key="position_edit_select"
+                )
+                selected_position_index = selected_option
+                selected_position = st.session_state.trader.positions[selected_position_index]
             
             if selected_position:
                 col1, col2 = st.columns(2)
                 
                 with col1:
                     st.info(f"**현재 정보**")
+                    buy_date_str = selected_position['buy_date'].strftime('%Y-%m-%d') if isinstance(selected_position['buy_date'], (datetime, pd.Timestamp)) else str(selected_position['buy_date'])
                     st.write(f"회차: {selected_position['round']}회차")
+                    st.write(f"매수일: {buy_date_str}")
                     st.write(f"주식수: {selected_position['shares']}주")
                     st.write(f"매수가: ${selected_position['buy_price']:.2f}")
                     st.write(f"투자금액: ${selected_position['amount']:,.0f}")
@@ -876,7 +879,7 @@ def show_daily_recommendation():
                         min_value=1,
                         value=int(selected_position['shares']),
                         step=1,
-                        key=f"edit_shares_{selected_round}"
+                        key=f"edit_shares_{selected_position_index}"
                     )
                     new_buy_price = st.number_input(
                         "매수가 ($)",
@@ -884,7 +887,7 @@ def show_daily_recommendation():
                         value=float(selected_position['buy_price']),
                         step=0.01,
                         format="%.2f",
-                        key=f"edit_price_{selected_round}"
+                        key=f"edit_price_{selected_position_index}"
                     )
                     new_amount = new_shares * new_buy_price
                     st.write(f"**새 투자금액: ${new_amount:,.0f}**")
@@ -899,14 +902,14 @@ def show_daily_recommendation():
                         st.info("변동 없음")
                 
                 # 수정 버튼
-                if st.button("✅ 포지션 수정", key=f"apply_edit_{selected_round}", use_container_width=True):
+                if st.button("✅ 포지션 수정", key=f"apply_edit_{selected_position_index}", use_container_width=True):
                     success = st.session_state.trader.update_position(
-                        selected_round,
+                        selected_position_index,
                         new_shares,
                         new_buy_price
                     )
                     if success:
-                        st.success(f"✅ {selected_round}회차 포지션이 수정되었습니다!")
+                        st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
                         st.session_state.trader.clear_cache()  # 캐시 초기화
                         st.rerun()
                     else:

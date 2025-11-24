@@ -1225,25 +1225,22 @@ class SOXLQuantTrader:
 
         return proceeds, sold_round
     
-    def update_position(self, round_num: int, new_shares: int, new_buy_price: Optional[float] = None) -> bool:
+    def update_position(self, position_index: int, new_shares: int, new_buy_price: Optional[float] = None) -> bool:
         """
         포지션 수정 (수동 수정용)
         Args:
-            round_num: 수정할 포지션의 회차
+            position_index: 수정할 포지션의 인덱스 (positions 리스트의 인덱스)
             new_shares: 새로운 주식 수량
             new_buy_price: 새로운 매수가 (None이면 기존 매수가 유지)
         Returns:
             bool: 수정 성공 여부
         """
-        # 해당 회차 포지션 찾기
-        position = None
-        for pos in self.positions:
-            if pos["round"] == round_num:
-                position = pos
-                break
-        
-        if position is None:
+        # 인덱스 범위 확인
+        if position_index < 0 or position_index >= len(self.positions):
             return False
+        
+        # 해당 인덱스의 포지션 가져오기
+        position = self.positions[position_index]
         
         # 기존 값 저장
         old_shares = position["shares"]
@@ -1272,7 +1269,7 @@ class SOXLQuantTrader:
         position["buy_price"] = new_buy_price
         position["amount"] = new_amount
         
-        print(f"✅ {round_num}회차 포지션 수정 완료")
+        print(f"✅ {position['round']}회차 포지션 수정 완료 (인덱스: {position_index})")
         print(f"   기존: {old_shares}주 @ ${old_buy_price:.2f} (${old_amount:,.0f})")
         print(f"   수정: {new_shares}주 @ ${new_buy_price:.2f} (${new_amount:,.0f})")
         print(f"   예수금 조정: ${cash_adjustment:+,.0f}")
