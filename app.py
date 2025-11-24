@@ -198,6 +198,13 @@ if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'position_edits' not in st.session_state:
     st.session_state.position_edits = {}  # {position_index: {'shares': int, 'buy_price': float}}
+if 'kmw_preset' not in st.session_state:
+    st.session_state.kmw_preset = {
+        'initial_capital': 9000.0,
+        'session_start_date': "2025-08-27",
+        'seed_increases': [{"date": "2025-10-21", "amount": 31000.0}],
+        'position_edits': {}  # 포지션 수정 정보 저장
+    }
 
 # 배포 테스트 - 버전 1.5 - FORCE REDEPLOY
 import time
@@ -290,7 +297,7 @@ def show_mobile_settings():
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
     # 날짜 입력 + 오늘 버튼 + KMW/JEH 프리셋 버튼
-    start_col1, start_col2, start_col3, start_col4 = st.columns([3, 1, 1, 1])
+    start_col1, start_col2, start_col3, start_col4, start_col5 = st.columns([3, 1, 1, 1, 1])
     with start_col1:
         session_start_date = st.date_input(
             "📅 투자 시작일",
@@ -305,22 +312,33 @@ def show_mobile_settings():
             st.rerun()
     with start_col3:
         if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000"):
-            # 초기 투자금
-            st.session_state.initial_capital = 9000.0
+            # KMW 프리셋 불러오기
+            kmw = st.session_state.kmw_preset
+            st.session_state.initial_capital = kmw['initial_capital']
+            st.session_state.session_start_date = kmw['session_start_date']
+            st.session_state.seed_increases = kmw['seed_increases'].copy()
             
-            # 투자 시작일
-            st.session_state.session_start_date = "2025-08-27"
-            
-            # 시드증액 프리셋
-            st.session_state.seed_increases = [
-                {"date": "2025-10-21", "amount": 31000.0}
-            ]
+            # 저장된 포지션 수정 정보 불러오기
+            if 'position_edits' in kmw and kmw['position_edits']:
+                st.session_state.position_edits = kmw['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
             
             # 트레이더 재초기화 후 즉시 적용
             st.session_state.trader = None
             st.success("✅ KMW 프리셋이 적용되었습니다.")
             st.rerun()
     with start_col4:
+        if st.button("KMW 저장", help="현재 설정과 수정된 포지션 정보를 KMW 프리셋에 저장"):
+            # 현재 설정을 KMW 프리셋에 저장
+            st.session_state.kmw_preset = {
+                'initial_capital': st.session_state.initial_capital,
+                'session_start_date': st.session_state.session_start_date,
+                'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
+                'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
+            }
+            st.success("✅ KMW 프리셋이 저장되었습니다!")
+    with start_col5:
         if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 시드증액 없음"):
             # 초기 투자금
             st.session_state.initial_capital = 2793.0
