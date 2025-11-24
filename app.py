@@ -707,12 +707,24 @@ def show_daily_recommendation():
     
     with col1:
         st.subheader("🟢 매수 추천")
+        # 잔여 예수금 표시
+        available_cash = recommendation['portfolio']['available_cash']
+        st.metric("💵 잔여 예수금", f"${available_cash:,.0f}")
+        
         if recommendation['can_buy']:
             st.success(f"✅ 매수 추천: {recommendation['next_buy_round']}회차")
             st.info(f"💰 매수가: ${recommendation['buy_price']:.2f} (LOC 주문)")
             st.info(f"💵 매수금액: ${recommendation['next_buy_amount']:,.0f}")
             shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
+            
+            # 예수금 부족 시 안내
+            if available_cash < recommendation['next_buy_amount']:
+                possible_shares = int(available_cash / recommendation['buy_price'])
+                possible_amount = possible_shares * recommendation['buy_price']
+                st.warning(f"⚠️ 예수금 부족: 목표 금액 ${recommendation['next_buy_amount']:,.0f} 대비 예수금 ${available_cash:,.0f} 부족")
+                st.info(f"💡 가능한 매수: {possible_shares}주 (약 ${possible_amount:,.0f})")
+            
             # 장중 주문 가이드(현재가가 존재하는 경우 간단 안내)
             current_price = recommendation.get('soxl_current_price')
             if current_price:
@@ -725,6 +737,8 @@ def show_daily_recommendation():
                 st.warning("🔴 매수 불가: 모든 분할매수 완료")
             else:
                 st.warning("🔴 매수 불가: 시드 부족")
+                if available_cash > 0:
+                    st.info(f"💡 잔여 예수금: ${available_cash:,.0f} (목표 금액 ${recommendation['next_buy_amount']:,.0f} 미만)")
     
     with col2:
         st.subheader("🔴 매도 추천")
