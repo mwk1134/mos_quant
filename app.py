@@ -837,6 +837,80 @@ def show_daily_recommendation():
         
         df_positions = pd.DataFrame(positions_data)
         st.dataframe(df_positions, use_container_width=True)
+        
+        # 포지션 수정 섹션
+        st.subheader("✏️ 포지션 수정")
+        st.caption("💡 실제 주문 수량이 추천과 다를 경우 수정하세요")
+        
+        # 수정할 포지션 선택
+        position_rounds = [f"{pos['round']}회차" for pos in st.session_state.trader.positions]
+        if position_rounds:
+            selected_round_str = st.selectbox(
+                "수정할 포지션 선택",
+                position_rounds,
+                key="position_edit_select"
+            )
+            selected_round = int(selected_round_str.replace("회차", ""))
+            
+            # 선택된 포지션 정보 가져오기
+            selected_position = None
+            for pos in st.session_state.trader.positions:
+                if pos['round'] == selected_round:
+                    selected_position = pos
+                    break
+            
+            if selected_position:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.info(f"**현재 정보**")
+                    st.write(f"회차: {selected_position['round']}회차")
+                    st.write(f"주식수: {selected_position['shares']}주")
+                    st.write(f"매수가: ${selected_position['buy_price']:.2f}")
+                    st.write(f"투자금액: ${selected_position['amount']:,.0f}")
+                
+                with col2:
+                    st.info(f"**수정 정보**")
+                    new_shares = st.number_input(
+                        "주식수",
+                        min_value=1,
+                        value=int(selected_position['shares']),
+                        step=1,
+                        key=f"edit_shares_{selected_round}"
+                    )
+                    new_buy_price = st.number_input(
+                        "매수가 ($)",
+                        min_value=0.01,
+                        value=float(selected_position['buy_price']),
+                        step=0.01,
+                        format="%.2f",
+                        key=f"edit_price_{selected_round}"
+                    )
+                    new_amount = new_shares * new_buy_price
+                    st.write(f"**새 투자금액: ${new_amount:,.0f}**")
+                    
+                    # 차액 계산
+                    amount_diff = selected_position['amount'] - new_amount
+                    if amount_diff > 0:
+                        st.success(f"예수금 증가: ${amount_diff:,.0f}")
+                    elif amount_diff < 0:
+                        st.warning(f"예수금 감소: ${abs(amount_diff):,.0f}")
+                    else:
+                        st.info("변동 없음")
+                
+                # 수정 버튼
+                if st.button("✅ 포지션 수정", key=f"apply_edit_{selected_round}", use_container_width=True):
+                    success = st.session_state.trader.update_position(
+                        selected_round,
+                        new_shares,
+                        new_buy_price
+                    )
+                    if success:
+                        st.success(f"✅ {selected_round}회차 포지션이 수정되었습니다!")
+                        st.session_state.trader.clear_cache()  # 캐시 초기화
+                        st.rerun()
+                    else:
+                        st.error("❌ 포지션 수정 실패: 예수금이 부족합니다.")
 
 def show_portfolio():
     """포트폴리오 페이지"""
