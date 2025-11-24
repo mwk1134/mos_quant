@@ -196,6 +196,8 @@ if 'test_today_override' not in st.session_state:
     st.session_state.test_today_override = datetime.now().strftime('%Y-%m-%d')  # 초기값: 오늘 날짜
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
+if 'position_edits' not in st.session_state:
+    st.session_state.position_edits = {}  # {position_index: {'shares': int, 'buy_price': float}}
 
 # 배포 테스트 - 버전 1.5 - FORCE REDEPLOY
 import time
@@ -671,6 +673,29 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
+        # 시뮬레이션 후 수정된 포지션 복원
+        if 'position_edits' in st.session_state and st.session_state.position_edits:
+            # 수정된 포지션 정보를 회차와 매수일로 매칭하여 복원
+            for pos_idx, pos in enumerate(st.session_state.trader.positions):
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                
+                # 모든 수정 정보를 확인하여 매칭 (회차와 매수일로 매칭)
+                for position_key, edit_info in st.session_state.position_edits.items():
+                    key_parts = position_key.split('_')
+                    if len(key_parts) >= 2:
+                        key_round = int(key_parts[0])
+                        key_date = key_parts[1]
+                        
+                        # 회차와 매수일이 일치하면 수정 적용
+                        if pos['round'] == key_round and buy_date_str == key_date:
+                            # 포지션 수정 (인덱스 사용)
+                            st.session_state.trader.update_position(
+                                pos_idx,
+                                edit_info['shares'],
+                                edit_info['buy_price']
+                            )
+                            break
+        
         # 일일 추천 생성
         recommendation = st.session_state.trader.get_daily_recommendation()
     
@@ -909,6 +934,18 @@ def show_daily_recommendation():
                         new_buy_price
                     )
                     if success:
+                        # 수정된 포지션 정보를 session_state에 저장 (시뮬레이션 후 복원용)
+                        if 'position_edits' not in st.session_state:
+                            st.session_state.position_edits = {}
+                        
+                        # 현재 포지션의 고유 식별자 생성 (회차 + 매수일)
+                        buy_date_str = selected_position['buy_date'].strftime('%Y-%m-%d') if isinstance(selected_position['buy_date'], (datetime, pd.Timestamp)) else str(selected_position['buy_date'])
+                        position_key = f"{selected_position['round']}_{buy_date_str}_{selected_position['buy_price']}"
+                        st.session_state.position_edits[position_key] = {
+                            'shares': new_shares,
+                            'buy_price': new_buy_price
+                        }
+                        
                         st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
                         st.session_state.trader.clear_cache()  # 캐시 초기화
                         st.rerun()
