@@ -439,6 +439,9 @@ class SOXLQuantTrader:
         
         # 테스트용 오늘 날짜 오버라이드 (YYYY-MM-DD)
         self.test_today_override: Optional[str] = None
+        
+        # 주차 추적 (모드 전환 제어용)
+        self.current_week_friday: Optional[datetime] = None  # 현재 주차의 금요일
 
     def set_test_today(self, date_str: Optional[str]):
         """테스트용 오늘 날짜 설정/해제. None 또는 빈문자면 해제."""
@@ -841,12 +844,29 @@ class SOXLQuantTrader:
     def update_mode(self, qqq_data: pd.DataFrame) -> str:
         """
         QQQ 주간 RSI 기반으로 모드 업데이트
+        같은 주 내에서는 모드를 변경하지 않음 (주간 RSI는 금요일 기준으로 고정)
         Args:
             qqq_data: QQQ 주가 데이터
         Returns:
             str: 업데이트된 모드
         """
         try:
+            # 현재 날짜 기준으로 이번 주 금요일 계산
+            today = self.get_today_date()
+            days_until_friday = (4 - today.weekday()) % 7  # 금요일(4)까지의 일수
+            if days_until_friday == 0 and today.weekday() != 4:  # 금요일이 아닌데 계산이 0이면 다음 주 금요일
+                days_until_friday = 7
+            this_week_friday = today + timedelta(days=days_until_friday)
+            
+            # 같은 주 내에서는 모드 변경하지 않음
+            if self.current_week_friday is not None and self.current_week_friday == this_week_friday:
+                if self.current_mode:
+                    return self.current_mode
+                # 모드가 없으면 초기화만 진행
+            
+            # 새로운 주차이거나 초기화인 경우 모드 업데이트
+            self.current_week_friday = this_week_friday
+            
             # 주간 RSI 계산
             current_rsi = self.calculate_weekly_rsi(qqq_data)
             if current_rsi is None:
@@ -860,7 +880,7 @@ class SOXLQuantTrader:
                     self.current_mode = "SF"  # 안전모드
                 else:
                     self.current_mode = "AG"  # 공세모드
-                print(f"🎯 초기 모드 결정: {self.current_mode} (RSI: {current_rsi:.2f})")
+                print(f"🎯 초기 모드 결정: {self.current_mode} (RSI: {current_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
                 return self.current_mode
             
             # 전주 RSI 계산 (주간 데이터에서)
@@ -889,11 +909,11 @@ class SOXLQuantTrader:
             new_mode = self.determine_mode(current_rsi, prev_rsi, self.current_mode)
             
             if new_mode != self.current_mode:
-                print(f"🔄 모드 전환: {self.current_mode} → {new_mode}")
+                print(f"🔄 모드 전환: {self.current_mode} → {new_mode} (주차: {this_week_friday.strftime('%Y-%m-%d')})")
                 print(f"   현재 RSI: {current_rsi:.2f}, 전주 RSI: {prev_rsi:.2f}")
                 self.current_mode = new_mode
             else:
-                print(f"📊 현재 모드 유지: {self.current_mode} (RSI: {current_rsi:.2f})")
+                print(f"📊 현재 모드 유지: {self.current_mode} (RSI: {current_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
             
             return self.current_mode
             
@@ -1331,6 +1351,24 @@ class SOXLQuantTrader:
         if weekly_rsi is None:
             return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
         
+        # 저번주 RSI 계산 (표시용)
+        weekly_df = qqq_data.resample('W-FRI').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
+        
+        prev_week_rsi = None
+        if len(weekly_df) >= 2:
+            # 제공된 함수 방식으로 RSI 계산
+            delta = weekly_df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            prev_week_rsi = rsi.iloc[-2] if len(rsi) >= 2 else None
 
         # 5. 최신 SOXL 가격 정보 (최소 2일 데이터 필요)
         if len(soxl_data) < 2:
@@ -1377,7 +1415,8 @@ class SOXLQuantTrader:
             "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
             "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜
             "mode": self.current_mode,
-            "qqq_weekly_rsi": weekly_rsi,
+            "qqq_weekly_rsi": weekly_rsi,  # 이번주 RSI
+            "qqq_prev_week_rsi": prev_week_rsi,  # 저번주 RSI
             "soxl_current_price": current_price,
             "buy_price": buy_price,
             "sell_price": sell_price,
@@ -1407,7 +1446,18 @@ class SOXLQuantTrader:
 
         mode_name = "안전모드" if rec['mode'] == "SF" else "공세모드"
         print(f"🎯 모드: {rec['mode']} ({mode_name})")
-        print(f"📊 QQQ 주간 RSI: {rec['qqq_weekly_rsi']:.2f}")
+        
+        # RSI 정보 출력
+        current_rsi = rec.get('qqq_weekly_rsi')
+        prev_rsi = rec.get('qqq_prev_week_rsi')
+        if current_rsi is not None:
+            if prev_rsi is not None:
+                print(f"📊 QQQ 주간 RSI: 이번주 {current_rsi:.2f} | 저번주 {prev_rsi:.2f}")
+            else:
+                print(f"📊 QQQ 주간 RSI: 이번주 {current_rsi:.2f} | 저번주 (데이터 없음)")
+        else:
+            print(f"📊 QQQ 주간 RSI: (계산 불가)")
+        
         print(f"💰 SOXL 현재가: ${rec['soxl_current_price']:.2f}")
         print()
         
@@ -1488,6 +1538,9 @@ class SOXLQuantTrader:
         # 투자원금 관리 초기화
         self.current_investment_capital = self.initial_capital
         self.trading_days_count = 0
+        
+        # 주차 추적 초기화
+        self.current_week_friday = None
     
     def clear_cache(self):
         """캐시 초기화 (설정 변경 시 호출)"""
