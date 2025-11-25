@@ -126,6 +126,23 @@ st.markdown("""
             font-size: 0.9rem;
         }
         
+        /* Metric 글씨 크기 조정 (날짜, RSI, 현재가) */
+        [data-testid="stMetric"] {
+            font-size: 0.85rem !important;
+        }
+        
+        [data-testid="stMetric"] > div {
+            font-size: 0.85rem !important;
+        }
+        
+        [data-testid="stMetric"] > div > div > div {
+            font-size: 0.9rem !important;
+        }
+        
+        [data-testid="stMetric"] > div > div > div > div {
+            font-size: 1.1rem !important;
+        }
+        
         /* 버튼 크기 조정 */
         .stButton > button {
             width: 100%;
