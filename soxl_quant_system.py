@@ -867,23 +867,7 @@ class SOXLQuantTrader:
             # 새로운 주차이거나 초기화인 경우 모드 업데이트
             self.current_week_friday = this_week_friday
             
-            # 주간 RSI 계산
-            current_rsi = self.calculate_weekly_rsi(qqq_data)
-            if current_rsi is None:
-                print("⚠️ RSI 계산 실패, 현재 모드 유지")
-                return self.current_mode
-            
-            # 초기 모드가 없는 경우 RSI 기준으로 결정
-            if self.current_mode is None:
-                # RSI 50을 기준으로 초기 모드 결정
-                if current_rsi >= 50:
-                    self.current_mode = "SF"  # 안전모드
-                else:
-                    self.current_mode = "AG"  # 공세모드
-                print(f"🎯 초기 모드 결정: {self.current_mode} (RSI: {current_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
-                return self.current_mode
-            
-            # 전주 RSI 계산 (주간 데이터에서)
+            # 주간 데이터로 변환
             weekly_df = qqq_data.resample('W-FRI').agg({
                 'Open': 'first',
                 'High': 'max',
@@ -896,24 +880,40 @@ class SOXLQuantTrader:
                 print("⚠️ 주간 데이터 부족, 현재 모드 유지")
                 return self.current_mode
             
-            # 제공된 함수 방식으로 전주 RSI 계산
+            # 제공된 함수 방식으로 RSI 계산
             delta = weekly_df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             
-            prev_rsi = rsi.iloc[-2] if len(rsi) >= 2 else 50.0
+            # 모드 판단에 사용되는 RSI: 1주전과 2주전
+            one_week_ago_rsi = rsi.iloc[-2] if len(rsi) >= 2 else None  # 1주전 RSI
+            two_weeks_ago_rsi = rsi.iloc[-3] if len(rsi) >= 3 else None  # 2주전 RSI
             
-            # 모드 결정
-            new_mode = self.determine_mode(current_rsi, prev_rsi, self.current_mode)
+            if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
+                print("⚠️ RSI 계산 실패, 현재 모드 유지")
+                return self.current_mode
+            
+            # 초기 모드가 없는 경우 RSI 기준으로 결정
+            if self.current_mode is None:
+                # RSI 50을 기준으로 초기 모드 결정 (1주전 RSI 사용)
+                if one_week_ago_rsi >= 50:
+                    self.current_mode = "SF"  # 안전모드
+                else:
+                    self.current_mode = "AG"  # 공세모드
+                print(f"🎯 초기 모드 결정: {self.current_mode} (1주전 RSI: {one_week_ago_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
+                return self.current_mode
+            
+            # 모드 결정 (2주전 vs 1주전 비교)
+            new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, self.current_mode)
             
             if new_mode != self.current_mode:
                 print(f"🔄 모드 전환: {self.current_mode} → {new_mode} (주차: {this_week_friday.strftime('%Y-%m-%d')})")
-                print(f"   현재 RSI: {current_rsi:.2f}, 전주 RSI: {prev_rsi:.2f}")
+                print(f"   1주전 RSI: {one_week_ago_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}")
                 self.current_mode = new_mode
             else:
-                print(f"📊 현재 모드 유지: {self.current_mode} (RSI: {current_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
+                print(f"📊 현재 모드 유지: {self.current_mode} (1주전 RSI: {one_week_ago_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
             
             return self.current_mode
             
