@@ -787,7 +787,15 @@ def show_daily_recommendation():
         st.markdown(f"<div class='{mode_class}'>🎯 모드: {recommendation['mode']} ({mode_name})</div>", unsafe_allow_html=True)
     
     with col2:
-        st.metric("📊 QQQ 주간 RSI", f"{recommendation['qqq_weekly_rsi']:.2f}")
+        one_week_rsi = recommendation.get('qqq_one_week_ago_rsi')
+        two_weeks_rsi = recommendation.get('qqq_two_weeks_ago_rsi')
+        if one_week_rsi is not None:
+            if two_weeks_rsi is not None:
+                st.metric("📊 QQQ 주간 RSI", f"1주전: {one_week_rsi:.2f} | 2주전: {two_weeks_rsi:.2f}")
+            else:
+                st.metric("📊 QQQ 주간 RSI", f"1주전: {one_week_rsi:.2f}")
+        else:
+            st.metric("📊 QQQ 주간 RSI", "계산 불가")
         st.metric("💰 SOXL 현재가", f"${recommendation['soxl_current_price']:.2f}")
     
     # 매매 추천
