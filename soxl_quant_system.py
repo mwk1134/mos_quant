@@ -1346,12 +1346,7 @@ class SOXLQuantTrader:
         # 4. QQQ 주간 RSI 기반 모드 자동 전환
         self.update_mode(qqq_data)
         
-        # QQQ 주간 RSI 계산 (표시용)
-        weekly_rsi = self.calculate_weekly_rsi(qqq_data)
-        if weekly_rsi is None:
-            return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
-        
-        # 저번주 RSI 계산 (표시용)
+        # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전)
         weekly_df = qqq_data.resample('W-FRI').agg({
             'Open': 'first',
             'High': 'max',
@@ -1360,15 +1355,26 @@ class SOXLQuantTrader:
             'Volume': 'sum'
         }).dropna()
         
-        prev_week_rsi = None
-        if len(weekly_df) >= 2:
+        one_week_ago_rsi = None  # 1주전 RSI (모드 판단에 사용)
+        two_weeks_ago_rsi = None  # 2주전 RSI (모드 판단에 사용)
+        
+        if len(weekly_df) >= 15:
             # 제공된 함수 방식으로 RSI 계산
             delta = weekly_df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
-            prev_week_rsi = rsi.iloc[-2] if len(rsi) >= 2 else None
+            
+            # 1주전 RSI (모드 판단에 사용)
+            if len(rsi) >= 2:
+                one_week_ago_rsi = rsi.iloc[-2]
+            # 2주전 RSI (모드 판단에 사용)
+            if len(rsi) >= 3:
+                two_weeks_ago_rsi = rsi.iloc[-3]
+        
+        if one_week_ago_rsi is None:
+            return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
 
         # 5. 최신 SOXL 가격 정보 (최소 2일 데이터 필요)
         if len(soxl_data) < 2:
@@ -1415,8 +1421,8 @@ class SOXLQuantTrader:
             "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
             "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜
             "mode": self.current_mode,
-            "qqq_weekly_rsi": weekly_rsi,  # 이번주 RSI
-            "qqq_prev_week_rsi": prev_week_rsi,  # 저번주 RSI
+            "qqq_one_week_ago_rsi": one_week_ago_rsi,  # 1주전 RSI (모드 판단에 사용)
+            "qqq_two_weeks_ago_rsi": two_weeks_ago_rsi,  # 2주전 RSI (모드 판단에 사용)
             "soxl_current_price": current_price,
             "buy_price": buy_price,
             "sell_price": sell_price,
@@ -1447,14 +1453,14 @@ class SOXLQuantTrader:
         mode_name = "안전모드" if rec['mode'] == "SF" else "공세모드"
         print(f"🎯 모드: {rec['mode']} ({mode_name})")
         
-        # RSI 정보 출력
-        current_rsi = rec.get('qqq_weekly_rsi')
-        prev_rsi = rec.get('qqq_prev_week_rsi')
-        if current_rsi is not None:
-            if prev_rsi is not None:
-                print(f"📊 QQQ 주간 RSI: 이번주 {current_rsi:.2f} | 저번주 {prev_rsi:.2f}")
+        # RSI 정보 출력 (모드 판단에 사용되는 1주전과 2주전 RSI)
+        one_week_ago_rsi = rec.get('qqq_one_week_ago_rsi')
+        two_weeks_ago_rsi = rec.get('qqq_two_weeks_ago_rsi')
+        if one_week_ago_rsi is not None:
+            if two_weeks_ago_rsi is not None:
+                print(f"📊 QQQ 주간 RSI: 1주전 {one_week_ago_rsi:.2f} | 2주전 {two_weeks_ago_rsi:.2f}")
             else:
-                print(f"📊 QQQ 주간 RSI: 이번주 {current_rsi:.2f} | 저번주 (데이터 없음)")
+                print(f"📊 QQQ 주간 RSI: 1주전 {one_week_ago_rsi:.2f} | 2주전 (데이터 없음)")
         else:
             print(f"📊 QQQ 주간 RSI: (계산 불가)")
         
