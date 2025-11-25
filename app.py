@@ -855,17 +855,37 @@ def show_daily_recommendation():
                 buy_date = pos.get('buy_date')
                 if isinstance(buy_date, pd.Timestamp):
                     buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    buy_date_dt = buy_date.to_pydatetime() if hasattr(buy_date, 'to_pydatetime') else datetime.combine(buy_date.date(), datetime.min.time())
                 elif isinstance(buy_date, datetime):
                     buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    buy_date_dt = buy_date
                 elif hasattr(buy_date, "strftime"):
                     buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    buy_date_dt = buy_date
                 else:
                     buy_date_str = str(buy_date) if buy_date else "-"
+                    buy_date_dt = None
+                
                 buy_price = pos.get('buy_price')
                 buy_price_text = f"${buy_price:.2f}" if isinstance(buy_price, (int, float)) else "-"
-                st.info(f"📦 {pos['round']}회차 매도: {pos['shares']}주 @ ${sell_info['sell_price']:.2f}")
-                st.caption(f"매수체결일: {buy_date_str} • 매수가 {buy_price_text}")
-                st.caption(f"매도 사유: {sell_info['reason']}")
+                mode = pos.get('mode', 'SF')
+                mode_name = "안전모드" if mode == "SF" else "공세모드"
+                
+                # 손절 예정일 계산
+                config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+                stop_loss_date = ""
+                if buy_date_dt:
+                    stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
+                
+                # 레이아웃: 좌측 주요 정보, 우측 매수 정보
+                col1, col2 = st.columns([3, 2])
+                with col1:
+                    st.info(f"📦 {pos['round']}회차 매도: {pos['shares']}주 @ ${sell_info['sell_price']:.2f}")
+                    st.caption(f"모드: {mode} ({mode_name}) • 손절예정일: {stop_loss_date if stop_loss_date else '-'}")
+                    st.caption(f"매도 사유: {sell_info['reason']}")
+                with col2:
+                    st.caption(f"매수체결일: {buy_date_str}")
+                    st.caption(f"매수가: {buy_price_text}")
         else:
             # 보유 포지션이 있으면 매도 목표가 안내
             if st.session_state.trader.positions:
@@ -879,16 +899,33 @@ def show_daily_recommendation():
                     buy_date = pos.get('buy_date')
                     if isinstance(buy_date, pd.Timestamp):
                         buy_date_str = buy_date.strftime('%Y-%m-%d')
+                        buy_date_dt = buy_date.to_pydatetime() if hasattr(buy_date, 'to_pydatetime') else datetime.combine(buy_date.date(), datetime.min.time())
                     elif isinstance(buy_date, datetime):
                         buy_date_str = buy_date.strftime('%Y-%m-%d')
+                        buy_date_dt = buy_date
                     elif hasattr(buy_date, "strftime"):
                         buy_date_str = buy_date.strftime('%Y-%m-%d')
+                        buy_date_dt = buy_date
                     else:
                         buy_date_str = str(buy_date) if buy_date else "-"
+                        buy_date_dt = None
                     
-                    # 매도 목표가까지 남은 상승률을 명확하게 표시 (보유 수량 정보 추가)
-                    st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주")
-                    st.caption(f"매수체결일: {buy_date_str} • 매수가 ${pos['buy_price']:.2f}")
+                    mode = pos.get('mode', 'SF')
+                    mode_name = "안전모드" if mode == "SF" else "공세모드"
+                    
+                    # 손절 예정일 계산
+                    stop_loss_date = ""
+                    if buy_date_dt:
+                        stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
+                    
+                    # 레이아웃: 좌측 주요 정보, 우측 매수 정보
+                    col1, col2 = st.columns([3, 2])
+                    with col1:
+                        st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주")
+                        st.caption(f"모드: {mode} ({mode_name}) • 손절예정일: {stop_loss_date if stop_loss_date else '-'}")
+                    with col2:
+                        st.caption(f"매수체결일: {buy_date_str}")
+                        st.caption(f"매수가: ${pos['buy_price']:.2f}")
             else:
                 st.info("🟡 매도 추천 없음")
     
