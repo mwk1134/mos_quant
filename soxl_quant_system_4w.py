@@ -402,11 +402,11 @@ class SOXLQuantTrader:
             self.sf_config = sf_config.copy()
         else:
             self.sf_config = {
-                "buy_threshold": 3.5,   # 전일 종가 대비 +3.5%에 매수 (매수가)
-                "sell_threshold": 1.4,  # 전일 종가 대비 +1.4%에 매도 (매도가)
+                "buy_threshold": 3.7,   # 전일 종가 대비 +3.7%에 매수 (매수가)
+                "sell_threshold": 1.7,  # 전일 종가 대비 +1.7%에 매도 (매도가)
                 "max_hold_days": 35,    # 최대 보유기간 35일
-                "split_count": 7,       # 7회 분할매수
-                "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
+                "split_count": 8,       # 8회 분할매수
+                "split_ratios": [0.046, 0.143, 0.230, 0.046, 0.115, 0.143, 0.230, 0.046]
             }
         
         # AG모드 설정 (사용자 지정 또는 기본값)
@@ -414,11 +414,11 @@ class SOXLQuantTrader:
             self.ag_config = ag_config.copy()
         else:
             self.ag_config = {
-                "buy_threshold": 3.6,   # 전일 종가 대비 +3.6%에 매수 (매수가)
-                "sell_threshold": 3.5,  # 전일 종가 대비 +3.5%에 매도 (매도가)
-                "max_hold_days": 7,     # 최대 보유기간 7일
+                "buy_threshold": 2.5,   # 전일 종가 대비 +2.5%에 매수 (매수가)
+                "sell_threshold": 3.2,  # 전일 종가 대비 +3.2%에 매도 (매도가)
+                "max_hold_days": 8,     # 최대 보유기간 8일
                 "split_count": 8,       # 8회 분할매수
-                "split_ratios": [0.062, 0.134, 0.118, 0.148, 0.150, 0.182, 0.186, 0.020]
+                "split_ratios": [0.049, 0.216, 0.043, 0.043, 0.216, 0.216, 0.120, 0.096]
             }
         
         # 포지션 관리 (회차별)
