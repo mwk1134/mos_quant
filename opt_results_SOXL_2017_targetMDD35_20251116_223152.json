@@ -1,0 +1,427 @@
+{
+  "tested": 61,
+  "target_mdd": 35.0,
+  "best_mdd_hit": null,
+  "best_overall": {
+    "total_return": 12012.71234413445,
+    "final_value": 4845084.93765378,
+    "mdd_percent": 42.313265146371194,
+    "mdd_date": "2018-10-29",
+    "trading_days": 2231,
+    "sf_config": {
+      "buy_threshold": 3.2,
+      "sell_threshold": 1.8,
+      "max_hold_days": 28,
+      "split_count": 7,
+      "split_ratios": [
+        0.049,
+        0.127,
+        0.23,
+        0.257,
+        0.028,
+        0.169,
+        0.14
+      ]
+    },
+    "ag_config": {
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
+      "split_count": 8,
+      "split_ratios": [
+        0.02,
+        0.05,
+        0.1,
+        0.15,
+        0.18,
+        0.3,
+        0.18,
+        0.02
+      ]
+    }
+  },
+  "top5_by_return": [
+    {
+      "total_return": 12012.71234413445,
+      "final_value": 4845084.93765378,
+      "mdd_percent": 42.313265146371194,
+      "mdd_date": "2018-10-29",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 7,
+        "split_count": 8,
+        "split_ratios": [
+          0.02,
+          0.05,
+          0.1,
+          0.15,
+          0.18,
+          0.3,
+          0.18,
+          0.02
+        ]
+      }
+    },
+    {
+      "total_return": 11279.473914896249,
+      "final_value": 4551789.5659585,
+      "mdd_percent": 42.79595945670774,
+      "mdd_date": "2022-07-01",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 6,
+        "split_count": 8,
+        "split_ratios": [
+          0.062,
+          0.134,
+          0.118,
+          0.148,
+          0.15,
+          0.182,
+          0.186,
+          0.02
+        ]
+      }
+    },
+    {
+      "total_return": 11048.459051767588,
+      "final_value": 4459383.620707035,
+      "mdd_percent": 41.40943251877843,
+      "mdd_date": "2018-10-29",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 6,
+        "split_count": 8,
+        "split_ratios": [
+          0.02,
+          0.05,
+          0.1,
+          0.15,
+          0.18,
+          0.3,
+          0.18,
+          0.02
+        ]
+      }
+    },
+    {
+      "total_return": 10966.580983503462,
+      "final_value": 4426632.393401384,
+      "mdd_percent": 42.45227068402404,
+      "mdd_date": "2018-10-29",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 7,
+        "split_count": 8,
+        "split_ratios": [
+          0.062,
+          0.134,
+          0.118,
+          0.148,
+          0.15,
+          0.182,
+          0.186,
+          0.02
+        ]
+      }
+    },
+    {
+      "total_return": 10959.113376913667,
+      "final_value": 4423645.350765467,
+      "mdd_percent": 42.158957633952454,
+      "mdd_date": "2018-10-29",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 7,
+        "split_count": 8,
+        "split_ratios": [
+          0.04,
+          0.08,
+          0.12,
+          0.15,
+          0.15,
+          0.2,
+          0.2,
+          0.06
+        ]
+      }
+    }
+  ],
+  "top5_by_lowest_mdd": [
+    {
+      "total_return": 9048.51565621972,
+      "final_value": 3659406.2624878883,
+      "mdd_percent": 41.31731980017311,
+      "mdd_date": "2020-03-18",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.0,
+        "max_hold_days": 6,
+        "split_count": 8,
+        "split_ratios": [
+          0.05,
+          0.1,
+          0.12,
+          0.15,
+          0.15,
+          0.18,
+          0.2,
+          0.05
+        ]
+      }
+    },
+    {
+      "total_return": 9301.907733353375,
+      "final_value": 3760763.0933413506,
+      "mdd_percent": 41.31987894628593,
+      "mdd_date": "2020-03-18",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.2,
+        "max_hold_days": 6,
+        "split_count": 8,
+        "split_ratios": [
+          0.05,
+          0.1,
+          0.12,
+          0.15,
+          0.15,
+          0.18,
+          0.2,
+          0.05
+        ]
+      }
+    },
+    {
+      "total_return": 9154.989301923513,
+      "final_value": 3701995.7207694054,
+      "mdd_percent": 41.32024899040922,
+      "mdd_date": "2020-03-18",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.0,
+        "max_hold_days": 6,
+        "split_count": 8,
+        "split_ratios": [
+          0.04,
+          0.08,
+          0.12,
+          0.15,
+          0.15,
+          0.2,
+          0.2,
+          0.06
+        ]
+      }
+    },
+    {
+      "total_return": 10076.477866370082,
+      "final_value": 4070591.1465480328,
+      "mdd_percent": 41.3212876884781,
+      "mdd_date": "2020-03-18",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.8,
+        "sell_threshold": 3.2,
+        "max_hold_days": 6,
+        "split_count": 8,
+        "split_ratios": [
+          0.04,
+          0.08,
+          0.12,
+          0.15,
+          0.15,
+          0.2,
+          0.2,
+          0.06
+        ]
+      }
+    },
+    {
+      "total_return": 10721.693064905405,
+      "final_value": 4328677.225962162,
+      "mdd_percent": 41.32234527627236,
+      "mdd_date": "2020-03-18",
+      "trading_days": 2231,
+      "sf_config": {
+        "buy_threshold": 3.2,
+        "sell_threshold": 1.8,
+        "max_hold_days": 28,
+        "split_count": 7,
+        "split_ratios": [
+          0.049,
+          0.127,
+          0.23,
+          0.257,
+          0.028,
+          0.169,
+          0.14
+        ]
+      },
+      "ag_config": {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 6,
+        "split_count": 8,
+        "split_ratios": [
+          0.04,
+          0.08,
+          0.12,
+          0.15,
+          0.15,
+          0.2,
+          0.2,
+          0.06
+        ]
+      }
+    }
+  ]
+}
