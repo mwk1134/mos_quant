@@ -1452,7 +1452,7 @@ def show_advanced_settings():
     default_sf_config = {
         "buy_threshold": 3.5,
         "sell_threshold": 1.4,
-        "max_hold_days": 30,
+        "max_hold_days": 35,
         "split_count": 7,
         "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
     }
