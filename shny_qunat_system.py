@@ -4,6 +4,14 @@ from datetime import datetime, timedelta
 from input_quant_system import SOXLQuantTrader
 
 
+class SHNYQuantTrader(SOXLQuantTrader):
+    """SHNY 전용 트레이더 (티커 기본값 SHNY)"""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("ticker", "SHNY")
+        super().__init__(*args, **kwargs)
+
+
 def main():
     """SHNY 전용 실행 함수"""
     ticker = "SHNY"
@@ -32,7 +40,7 @@ def main():
             continue
 
     # 트레이더 초기화 (티커 고정)
-    trader = SOXLQuantTrader(initial_capital, ticker=ticker)
+    trader = SHNYQuantTrader(initial_capital, ticker=ticker)
 
     # 시작일 입력(엔터 시 1년 전)
     start_date_input = input("📅 투자 시작일을 입력하세요 (YYYY-MM-DD, 엔터시 1년 전): ").strip()
