@@ -39,7 +39,7 @@ Thumbs.db
 .streamlit/
 
 # Data files (if sensitive)
-data/weekly_rsi_reference.json
+
 *.xlsx
 
 # Logs

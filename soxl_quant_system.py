@@ -1842,12 +1842,16 @@ class SOXLQuantTrader:
                 days_until_friday = 7
             this_week_friday = current_date + timedelta(days=days_until_friday)
             
-            # 새로운 주차인지 확인 (금요일이 바뀌었는지)
-            if current_week_friday != this_week_friday:
+            # 새로운 주차인지 확인 (금요일이 바뀌었는지 또는 첫 번째 날짜인 경우)
+            if current_week_friday is None or current_week_friday != this_week_friday:
                 current_week_friday = this_week_friday
                 
                 # 새로운 주차의 RSI 값 가져오기 (해당 주차의 금요일 기준)
                 current_week_rsi = self.get_rsi_from_reference(this_week_friday, rsi_ref_data)
+                
+                # 현재 주차 RSI가 없는 경우 백테스팅 중단
+                if current_week_rsi is None:
+                    return {"error": f"RSI 데이터가 없습니다. 주차: {this_week_friday.strftime('%Y-%m-%d')}"}
                 
                 # 모드 업데이트 (2주전 RSI와 1주전 RSI 비교)
                 # 2주전과 1주전 RSI 계산
@@ -2005,7 +2009,7 @@ class SOXLQuantTrader:
                 daily_record = {
                     "date": current_date.strftime("%Y-%m-%d"),  # 표준 ISO 형식으로 변경
                     "week": current_week,
-                    "rsi": current_week_rsi or 50.0,
+                    "rsi": current_week_rsi if current_week_rsi is not None else 50.0,  # None일 때만 기본값 사용
                     "mode": current_mode,
                     "current_round": min(current_round_before_buy, 7 if current_mode == "SF" else 8),  # 매수 전 회차 사용 (최대값 제한)
                     "seed_amount": self.calculate_position_size(current_round_before_buy) if buy_executed else 0,
@@ -2542,6 +2546,27 @@ def main():
     if not start_date_input:
         start_date_input = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
     trader.session_start_date = start_date_input
+    
+    # 시드증액 추가 (선택사항)
+    print("\n💰 시드증액 설정 (선택사항)")
+    print("- 시드증액을 추가하지 않으려면 엔터를 누르세요")
+    while True:
+        seed_date_input = input("시드증액 날짜 (YYYY-MM-DD, 엔터시 종료): ").strip()
+        if not seed_date_input:
+            break
+        
+        try:
+            seed_amount_input = input("시드증액 금액 (달러, 양수: 증액, 음수: 인출): ").strip()
+            if not seed_amount_input:
+                break
+            
+            seed_amount = float(seed_amount_input)
+            trader.add_seed_increase(seed_date_input, seed_amount, f"시드증액 {seed_date_input}")
+            print(f"✅ 시드증액 추가됨: {seed_date_input} - ${seed_amount:,.0f}")
+        except ValueError:
+            print("❌ 올바른 숫자를 입력해주세요.")
+        except Exception as e:
+            print(f"❌ 오류: {e}")
     
     while True:
         print("\n" + "=" * 50)
