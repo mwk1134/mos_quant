@@ -5,11 +5,9 @@ from input_quant_system import SOXLQuantTrader
 
 
 class SHNYQuantTrader(SOXLQuantTrader):
-    """SHNY 전용 트레이더 (티커 기본값 SHNY)"""
-
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault("ticker", "SHNY")
-        super().__init__(*args, **kwargs)
+    """SHNY 전용 트레이더 (기본 동작은 input_quant_system.py 그대로 사용)"""
+    # 별도 ticker 인자를 넘길 필요가 없도록 기본 구현을 그대로 사용
+    pass
 
 
 def main():
@@ -39,8 +37,8 @@ def main():
             print("❌ 올바른 숫자를 입력해주세요.")
             continue
 
-    # 트레이더 초기화 (티커 고정)
-    trader = SHNYQuantTrader(initial_capital, ticker=ticker)
+    # 트레이더 초기화 (기본 SHNY 로직 사용)
+    trader = SHNYQuantTrader(initial_capital)
 
     # 시작일 입력(엔터 시 1년 전)
     start_date_input = input("📅 투자 시작일을 입력하세요 (YYYY-MM-DD, 엔터시 1년 전): ").strip()

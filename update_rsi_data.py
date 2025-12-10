@@ -13,10 +13,37 @@ from datetime import datetime, timedelta
 import os
 import sys
 
+class CompactJSONEncoder(json.JSONEncoder):
+    """각 주차 객체를 한 줄로 저장하는 커스텀 JSON 인코더"""
+    def encode(self, obj):
+        if isinstance(obj, dict):
+            # metadata는 일반 포맷으로
+            if 'metadata' in obj:
+                result = []
+                for key, value in obj.items():
+                    if key == 'metadata':
+                        continue
+                    result.append(f'  "{key}": {self._encode_year(value)}')
+                result.append(f'  "metadata": {json.dumps(value, ensure_ascii=False, indent=2)}')
+                return '{\n' + ',\n'.join(result) + '\n}'
+            else:
+                return json.dumps(obj, ensure_ascii=False, indent=2)
+        return super().encode(obj)
+    
+    def _encode_year(self, year_data):
+        """연도 데이터 인코딩"""
+        desc = json.dumps(year_data['description'], ensure_ascii=False)
+        weeks = []
+        for week in year_data['weeks']:
+            week_str = json.dumps(week, ensure_ascii=False, separators=(',', ':'))
+            weeks.append(f'      {week_str}')
+        weeks_str = '[\n' + ',\n'.join(weeks) + '\n    ]'
+        return f'{{\n    "description": {desc},\n    "weeks": {weeks_str}\n  }}'
+
 class RSIDataUpdater:
     """RSI 데이터 업데이트 클래스"""
     
-    def __init__(self, json_file_path: str = "data/weekly_rsi_reference.json"):
+    def __init__(self, json_file_path: str = "data/weekly_rsi_reference copy.json"):
         """
         초기화
         Args:
@@ -30,7 +57,7 @@ class RSIDataUpdater:
             os.makedirs(self.data_dir, exist_ok=True)
             print(f"📁 {self.data_dir} 폴더 생성 완료")
     
-    def get_stock_data(self, symbol: str, period: str = "2y") -> pd.DataFrame:
+    def get_stock_data(self, symbol: str, period: str = "max") -> pd.DataFrame:
         """
         Yahoo Finance API를 통해 주식 데이터 가져오기
         Args:
@@ -46,7 +73,7 @@ class RSIDataUpdater:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             
-            # 2년 데이터로 충분한 기간 확보
+            # 충분한 기간 확보 (기본 max, 환경변수 RSI_PERIOD로 조정 가능)
             params = {'range': period, 'interval': '1d'}
             
             print(f"📊 {symbol} 데이터 가져오는 중... (기간: {period})")
@@ -168,10 +195,18 @@ class RSIDataUpdater:
             
             # 1. 기존 데이터 로드
             existing_data = self.load_existing_data()
+
+            # 1-1. 2021년 RSI를 다시 계산하기 위해 기존 2021년 주차 데이터 초기화
+            target_year = "2021"
+            if target_year in existing_data:
+                old_count = len(existing_data[target_year].get("weeks", []))
+                print(f"\n🧹 {target_year}년 기존 주차 {old_count}개를 비우고 다시 계산합니다.")
+                existing_data[target_year]["weeks"] = []
             
             # 2. QQQ 데이터 가져오기 (충분한 기간)
             print("\n📊 QQQ 데이터 수집 중...")
-            qqq_data = self.get_stock_data("QQQ", "2y")
+            period = os.environ.get("RSI_PERIOD", "max")
+            qqq_data = self.get_stock_data("QQQ", period)
             if qqq_data is None:
                 print("❌ QQQ 데이터를 가져올 수 없습니다.")
                 return False
@@ -267,10 +302,38 @@ class RSIDataUpdater:
                 "updated_by": "update_rsi_data.py"
             }
             
-            # 8. JSON 파일 저장
+            # 8. JSON 파일 저장 (각 주차 객체를 한 줄로)
             print(f"\n💾 JSON 파일 저장 중...")
             with open(self.json_file_path, 'w', encoding='utf-8') as f:
-                json.dump(existing_data, f, ensure_ascii=False, indent=2)
+                # 연도별로 정렬
+                sorted_years = sorted([k for k in existing_data.keys() if k != 'metadata'])
+                
+                f.write('{\n')
+                year_lines = []
+                for year in sorted_years:
+                    year_data = existing_data[year]
+                    desc = json.dumps(year_data['description'], ensure_ascii=False)
+                    week_lines = []
+                    for week in year_data['weeks']:
+                        week_str = json.dumps(week, ensure_ascii=False, separators=(',', ':'))
+                        week_lines.append(f'      {week_str}')
+                    weeks_str = '[\n' + ',\n'.join(week_lines) + '\n    ]'
+                    year_str = f'  "{year}": {{\n    "description": {desc},\n    "weeks": {weeks_str}\n  }}'
+                    year_lines.append(year_str)
+                
+                # metadata 추가
+                metadata = existing_data['metadata']
+                metadata_items = []
+                for key, value in metadata.items():
+                    if isinstance(value, str):
+                        metadata_items.append(f'    "{key}": {json.dumps(value, ensure_ascii=False)}')
+                    else:
+                        metadata_items.append(f'    "{key}": {value}')
+                metadata_str = '{\n' + ',\n'.join(metadata_items) + '\n  }'
+                year_lines.append(f'  "metadata": {metadata_str}')
+                
+                f.write(',\n'.join(year_lines))
+                f.write('\n}')
             
             print("✅ RSI 데이터 업데이트 완료!")
             print("=" * 60)
@@ -304,7 +367,7 @@ def main():
     print()
     
     # JSON 파일 경로 확인
-    json_file = "data/weekly_rsi_reference.json"
+    json_file = "data/weekly_rsi_reference copy.json"
     
     # 명령행 인수로 파일 경로 지정 가능
     if len(sys.argv) > 1:

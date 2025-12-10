@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple, Optional
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 import os
+
 import sys
 import io
 from contextlib import redirect_stdout
@@ -14,7 +15,7 @@ from pathlib import Path
 
 
 class SOXLQuantTrader:
-    """사용자 지정 티커 퀀트투자 시스템"""
+    """SHNY 퀀트투자 시스템"""
 
     
     def _resolve_data_path(self, filename: str) -> Path:
@@ -23,7 +24,7 @@ class SOXLQuantTrader:
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir / filename
 
-    def load_rsi_reference_data(self, filename: str = "weekly_rsi_reference.json") -> dict:
+    def load_rsi_reference_data(self, filename: str = "weekly_rsi_reference copy.json") -> dict:
         """
         RSI 참조 데이터 로드 (JSON 형식)
         Args:
@@ -135,7 +136,7 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 참조 데이터 조회 오류: {e}")
             return None
     
-    def check_and_update_rsi_data(self, filename: str = "weekly_rsi_reference.json") -> bool:
+    def check_and_update_rsi_data(self, filename: str = "weekly_rsi_reference copy.json") -> bool:
         """
         RSI 참조 데이터가 최신인지 확인하고 필요시 업데이트 (JSON 형식)
         Args:
@@ -208,7 +209,7 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 데이터 확인 오류: {e}")
             return False
     
-    def update_rsi_reference_file(self, filename: str = "weekly_rsi_reference.json") -> bool:
+    def update_rsi_reference_file(self, filename: str = "weekly_rsi_reference copy.json") -> bool:
         """
         RSI 참조 파일을 최신 데이터로 업데이트 (JSON 형식)
         오늘 날짜까지의 주간 RSI를 자동으로 계산하여 업데이트
@@ -325,7 +326,7 @@ class SOXLQuantTrader:
             
             # JSON 파일로 저장
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(existing_data, f, ensure_ascii=False, indent=2)
+                json.dump(existing_data, f, ensure_ascii=False, separators=(',', ':'))
             
             print("[SUCCESS] RSI 참조 데이터 업데이트 완료!")
             print(f"   - {current_year}년 데이터 업데이트")
@@ -338,17 +339,17 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 참조 파일 업데이트 오류: {e}")
             return False
     
-    def __init__(self, initial_capital: float = 40000, ticker: str = "SHNY", sf_config: Optional[Dict] = None, ag_config: Optional[Dict] = None):
+    def __init__(self, initial_capital: float = 40000, sf_config: Optional[Dict] = None, ag_config: Optional[Dict] = None, use_rsi_reference_only: bool = True):
         """
         초기화
         Args:
             initial_capital: 투자원금 (기본값: 40000달러)
-            ticker: 매매 대상 티커 (기본값: SHNY)
             sf_config: SF 모드 설정 (None이면 기본값 사용)
             ag_config: AG 모드 설정 (None이면 기본값 사용)
+            use_rsi_reference_only: True이면 QQQ 실시간 데이터를 받지 않고 주간 RSI 참조 JSON만 사용
         """
         self.initial_capital = initial_capital
-        self.ticker = ticker.upper()
+        self.use_rsi_reference_only = use_rsi_reference_only
         
         # 성능 최적화를 위한 캐시
         self._stock_data_cache = {}  # 주식 데이터 캐시
@@ -601,7 +602,7 @@ class SOXLQuantTrader:
         """
         Yahoo Finance API를 통해 주식 데이터 가져오기 (캐싱 적용)
         Args:
-            symbol: 주식 심볼 (예: "TQQQ", "QQQ")
+            symbol: 주식 심볼 (예: "SHNY", "QQQ")
             period: 기간 (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
         Returns:
             DataFrame: 주식 데이터 (Date, Open, High, Low, Close, Volume)
@@ -852,6 +853,11 @@ class SOXLQuantTrader:
             str: 업데이트된 모드
         """
         try:
+            if self.use_rsi_reference_only:
+                # 참조 데이터만 사용할 때는 별도 함수로 처리
+                rsi_ref_data = self.load_rsi_reference_data()
+                return self.update_mode_from_reference(rsi_ref_data)
+
             # 현재 날짜 기준으로 이번 주 금요일 계산
             today = self.get_today_date()
             days_until_friday = (4 - today.weekday()) % 7  # 금요일(4)까지의 일수
@@ -920,6 +926,49 @@ class SOXLQuantTrader:
             
         except Exception as e:
             print(f"❌ 모드 업데이트 오류: {e}")
+            return self.current_mode
+
+    def update_mode_from_reference(self, rsi_ref_data: dict, today: Optional[datetime] = None) -> str:
+        """QQQ 데이터를 받지 않고 참조 JSON으로만 모드 업데이트"""
+        try:
+            today = today or self.get_today_date()
+            days_until_friday = (4 - today.weekday()) % 7
+            if days_until_friday == 0 and today.weekday() != 4:
+                days_until_friday = 7
+            this_week_friday = today + timedelta(days=days_until_friday)
+
+            if self.current_week_friday is not None and self.current_week_friday == this_week_friday:
+                if self.current_mode:
+                    return self.current_mode
+
+            self.current_week_friday = this_week_friday
+
+            prev_week_friday = this_week_friday - timedelta(days=7)
+            two_weeks_ago_friday = this_week_friday - timedelta(days=14)
+
+            prev_week_rsi = self.get_rsi_from_reference(prev_week_friday, rsi_ref_data)
+            two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
+
+            if prev_week_rsi is None or two_weeks_ago_rsi is None:
+                print("⚠️ 참조 RSI 부족, 모드 유지")
+                return self.current_mode
+
+            if self.current_mode is None:
+                self.current_mode = "SF" if prev_week_rsi >= 50 else "AG"
+                print(f"🎯 초기 모드 결정(참조): {self.current_mode} (1주전 RSI: {prev_week_rsi:.2f})")
+                return self.current_mode
+
+            new_mode = self.determine_mode(prev_week_rsi, two_weeks_ago_rsi, self.current_mode)
+            if new_mode != self.current_mode:
+                print(f"🔄 모드 전환(참조): {self.current_mode} → {new_mode} (1주전 RSI: {prev_week_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f})")
+                self.current_mode = new_mode
+            else:
+                print(f"📊 현재 모드 유지(참조): {self.current_mode} (1주전 RSI: {prev_week_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f})")
+
+            return self.current_mode
+
+        except Exception as e:
+            print(f"❌ 모드 업데이트 오류(참조): {e}")
             return self.current_mode
     
     def get_current_config(self) -> Dict:
@@ -1304,9 +1353,12 @@ class SOXLQuantTrader:
             Dict: 매매 추천 정보
         """
         print("=" * 60)
-        print(f"🚀 {self.ticker} 퀀트투자 일일 매매 추천")
+        print("🚀 SHNY 퀀트투자 일일 매매 추천")
         print("=" * 60)
         
+        # RSI 참조 데이터 로드 (QQQ 실시간 대신 사용)
+        rsi_ref_data = self.load_rsi_reference_data()
+
         # 현재 상태를 최신으로 업데이트 (시작일부터 현재까지 시뮬레이션)
         if self.session_start_date:
             print("🔄 트레이더 상태를 최신으로 업데이트 중...")
@@ -1325,10 +1377,10 @@ class SOXLQuantTrader:
             else:
                 print(f"📅 휴장일입니다. 최신 거래일({latest_trading_day.strftime('%Y-%m-%d')}) 데이터를 사용합니다.")
         
-        # 1. 종목 데이터 가져오기
-        soxl_data = self.get_stock_data(self.ticker, "1mo")
+        # 1. SHNY 데이터 가져오기
+        soxl_data = self.get_stock_data("SHNY", "1mo")
         if soxl_data is None:
-            return {"error": f"{self.ticker} 데이터를 가져올 수 없습니다."}
+            return {"error": "SHNY 데이터를 가져올 수 없습니다."}
         
         # 장중에는 오늘 날짜 데이터 제외 (종가가 확정되지 않았으므로)
         today_date = today.date()
@@ -1336,48 +1388,31 @@ class SOXLQuantTrader:
             if soxl_data.index.max().date() == today_date:
                 soxl_data = soxl_data[soxl_data.index.date < today_date]
         
-        # 2. QQQ 데이터 가져오기 (주간 RSI 계산용)
-        qqq_data = self.get_stock_data("QQQ", "6mo")  # 충분한 데이터 확보
-        if qqq_data is None:
-            return {"error": "QQQ 데이터를 가져올 수 없습니다."}
-
-        # 3. 과거 종가 기반 포지션 보정 (LOC 매도)
+        # 2. 과거 종가 기반 포지션 보정 (LOC 매도)
         self.reconcile_positions_with_close_history(soxl_data)
 
-        # 4. QQQ 주간 RSI 기반 모드 자동 전환
-        self.update_mode(qqq_data)
+        # 3. 주간 RSI 참조 기반 모드 자동 전환
+        self.update_mode_from_reference(rsi_ref_data, today=today)
         
-        # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전)
-        weekly_df = qqq_data.resample('W-FRI').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        }).dropna()
-        
-        one_week_ago_rsi = None  # 1주전 RSI (모드 판단에 사용)
-        two_weeks_ago_rsi = None  # 2주전 RSI (모드 판단에 사용)
-        
-        if len(weekly_df) >= 15:
-            # 제공된 함수 방식으로 RSI 계산
-            delta = weekly_df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            
-            # 1주전 RSI (모드 판단에 사용)
-            if len(rsi) >= 2:
-                one_week_ago_rsi = rsi.iloc[-2]
-            # 2주전 RSI (모드 판단에 사용)
-            if len(rsi) >= 3:
-                two_weeks_ago_rsi = rsi.iloc[-3]
+        # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전, 참조 데이터)
+        one_week_ago_rsi = None
+        two_weeks_ago_rsi = None
+        try:
+            days_until_friday = (4 - today.weekday()) % 7
+            if days_until_friday == 0 and today.weekday() != 4:
+                days_until_friday = 7
+            this_week_friday = today + timedelta(days=days_until_friday)
+            prev_week_friday = this_week_friday - timedelta(days=7)
+            two_weeks_friday = this_week_friday - timedelta(days=14)
+            one_week_ago_rsi = self.get_rsi_from_reference(prev_week_friday, rsi_ref_data)
+            two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_friday, rsi_ref_data)
+        except Exception:
+            pass
         
         if one_week_ago_rsi is None:
-            return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
+            return {"error": "주간 RSI 참조 데이터를 계산할 수 없습니다."}
 
-        # 5. 최신 종목 가격 정보 (최소 2일 데이터 필요)
+        # 5. 최신 SHNY 가격 정보 (최소 2일 데이터 필요)
         if len(soxl_data) < 2:
             return {"error": "데이터가 부족합니다. 최소 2일의 데이터가 필요합니다."}
         
@@ -1465,7 +1500,7 @@ class SOXLQuantTrader:
         else:
             print(f"📊 QQQ 주간 RSI: (계산 불가)")
         
-        print(f"💰 {self.ticker} 현재가: ${rec['soxl_current_price']:.2f}")
+        print(f"💰 SHNY 현재가: ${rec['soxl_current_price']:.2f}")
         print()
         
         print("📋 오늘의 매매 추천:")
@@ -1693,7 +1728,7 @@ class SOXLQuantTrader:
         data_start = start_dt - timedelta(days=180)
         
 
-        # 종목 데이터 가져오기 (상장 시점에 따라 기간 조정)
+        # SHNY 데이터 가져오기 (2011년부터 데이터 확보)
         period_days = (datetime.now() - data_start).days
         if period_days <= 365:
             period = "1y"
@@ -1706,16 +1741,11 @@ class SOXLQuantTrader:
         elif period_days <= 3650:  # 10년
             period = "10y"
         else:
-            period = "15y"  # 15년 (상장 시점에 따라 다를 수 있음)
+            period = "15y"  # 15년 (SHNY는 상장 시점에 따라 다를 수 있음)
             
-        soxl_data = self.get_stock_data(self.ticker, period)
+        soxl_data = self.get_stock_data("SHNY", period)
         if soxl_data is None:
-            return {"error": f"{self.ticker} 데이터를 가져올 수 없습니다."}
-        
-        # QQQ 데이터 가져오기
-        qqq_data = self.get_stock_data("QQQ", period)
-        if qqq_data is None:
-            return {"error": "QQQ 데이터를 가져올 수 없습니다."}
+            return {"error": "SHNY 데이터를 가져올 수 없습니다."}
         
         # 정규장 미마감이고, 마지막 인덱스 날짜가 오늘이면 무조건 제외 (공급사 조기 생성 일봉 방지)
         try:
@@ -1724,8 +1754,6 @@ class SOXLQuantTrader:
             if self.is_trading_day(datetime.now()) and not self.is_regular_session_closed_now():
                 if len(soxl_data) > 0 and soxl_data.index.max().date() == today_date:
                     soxl_data = soxl_data[soxl_data.index.date < today_date]
-                if len(qqq_data) > 0 and qqq_data.index.max().date() == today_date:
-                    qqq_data = qqq_data[qqq_data.index.date < today_date]
         except Exception:
             pass
 
@@ -1745,7 +1773,6 @@ class SOXLQuantTrader:
                     else:
                         # 오늘이고 정규장이 아직 마감되지 않았다면 제외
                         soxl_data = soxl_data[soxl_data.index.date < last_date]
-                        qqq_data = qqq_data[qqq_data.index.date < last_date]
         except Exception:
             pass
         
@@ -2111,14 +2138,6 @@ class SOXLQuantTrader:
         final_value = daily_records[-1]["total_assets"] if daily_records else self.initial_capital
         total_return = ((final_value - self.initial_capital) / self.initial_capital) * 100
         
-        # 연평균 수익률 계산
-        duration_days = max((end_dt.date() - start_dt.date()).days, 1)
-        annualized_return = None
-        try:
-            annualized_return = (final_value / self.initial_capital) ** (365.25 / duration_days) - 1
-        except Exception:
-            annualized_return = None
-
         summary = {
             "start_date": start_date,
             "end_date": end_date or datetime.now().strftime("%Y-%m-%d"),
@@ -2127,7 +2146,6 @@ class SOXLQuantTrader:
             "initial_capital": self.initial_capital,
             "final_value": final_value,
             "total_return": total_return,
-            "annualized_return": annualized_return * 100 if annualized_return is not None else None,
             "final_positions": len(self.positions),
 
             "daily_records": daily_records,
@@ -2145,8 +2163,6 @@ class SOXLQuantTrader:
         print(f"   💰 초기자본: ${self.initial_capital:,.0f}")
         print(f"   💰 최종자산: ${final_value:,.0f}")
         print(f"   📈 총수익률: {total_return:+.2f}%")
-        if annualized_return is not None:
-            print(f"   📆 연평균 수익률(CAGR): {annualized_return*100:+.2f}%")
         print(f"   📦 최종보유포지션: {len(self.positions)}개")
         print(f"\n⚠️ 리스크 지표:")
         print(f"   📉 MDD (최대낙폭): {mdd_info.get('mdd_percent', 0.0):.2f}%")
@@ -2242,7 +2258,7 @@ class SOXLQuantTrader:
         
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{self.ticker}_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx"
+            filename = f"SHNY_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx"
         
         # 엑셀 워크북 생성
         wb = openpyxl.Workbook()
@@ -2263,14 +2279,8 @@ class SOXLQuantTrader:
         mdd_info = self.calculate_mdd(backtest_result['daily_records'])
         
         # 요약 데이터 작성
-        annualized_display = (
-            f"{backtest_result['annualized_return']:+.2f}%"
-            if backtest_result.get('annualized_return') is not None
-            else "N/A"
-        )
-
         summary_data = [
-            [f"{self.ticker} 퀀트투자 백테스팅 결과", ""],
+            ["SHNY 퀀트투자 백테스팅 결과", ""],
             ["", ""],
             ["시작일", backtest_result['start_date']],
             ["종료일", backtest_result['end_date']],
@@ -2279,7 +2289,6 @@ class SOXLQuantTrader:
             ["초기자본", f"${backtest_result['initial_capital']:,.0f}"],
             ["최종자산", f"${backtest_result['final_value']:,.0f}"],
             ["총수익률", f"{backtest_result['total_return']:+.2f}%"],
-            ["연평균 수익률(CAGR)", annualized_display],
 
             ["최종보유포지션", f"{backtest_result['final_positions']}개"],
             ["", ""],
@@ -2528,15 +2537,7 @@ class SOXLQuantTrader:
 
 def main():
     """메인 실행 함수"""
-    # 티커 입력
-    while True:
-        ticker_input = input("🎯 투자 대상 티커를 입력하세요 (예: SOXL, TQQQ): ").strip().upper()
-        if ticker_input and ticker_input.isalnum():
-            ticker = ticker_input
-            break
-        print("❌ 티커를 올바르게 입력해주세요 (영문/숫자 조합).")
-
-    print(f"🚀 {ticker} 퀀트투자 시스템")
+    print("🚀 SHNY 퀀트투자 시스템")
     print("=" * 50)
     
 
@@ -2562,7 +2563,7 @@ def main():
             continue
     
     # 트레이더 초기화
-    trader = SOXLQuantTrader(initial_capital, ticker=ticker)
+    trader = SOXLQuantTrader(initial_capital)
     
     # 시작일 입력(엔터 시 1년 전)
     start_date_input = input("📅 투자 시작일을 입력하세요 (YYYY-MM-DD, 엔터시 1년 전): ").strip()
