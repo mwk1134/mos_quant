@@ -1235,6 +1235,7 @@ def show_backtest():
         start_date = st.date_input(
             "시작 날짜",
             value=st.session_state.backtest_start_date,
+            min_value=datetime(2011, 1, 1),
             max_value=datetime.now(),
             key="backtest_start_date_input"
         )
