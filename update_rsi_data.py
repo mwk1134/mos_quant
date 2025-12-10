@@ -122,7 +122,7 @@ class RSIDataUpdater:
     
     def calculate_weekly_rsi(self, df: pd.DataFrame, window: int = 14) -> pd.Series:
         """
-        주간 RSI 계산 (Wilder's RSI 방식)
+        주간 RSI 계산 (제공된 함수 방식 적용)
         Args:
             df: 일일 주가 데이터
             window: RSI 계산 기간 (기본값: 14)
@@ -139,19 +139,40 @@ class RSIDataUpdater:
                 'Volume': 'sum'
             }).dropna()
             
+            # 디버깅: 주간 데이터 확인
+            print(f"   주간 데이터 변환 결과:")
+            print(f"   - 기간: {weekly_df.index[0].strftime('%Y-%m-%d')} ~ {weekly_df.index[-1].strftime('%Y-%m-%d')}")
+            print(f"   - 주간 데이터 수: {len(weekly_df)}주")
+            print(f"   - 최근 5주 종가: {weekly_df['Close'].tail(5).values}")
+            
             if len(weekly_df) < window + 1:
                 print(f"❌ 주간 RSI 계산을 위한 데이터 부족 (필요: {window+1}주, 현재: {len(weekly_df)}주)")
                 return None
             
-            # Wilder's RSI 계산
+            # 제공된 함수 방식으로 RSI 계산
             delta = weekly_df['Close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             
+            # 디버깅 정보 출력
             print(f"📈 주간 RSI 계산 완료: {len(weekly_df)}주차 데이터")
-            print(f"   최근 5개 RSI: {[f'{x:.2f}' if not np.isnan(x) else 'NaN' for x in rsi.tail(5).values]}")
+            print(f"   데이터 기간: {weekly_df.index[0].strftime('%Y-%m-%d')} ~ {weekly_df.index[-1].strftime('%Y-%m-%d')}")
+            print(f"   주간 데이터 수: {len(weekly_df)}주")
+            print(f"   최근 3개 RSI: {[f'{x:.2f}' if not np.isnan(x) else 'NaN' for x in rsi.tail(3).values]}")
+            
+            # 상세 계산 과정 출력
+            print(f"   최근 3개 계산 과정:")
+            for i in range(-3, 0):
+                if i + len(weekly_df) >= 0:
+                    date_str = weekly_df.index[i].strftime('%Y-%m-%d')
+                    delta_val = delta.iloc[i]
+                    gain_val = gain.iloc[i]
+                    loss_val = loss.iloc[i]
+                    rs_val = rs.iloc[i]
+                    rsi_val = rsi.iloc[i]
+                    print(f"   {date_str}: delta={delta_val:+.4f}, gain={gain_val:.4f}, loss={loss_val:.4f}, RS={rs_val:.4f}, RSI={rsi_val:.2f}")
             
             return rsi
             
@@ -196,20 +217,52 @@ class RSIDataUpdater:
             # 1. 기존 데이터 로드
             existing_data = self.load_existing_data()
 
-            # 1-1. 2021년 RSI를 다시 계산하기 위해 기존 2021년 주차 데이터 초기화
+            # 1-1. 2010년 이전 데이터 제거
+            years_to_remove = [str(year) for year in range(2000, 2010)]
+            removed_years = []
+            for year in years_to_remove:
+                if year in existing_data:
+                    removed_years.append(year)
+                    del existing_data[year]
+            if removed_years:
+                print(f"\n🧹 2010년 이전 데이터 제거: {', '.join(removed_years)}")
+
+            # 1-2. 2021년 RSI를 다시 계산하기 위해 기존 2021년 주차 데이터 초기화
             target_year = "2021"
             if target_year in existing_data:
                 old_count = len(existing_data[target_year].get("weeks", []))
                 print(f"\n🧹 {target_year}년 기존 주차 {old_count}개를 비우고 다시 계산합니다.")
                 existing_data[target_year]["weeks"] = []
             
-            # 2. QQQ 데이터 가져오기 (충분한 기간)
+            # 2. QQQ 데이터 가져오기 (2010년부터 현재까지)
             print("\n📊 QQQ 데이터 수집 중...")
-            period = os.environ.get("RSI_PERIOD", "max")
+            # 2010년부터 현재까지의 데이터만 가져오기 위해 기간 계산
+            start_date = datetime(2010, 1, 1)
+            today = datetime.now()
+            days_diff = (today - start_date).days
+            
+            # 기간에 따라 적절한 period 선택
+            if days_diff <= 365:
+                period = "1y"
+            elif days_diff <= 730:
+                period = "2y"
+            elif days_diff <= 1825:  # 5년
+                period = "5y"
+            elif days_diff <= 3650:  # 10년
+                period = "10y"
+            else:
+                period = "15y"  # 15년 (2010년부터 현재까지 약 15년)
+            
+            print(f"   기간: 2010-01-01 ~ {today.strftime('%Y-%m-%d')} ({period})")
+            
             qqq_data = self.get_stock_data("QQQ", period)
             if qqq_data is None:
                 print("❌ QQQ 데이터를 가져올 수 없습니다.")
                 return False
+            
+            # 2010년 1월 1일 이전 데이터 필터링
+            qqq_data = qqq_data[qqq_data.index >= start_date]
+            print(f"   필터링 후 데이터: {len(qqq_data)}일치 ({qqq_data.index[0].strftime('%Y-%m-%d')} ~ {qqq_data.index[-1].strftime('%Y-%m-%d')})")
             
             # 3. 주간 RSI 계산
             print("\n📈 주간 RSI 계산 중...")
@@ -227,13 +280,13 @@ class RSIDataUpdater:
                 'Volume': 'sum'
             }).dropna()
             
-            # 5. 각 연도별로 데이터 업데이트
+            # 5. 각 연도별로 데이터 업데이트 (2010년부터)
             print("\n📝 연도별 RSI 데이터 업데이트 중...")
             
-            # 연도별로 그룹화
+            # 연도별로 그룹화 (2010년부터만)
             yearly_data = {}
             for date, rsi_value in weekly_rsi.items():
-                if not np.isnan(rsi_value):
+                if not np.isnan(rsi_value) and date.year >= 2010:
                     year = date.year
                     if year not in yearly_data:
                         yearly_data[year] = []
