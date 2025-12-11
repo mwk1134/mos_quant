@@ -48,6 +48,8 @@ def load_presets():
         }
     }
     
+    abs_path = str(PRESETS_FILE.resolve())
+    
     if PRESETS_FILE.exists():
         try:
             with open(PRESETS_FILE, 'r', encoding='utf-8') as f:
@@ -56,11 +58,15 @@ def load_presets():
             for key in default_presets:
                 if key in saved_presets:
                     default_presets[key] = saved_presets[key]
+            print(f"✅ 프리셋 파일 로드 성공: {abs_path}")
             return default_presets
         except Exception as e:
-            print(f"⚠️ 프리셋 파일 로드 실패: {e}")
+            import traceback
+            error_msg = f"⚠️ 프리셋 파일 로드 실패: {e}\n{traceback.format_exc()}"
+            print(error_msg)
             return default_presets
     else:
+        print(f"ℹ️ 프리셋 파일이 없습니다. 기본값 사용: {abs_path}")
         return default_presets
 
 def save_presets(presets_data):
@@ -69,11 +75,24 @@ def save_presets(presets_data):
         # data 디렉토리가 없으면 생성
         PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
         
+        # 절대 경로 확인
+        abs_path = str(PRESETS_FILE.resolve())
+        
         with open(PRESETS_FILE, 'w', encoding='utf-8') as f:
             json.dump(presets_data, f, ensure_ascii=False, indent=2)
-        return True
+        
+        # 저장 확인
+        if PRESETS_FILE.exists():
+            print(f"✅ 프리셋 파일 저장 성공: {abs_path}")
+            return True
+        else:
+            print(f"❌ 프리셋 파일 저장 실패: 파일이 생성되지 않았습니다. 경로: {abs_path}")
+            return False
     except Exception as e:
-        print(f"❌ 프리셋 파일 저장 실패: {e}")
+        import traceback
+        error_msg = f"❌ 프리셋 파일 저장 실패: {e}\n{traceback.format_exc()}"
+        print(error_msg)
+        st.error(f"프리셋 저장 오류: {e}")
         return False
 
 # 페이지 설정
