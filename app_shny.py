@@ -22,6 +22,60 @@ if str(CURRENT_DIR) not in sys.path:
 # SHNY 전용 트레이더 import
 from shny_qunat_system import SHNYQuantTrader
 
+# 프리셋 파일 경로
+PRESETS_FILE = Path(__file__).resolve().parent / "data" / "presets.json"
+
+def load_presets():
+    """프리셋 데이터를 JSON 파일에서 로드"""
+    default_presets = {
+        'kmw_preset': {
+            'initial_capital': 6812.0,
+            'session_start_date': "2025-12-09",
+            'seed_increases': [],
+            'position_edits': {}
+        },
+        'jeh_preset': {
+            'initial_capital': 2793.0,
+            'session_start_date': "2025-10-30",
+            'seed_increases': [],
+            'position_edits': {}
+        },
+        'jsd_preset': {
+            'initial_capital': 17300.0,
+            'session_start_date': "2025-10-30",
+            'seed_increases': [],
+            'position_edits': {}
+        }
+    }
+    
+    if PRESETS_FILE.exists():
+        try:
+            with open(PRESETS_FILE, 'r', encoding='utf-8') as f:
+                saved_presets = json.load(f)
+            # 저장된 프리셋과 기본값 병합 (저장된 값 우선)
+            for key in default_presets:
+                if key in saved_presets:
+                    default_presets[key] = saved_presets[key]
+            return default_presets
+        except Exception as e:
+            print(f"⚠️ 프리셋 파일 로드 실패: {e}")
+            return default_presets
+    else:
+        return default_presets
+
+def save_presets(presets_data):
+    """프리셋 데이터를 JSON 파일에 저장"""
+    try:
+        # data 디렉토리가 없으면 생성
+        PRESETS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(PRESETS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(presets_data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"❌ 프리셋 파일 저장 실패: {e}")
+        return False
+
 # 페이지 설정
 st.set_page_config(
     page_title="SHNY 퀀트투자 시스템",
@@ -211,62 +265,15 @@ if 'session_start_date' not in st.session_state:
     st.session_state.session_start_date = "2025-08-27"  # 기본값 설정
 if 'test_today_override' not in st.session_state:
     st.session_state.test_today_override = datetime.now().strftime('%Y-%m-%d')  # 초기값: 오늘 날짜
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
 if 'position_edits' not in st.session_state:
     st.session_state.position_edits = {}  # {position_index: {'shares': int, 'buy_price': float}}
-if 'kmw_preset' not in st.session_state:
-    st.session_state.kmw_preset = {
-        'initial_capital': 9000.0,
-        'session_start_date': "2025-08-27",
-        'seed_increases': [{"date": "2025-10-21", "amount": 31000.0}],
-        'position_edits': {}  # 포지션 수정 정보 저장
-    }
-if 'jsd_preset' not in st.session_state:
-    st.session_state.jsd_preset = {
-        'initial_capital': 17300.0,
-        'session_start_date': "2025-10-30",
-        'seed_increases': [],
-        'position_edits': {}  # 포지션 수정 정보 저장
-    }
-if 'jeh_preset' not in st.session_state:
-    st.session_state.jeh_preset = {
-        'initial_capital': 2793.0,
-        'session_start_date': "2025-10-30",
-        'seed_increases': [],
-        'position_edits': {}  # 포지션 수정 정보 저장
-    }
-
-# 배포 테스트 - 버전 1.5 - FORCE REDEPLOY
-import time
-current_time = int(time.time())
-st.sidebar.success("🚀 앱 버전 1.5 로드됨!")
-st.sidebar.info(f"📅 로드 시간: {current_time}")
-st.sidebar.info("💡 캐시 문제 시 Ctrl+F5로 강제 새로고침")
-st.sidebar.error("🔴 강제 재배포 테스트 중...")
-
-def login_page():
-    """로그인 페이지 - 모바일 최적화"""
-    # 간단한 헤더
-    st.markdown("# 🔐 MOSxMOS 퀀트투자 시스템")
-    st.markdown("### 로그인하여 시스템에 접속하세요")
-    
-    with st.form("login_form"):
-        st.markdown("### 🔑 로그인")
-        
-        username = st.text_input("사용자 ID", placeholder="사용자 ID를 입력하세요")
-        password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
-        
-        submitted = st.form_submit_button("로그인", use_container_width=True)
-        
-        if submitted:
-            if username == "mosmos" and password == "mosmos!":
-                st.session_state.authenticated = True
-                st.success("✅ 로그인 성공!")
-                st.rerun()
-            else:
-                st.error("❌ 잘못된 사용자 ID 또는 비밀번호입니다.")
-    
+# 프리셋 데이터 로드 (영구 저장)
+if 'presets_loaded' not in st.session_state:
+    presets = load_presets()
+    st.session_state.kmw_preset = presets['kmw_preset']
+    st.session_state.jeh_preset = presets['jeh_preset']
+    st.session_state.jsd_preset = presets['jsd_preset']
+    st.session_state.presets_loaded = True
 
 def initialize_trader():
     """트레이더 초기화 - 오류 처리 강화"""
@@ -342,7 +349,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with start_col3:
-        if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000"):
+        if st.button("KMW", help="초기설정: 6812달러, 시작일 2025/12/09, 시드증액 없음"):
             # KMW 프리셋 불러오기
             kmw = st.session_state.kmw_preset
             st.session_state.initial_capital = kmw['initial_capital']
@@ -368,7 +375,16 @@ def show_mobile_settings():
                 'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
-            st.success("✅ KMW 프리셋이 저장되었습니다!")
+            # 영구 저장
+            presets_data = {
+                'kmw_preset': st.session_state.kmw_preset,
+                'jeh_preset': st.session_state.jeh_preset,
+                'jsd_preset': st.session_state.jsd_preset
+            }
+            if save_presets(presets_data):
+                st.success("✅ KMW 프리셋이 저장되었습니다!")
+            else:
+                st.error("❌ 프리셋 저장에 실패했습니다.")
     with start_col5:
         if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 시드증액 없음"):
             # JEH 프리셋 불러오기
@@ -396,7 +412,16 @@ def show_mobile_settings():
                 'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
-            st.success("✅ JEH 프리셋이 저장되었습니다!")
+            # 영구 저장
+            presets_data = {
+                'kmw_preset': st.session_state.kmw_preset,
+                'jeh_preset': st.session_state.jeh_preset,
+                'jsd_preset': st.session_state.jsd_preset
+            }
+            if save_presets(presets_data):
+                st.success("✅ JEH 프리셋이 저장되었습니다!")
+            else:
+                st.error("❌ 프리셋 저장에 실패했습니다.")
     with start_col7:
         if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음"):
             # JSD 프리셋 불러오기
@@ -424,7 +449,16 @@ def show_mobile_settings():
                 'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
-            st.success("✅ JSD 프리셋이 저장되었습니다!")
+            # 영구 저장
+            presets_data = {
+                'kmw_preset': st.session_state.kmw_preset,
+                'jeh_preset': st.session_state.jeh_preset,
+                'jsd_preset': st.session_state.jsd_preset
+            }
+            if save_presets(presets_data):
+                st.success("✅ JSD 프리셋이 저장되었습니다!")
+            else:
+                st.error("❌ 프리셋 저장에 실패했습니다.")
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
@@ -505,17 +539,6 @@ def show_mobile_settings():
     """, unsafe_allow_html=True)
 
 def main():
-    try:
-        # 로그인 체크
-        if not st.session_state.authenticated:
-            login_page()
-            return
-    except Exception as e:
-        st.error(f"페이지 로딩 오류: {str(e)}")
-        if st.button("🔄 페이지 새로고침"):
-            st.rerun()
-        return
-    
     # 메인 헤더
     st.markdown('<div class="main-header">📈 SHNY 퀀트투자 시스템</div>', unsafe_allow_html=True)
     
