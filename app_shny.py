@@ -1057,12 +1057,16 @@ def show_daily_recommendation():
                 
                 with col2:
                     st.info(f"**수정 정보**")
+                    # 선택된 포지션의 고유 키 생성 (회차 + 매수일 + 매수가)
+                    buy_date_str = selected_position['buy_date'].strftime('%Y-%m-%d') if isinstance(selected_position['buy_date'], (datetime, pd.Timestamp)) else str(selected_position['buy_date'])
+                    position_unique_key = f"{selected_position['round']}_{buy_date_str}_{selected_position['buy_price']}"
+                    
                     new_shares = st.number_input(
                         "주식수",
                         min_value=1,
                         value=int(selected_position['shares']),
                         step=1,
-                        key=f"edit_shares_{selected_position_index}"
+                        key=f"edit_shares_{position_unique_key}"
                     )
                     new_buy_price = st.number_input(
                         "매수가 ($)",
@@ -1070,7 +1074,7 @@ def show_daily_recommendation():
                         value=float(selected_position['buy_price']),
                         step=0.01,
                         format="%.2f",
-                        key=f"edit_price_{selected_position_index}"
+                        key=f"edit_price_{position_unique_key}"
                     )
                     new_amount = new_shares * new_buy_price
                     st.write(f"**새 투자금액: ${new_amount:,.0f}**")
@@ -1085,7 +1089,7 @@ def show_daily_recommendation():
                         st.info("변동 없음")
                 
                 # 수정 버튼
-                if st.button("✅ 포지션 수정", key=f"apply_edit_{selected_position_index}", use_container_width=True):
+                if st.button("✅ 포지션 수정", key=f"apply_edit_{position_unique_key}", use_container_width=True):
                     success = st.session_state.trader.update_position(
                         selected_position_index,
                         new_shares,
