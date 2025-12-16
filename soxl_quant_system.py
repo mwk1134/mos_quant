@@ -695,16 +695,18 @@ class SOXLQuantTrader:
                                 df = pd.DataFrame(df_data)
                                 
                                 # 수동 데이터 보정 적용 (Yahoo Finance API가 제공하지 않는 날짜)
-                                # 형식: {"2025-12-12": {"Open": 46.92, "High": 47.38, "Low": 41.06, "Close": 41.71, "Volume": 138088200}}
-                                manual_corrections = {
-                                    "2025-12-12": {
-                                        "Open": 46.92,
-                                        "High": 47.38,
-                                        "Low": 41.06,
-                                        "Close": 41.71,
-                                        "Volume": 138088200
+                                # SOXL만 보정 적용 (symbol별로 분리)
+                                manual_corrections = {}
+                                if symbol == "SOXL":
+                                    manual_corrections = {
+                                        "2025-12-12": {
+                                            "Open": 46.92,
+                                            "High": 47.38,
+                                            "Low": 41.06,
+                                            "Close": 41.71,
+                                            "Volume": 138088200
+                                        }
                                     }
-                                }
                                 
                                 # Close가 None인 날짜 감지 및 경고
                                 missing_close_dates = []
@@ -713,11 +715,11 @@ class SOXLQuantTrader:
                                         date_str = row['Date'].strftime('%Y-%m-%d')
                                         missing_close_dates.append(date_str)
                                 
-                                # 수동 보정 적용
+                                # 수동 보정 적용 (해당 symbol에 대한 보정만 적용)
                                 for date_str, correction_data in manual_corrections.items():
                                     for idx, row in df.iterrows():
                                         if row['Date'].strftime('%Y-%m-%d') == date_str:
-                                            print(f"✅ [수동 보정] {date_str} 데이터 적용: Close=${correction_data['Close']:.2f}")
+                                            print(f"✅ [수동 보정] {symbol} {date_str} 데이터 적용: Close=${correction_data['Close']:.2f}")
                                             df.loc[idx, 'Open'] = correction_data.get('Open', row['Open'])
                                             df.loc[idx, 'High'] = correction_data.get('High', row['High'])
                                             df.loc[idx, 'Low'] = correction_data.get('Low', row['Low'])
