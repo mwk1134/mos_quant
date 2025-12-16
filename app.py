@@ -1009,7 +1009,8 @@ def show_daily_recommendation():
                     # 레이아웃: 좌측 주요 정보, 우측 매수 정보
                     col1, col2 = st.columns([3, 2])
                     with col1:
-                        st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주")
+                        # 목표가 가격 부분만 진하게 표시
+                        st.markdown(f"📦 **{pos['round']}회차:** 목표가 **${target_sell_price:.2f}** (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주", unsafe_allow_html=False)
                         # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                         mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
                         mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
