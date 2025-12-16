@@ -812,6 +812,44 @@ def show_daily_recommendation():
         st.session_state.trader._stock_data_cache = {}
         st.success("✅ 캐시 클리어 완료")
         
+        # SOXL 데이터 가져오기 (원본) - API 직접 호출로 확인
+        st.markdown("**🔍 API 직접 호출 테스트:**")
+        import requests
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/SOXL"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        params = {'range': '1mo', 'interval': '1d'}
+        
+        try:
+            api_response = requests.get(url, headers=headers, params=params, timeout=15)
+            if api_response.status_code == 200:
+                api_data = api_response.json()
+                if 'chart' in api_data and 'result' in api_data['chart'] and api_data['chart']['result']:
+                    result = api_data['chart']['result'][0]
+                    if 'timestamp' in result:
+                        timestamps = result['timestamp']
+                        quote_data = result['indicators']['quote'][0]
+                        
+                        # 12월 12일 찾기
+                        target_date_str = "2025-12-12"
+                        target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+                        dec12_found_in_api = False
+                        dec12_index_api = None
+                        
+                        for i, ts in enumerate(timestamps):
+                            ts_date = datetime.fromtimestamp(ts).date()
+                            if ts_date == target_date:
+                                dec12_found_in_api = True
+                                dec12_index_api = i
+                                break
+                        
+                        if dec12_found_in_api:
+                            close_val = quote_data.get('close', [None] * len(timestamps))[dec12_index_api]
+                            st.success(f"✅ API 직접 호출: 12월 12일 데이터 발견! Close=${close_val:.2f}")
+                        else:
+                            st.error(f"❌ API 직접 호출: 12월 12일 데이터 없음")
+        except Exception as e:
+            st.warning(f"⚠️ API 직접 호출 실패: {e}")
+        
         # SOXL 데이터 가져오기 (원본)
         soxl_data_original = st.session_state.trader.get_stock_data("SOXL", "1mo")
         target_date_str = "2025-12-12"
@@ -823,9 +861,16 @@ def show_daily_recommendation():
         
         st.info(f"📅 오늘 날짜: {today_date}")
         st.info(f"📅 정규장 마감 여부: {is_market_closed}")
+        st.info(f"📅 test_today_override: {st.session_state.trader.test_today_override}")
         
         if soxl_data_original is not None and len(soxl_data_original) > 0:
             st.info(f"📊 원본 데이터 범위: {soxl_data_original.index[0].strftime('%Y-%m-%d')} ~ {soxl_data_original.index[-1].strftime('%Y-%m-%d')}")
+            st.info(f"📊 원본 데이터 총 행 수: {len(soxl_data_original)}")
+            
+            # 실제 포함된 모든 날짜 확인
+            st.markdown("**📅 원본 데이터에 포함된 모든 날짜:**")
+            all_dates = [idx.strftime('%Y-%m-%d') for idx in soxl_data_original.index]
+            st.text(", ".join(all_dates))
             
             # 필터링 적용 (get_daily_recommendation과 동일한 로직)
             soxl_data_filtered = soxl_data_original.copy()
