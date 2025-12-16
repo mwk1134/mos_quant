@@ -825,30 +825,49 @@ def show_daily_recommendation():
                 api_data = api_response.json()
                 if 'chart' in api_data and 'result' in api_data['chart'] and api_data['chart']['result']:
                     result = api_data['chart']['result'][0]
-                    if 'timestamp' in result:
+                    if 'timestamp' in result and 'indicators' in result and 'quote' in result['indicators']:
                         timestamps = result['timestamp']
-                        quote_data = result['indicators']['quote'][0]
-                        
-                        # 12월 12일 찾기
-                        target_date_str = "2025-12-12"
-                        target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
-                        dec12_found_in_api = False
-                        dec12_index_api = None
-                        
-                        for i, ts in enumerate(timestamps):
-                            ts_date = datetime.fromtimestamp(ts).date()
-                            if ts_date == target_date:
-                                dec12_found_in_api = True
-                                dec12_index_api = i
-                                break
-                        
-                        if dec12_found_in_api:
-                            close_val = quote_data.get('close', [None] * len(timestamps))[dec12_index_api]
-                            st.success(f"✅ API 직접 호출: 12월 12일 데이터 발견! Close=${close_val:.2f}")
+                        quote_data_list = result['indicators']['quote']
+                        if quote_data_list and len(quote_data_list) > 0:
+                            quote_data = quote_data_list[0]
+                            
+                            # 12월 12일 찾기
+                            target_date_str = "2025-12-12"
+                            target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+                            dec12_found_in_api = False
+                            dec12_index_api = None
+                            
+                            for i, ts in enumerate(timestamps):
+                                ts_date = datetime.fromtimestamp(ts).date()
+                                if ts_date == target_date:
+                                    dec12_found_in_api = True
+                                    dec12_index_api = i
+                                    break
+                            
+                            if dec12_found_in_api:
+                                close_list = quote_data.get('close', [None] * len(timestamps))
+                                if dec12_index_api < len(close_list):
+                                    close_val = close_list[dec12_index_api]
+                                    if close_val is not None:
+                                        st.success(f"✅ API 직접 호출: 12월 12일 데이터 발견! Close=${close_val:.2f}")
+                                    else:
+                                        st.warning(f"⚠️ API 직접 호출: 12월 12일 timestamp는 있지만 Close 값이 None입니다.")
+                                else:
+                                    st.warning(f"⚠️ API 직접 호출: 인덱스 범위 초과")
+                            else:
+                                st.error(f"❌ API 직접 호출: 12월 12일 timestamp 없음")
                         else:
-                            st.error(f"❌ API 직접 호출: 12월 12일 데이터 없음")
+                            st.warning(f"⚠️ API 직접 호출: quote 데이터 없음")
+                    else:
+                        st.warning(f"⚠️ API 직접 호출: timestamp 또는 indicators 데이터 없음")
+                else:
+                    st.warning(f"⚠️ API 직접 호출: chart result 없음")
+            else:
+                st.warning(f"⚠️ API 직접 호출: HTTP {api_response.status_code}")
         except Exception as e:
             st.warning(f"⚠️ API 직접 호출 실패: {e}")
+            import traceback
+            st.code(traceback.format_exc())
         
         # SOXL 데이터 가져오기 (원본)
         soxl_data_original = st.session_state.trader.get_stock_data("SOXL", "1mo")
