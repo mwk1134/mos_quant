@@ -648,6 +648,34 @@ class SOXLQuantTrader:
                                 timestamps = result['timestamp']
                                 quote_data = result['indicators']['quote'][0]
                                 
+                                # 디버깅: 12월 12일 timestamp 확인
+                                target_debug_ts = int(datetime(2025, 12, 12, 0, 0, 0).timestamp())
+                                target_debug_date = datetime(2025, 12, 12).date()
+                                
+                                # 12월 12일 timestamp가 있는지 확인
+                                dec12_timestamp_found = False
+                                dec12_index_in_array = None
+                                for i, ts in enumerate(timestamps):
+                                    ts_date = datetime.fromtimestamp(ts).date()
+                                    if ts_date == target_debug_date:
+                                        dec12_timestamp_found = True
+                                        dec12_index_in_array = i
+                                        print(f"🔍 [DEBUG] 12월 12일 timestamp 발견! 인덱스: {i}, timestamp: {ts}")
+                                        break
+                                
+                                if not dec12_timestamp_found:
+                                    print(f"⚠️ [DEBUG] 12월 12일 timestamp가 Yahoo Finance API 응답에 없습니다!")
+                                    # 12월 12일 전후 날짜 확인
+                                    nearby_dates = []
+                                    for ts in timestamps:
+                                        ts_date = datetime.fromtimestamp(ts).date()
+                                        if abs((ts_date - target_debug_date).days) <= 3:
+                                            nearby_dates.append((ts_date, ts))
+                                    if nearby_dates:
+                                        print(f"   주변 날짜 timestamps:")
+                                        for date, ts in sorted(nearby_dates):
+                                            print(f"     {date.strftime('%Y-%m-%d')}: {ts}")
+                                
                                 # DataFrame 생성
                                 df_data = {
                                     'Date': [datetime.fromtimestamp(ts) for ts in timestamps],
@@ -659,7 +687,21 @@ class SOXLQuantTrader:
                                 }
                                 
                                 df = pd.DataFrame(df_data)
-                                df = df.dropna()  # NaN 값 제거
+                                
+                                # 디버깅: 12월 12일 데이터 확인 (dropna 전)
+                                if dec12_index_in_array is not None:
+                                    row = df.iloc[dec12_index_in_array]
+                                    print(f"🔍 [DEBUG] 12월 12일 원시 데이터 (dropna 전):")
+                                    print(f"   Date: {row['Date']}")
+                                    print(f"   Open: {row['Open']}, High: {row['High']}, Low: {row['Low']}, Close: {row['Close']}, Volume: {row['Volume']}")
+                                    all_none = pd.isna(row['Open']) and pd.isna(row['High']) and pd.isna(row['Low']) and pd.isna(row['Close']) and pd.isna(row['Volume'])
+                                    print(f"   모든 값이 None인가? {all_none}")
+                                    if all_none:
+                                        print(f"   ⚠️ 12월 12일의 모든 가격 데이터가 None입니다. dropna()로 제거될 예정입니다.")
+                                
+                                # NaN 값 제거 (Open, High, Low, Close가 모두 NaN인 행만 제거)
+                                # Volume은 선택적이므로 Close만 확인
+                                df = df.dropna(subset=['Close'])  # Close가 있으면 유효한 거래일로 간주
                                 df.set_index('Date', inplace=True)
                                 
                                 # 캐시에 저장
