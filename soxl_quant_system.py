@@ -708,31 +708,57 @@ class SOXLQuantTrader:
                                         }
                                     }
                                 
-                                # 원본 API 응답에서 Close가 None인 날짜 감지 (수동 보정 전)
+                                # 원본 API 응답에서 Close가 None인 날짜 감지 및 수동 보정 정보 저장 (수동 보정 전)
                                 # 최근 10일만 확인하여 웹앱에서 경고 표시용
                                 api_missing_close_dates = []
+                                api_original_values = {}  # 날짜별 원본 API 값 저장
                                 today = self.get_today_date().date()
                                 
                                 for idx, row in df.iterrows():
                                     date_obj = row['Date'].date() if hasattr(row['Date'], 'date') else pd.Timestamp(row['Date']).date()
                                     # 최근 10일만 확인
-                                    if (today - date_obj).days <= 10 and pd.isna(row['Close']):
+                                    if (today - date_obj).days <= 10:
                                         date_str = row['Date'].strftime('%Y-%m-%d')
-                                        # 수동 보정이 적용될 날짜는 제외 (실제 API에서 없었던 날짜만 저장)
-                                        if date_str not in manual_corrections:
+                                        original_close = row['Close']
+                                        
+                                        # Close가 None인 경우 또는 수동 보정이 적용될 날짜인 경우 저장
+                                        if pd.isna(original_close) or date_str in manual_corrections:
                                             api_missing_close_dates.append(date_str)
+                                            # 원본 API 값 저장 (None이면 None, 값이 있으면 그 값)
+                                            api_original_values[date_str] = None if pd.isna(original_close) else float(original_close)
                                 
-                                # 원본 API 응답에서 Close가 None인 날짜 저장 (웹앱 경고용)
+                                # 원본 API 응답 정보 저장 (웹앱 경고용)
                                 if api_missing_close_dates:
                                     if not hasattr(self, '_api_missing_close_dates'):
                                         self._api_missing_close_dates = {}
+                                    if not hasattr(self, '_api_original_values'):
+                                        self._api_original_values = {}
+                                    
                                     if symbol not in self._api_missing_close_dates:
                                         self._api_missing_close_dates[symbol] = []
+                                    if symbol not in self._api_original_values:
+                                        self._api_original_values[symbol] = {}
+                                    
                                     # 중복 제거 및 추가
                                     existing_dates = set(self._api_missing_close_dates[symbol])
                                     for date_str in api_missing_close_dates:
                                         if date_str not in existing_dates:
                                             self._api_missing_close_dates[symbol].append(date_str)
+                                        # 원본 값 저장 (업데이트)
+                                        self._api_original_values[symbol][date_str] = api_original_values.get(date_str)
+                                
+                                # 수동 보정 정보 저장 (웹앱에서 표시용)
+                                if manual_corrections:
+                                    if not hasattr(self, '_manual_corrections_info'):
+                                        self._manual_corrections_info = {}
+                                    if symbol not in self._manual_corrections_info:
+                                        self._manual_corrections_info[symbol] = {}
+                                    # 수동 보정 정보 저장
+                                    for date_str, correction_data in manual_corrections.items():
+                                        self._manual_corrections_info[symbol][date_str] = {
+                                            'original_close': api_original_values.get(date_str),
+                                            'corrected_close': correction_data.get('Close')
+                                        }
                                 
                                 # Close가 None인 날짜 감지 및 경고 (수동 보정 적용 전)
                                 missing_close_dates = []

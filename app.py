@@ -805,7 +805,7 @@ def show_daily_recommendation():
         # SOXL 데이터를 가져와서 API 응답에서 누락된 날짜 확인
         soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
         
-        # 원본 API 응답에서 Close가 None이었던 날짜 확인 (수동 보정 전)
+        # 원본 API 응답에서 Close가 None이었던 날짜 확인 (수동 보정 포함)
         if hasattr(st.session_state.trader, '_api_missing_close_dates'):
             api_missing = st.session_state.trader._api_missing_close_dates.get("SOXL", [])
             if api_missing:
@@ -821,8 +821,40 @@ def show_daily_recommendation():
                         pass
                 
                 if recent_missing:
-                    st.warning(f"⚠️ **최근 10일 SOXL 종가 데이터 누락 (원본 API 응답)**: 다음 날짜들의 종가 데이터가 API에서 제공되지 않았습니다: {', '.join(sorted(recent_missing))}")
-                    st.info("💡 이 날짜들은 거래가 없었거나 데이터 제공 오류일 수 있습니다. 수동 보정이 필요할 수 있습니다.")
+                    # 수동 보정 정보 가져오기
+                    manual_corrections_info = {}
+                    if hasattr(st.session_state.trader, '_manual_corrections_info'):
+                        manual_corrections_info = st.session_state.trader._manual_corrections_info.get("SOXL", {})
+                    
+                    # 원본 API 값 정보 가져오기
+                    api_original_values = {}
+                    if hasattr(st.session_state.trader, '_api_original_values'):
+                        api_original_values = st.session_state.trader._api_original_values.get("SOXL", {})
+                    
+                    # 경고 메시지 생성
+                    warning_lines = []
+                    for date_str in sorted(recent_missing):
+                        original_value = api_original_values.get(date_str)
+                        correction_info = manual_corrections_info.get(date_str)
+                        
+                        if correction_info:
+                            # 수동 보정이 적용된 경우
+                            corrected_close = correction_info.get('corrected_close')
+                            if original_value is None:
+                                warning_lines.append(f"- **{date_str}**: API 값 없음 → 수동 보정: ${corrected_close:.2f}")
+                            else:
+                                warning_lines.append(f"- **{date_str}**: API 값 ${original_value:.2f} → 수동 보정: ${corrected_close:.2f}")
+                        else:
+                            # 수동 보정이 없는 경우
+                            if original_value is None:
+                                warning_lines.append(f"- **{date_str}**: API 값 없음")
+                            else:
+                                warning_lines.append(f"- **{date_str}**: API 값 ${original_value:.2f} (제거됨)")
+                    
+                    st.warning("⚠️ **최근 10일 SOXL 종가 데이터 확인**:")
+                    for line in warning_lines:
+                        st.markdown(line)
+                    st.info("💡 수동 보정이 적용된 날짜는 거래가 없었거나 데이터 제공 오류일 수 있습니다.")
     except Exception as e:
         st.warning(f"⚠️ 최근 10일 SOXL 종가 데이터 확인 중 오류 발생: {str(e)}")
     
