@@ -798,39 +798,76 @@ def show_daily_recommendation():
     st.subheader("🔍 [임시] 12월 12일 데이터 확인")
     
     try:
-        # SOXL 데이터 가져오기
-        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
+        # SOXL 데이터 가져오기 (원본)
+        soxl_data_original = st.session_state.trader.get_stock_data("SOXL", "1mo")
         target_date_str = "2025-12-12"
         
-        if soxl_data is not None and len(soxl_data) > 0:
-            # 12월 12일 데이터 찾기
-            dec12_data = None
-            dec12_index = None
-            for idx in soxl_data.index:
+        # 필터링 로직 확인 (get_daily_recommendation과 동일)
+        today = st.session_state.trader.get_today_date()
+        today_date = today.date()
+        is_market_closed = st.session_state.trader.is_regular_session_closed_now()
+        
+        st.info(f"📅 오늘 날짜: {today_date}")
+        st.info(f"📅 정규장 마감 여부: {is_market_closed}")
+        
+        if soxl_data_original is not None and len(soxl_data_original) > 0:
+            st.info(f"📊 원본 데이터 범위: {soxl_data_original.index[0].strftime('%Y-%m-%d')} ~ {soxl_data_original.index[-1].strftime('%Y-%m-%d')}")
+            
+            # 필터링 적용 (get_daily_recommendation과 동일한 로직)
+            soxl_data_filtered = soxl_data_original.copy()
+            if not is_market_closed and len(soxl_data_filtered) > 0:
+                if soxl_data_filtered.index.max().date() == today_date:
+                    soxl_data_filtered = soxl_data_filtered[soxl_data_filtered.index.date < today_date]
+                    st.warning(f"⚠️ 필터링 적용: 오늘 날짜({today_date}) 데이터 제외됨")
+                    st.info(f"📊 필터링 후 데이터 범위: {soxl_data_filtered.index[0].strftime('%Y-%m-%d')} ~ {soxl_data_filtered.index[-1].strftime('%Y-%m-%d')}")
+                else:
+                    st.info(f"✅ 필터링 불필요: 최신 데이터 날짜({soxl_data_filtered.index.max().date()})가 오늘({today_date})이 아님")
+            
+            # 원본 데이터에서 12월 12일 찾기
+            dec12_data_original = None
+            dec12_index_original = None
+            for idx in soxl_data_original.index:
                 if idx.strftime('%Y-%m-%d') == target_date_str:
-                    dec12_data = soxl_data.loc[idx]
-                    dec12_index = idx
+                    dec12_data_original = soxl_data_original.loc[idx]
+                    dec12_index_original = idx
                     break
             
-            if dec12_data is not None:
-                st.success(f"✅ {target_date_str} 데이터 발견!")
+            # 필터링된 데이터에서 12월 12일 찾기
+            dec12_data_filtered = None
+            dec12_index_filtered = None
+            for idx in soxl_data_filtered.index:
+                if idx.strftime('%Y-%m-%d') == target_date_str:
+                    dec12_data_filtered = soxl_data_filtered.loc[idx]
+                    dec12_index_filtered = idx
+                    break
+            
+            # 결과 표시
+            if dec12_data_original is not None:
+                st.success(f"✅ 원본 데이터에서 {target_date_str} 발견!")
                 
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("시가", f"${dec12_data['Open']:.2f}")
+                    st.metric("시가", f"${dec12_data_original['Open']:.2f}")
                 with col2:
-                    st.metric("고가", f"${dec12_data['High']:.2f}")
+                    st.metric("고가", f"${dec12_data_original['High']:.2f}")
                 with col3:
-                    st.metric("저가", f"${dec12_data['Low']:.2f}")
+                    st.metric("저가", f"${dec12_data_original['Low']:.2f}")
                 with col4:
-                    st.metric("종가", f"${dec12_data['Close']:.2f}")
+                    st.metric("종가", f"${dec12_data_original['Close']:.2f}")
+                
+                if dec12_data_filtered is not None:
+                    st.success(f"✅ 필터링된 데이터에서도 {target_date_str} 발견! (get_daily_recommendation에서 사용 가능)")
+                else:
+                    st.error(f"❌ 필터링된 데이터에서는 {target_date_str}를 찾을 수 없습니다!")
+                    st.warning(f"⚠️ 원인: 오늘이 {target_date_str}이고 정규장이 마감되지 않아 필터링되었습니다.")
+                    st.info(f"💡 해결: 정규장 마감 후(16:00 ET 이후) 또는 다음 날에 다시 확인하세요.")
                 
                 # 전일 종가 확인 (12월 11일)
                 prev_date_str = "2025-12-11"
                 prev_close = None
-                for idx in soxl_data.index:
+                for idx in soxl_data_filtered.index:
                     if idx.strftime('%Y-%m-%d') == prev_date_str:
-                        prev_close = soxl_data.loc[idx, 'Close']
+                        prev_close = soxl_data_filtered.loc[idx, 'Close']
                         break
                 
                 if prev_close is not None:
@@ -840,19 +877,19 @@ def show_daily_recommendation():
                     current_mode = st.session_state.trader.current_mode or "SF"
                     config = st.session_state.trader.sf_config if current_mode == "SF" else st.session_state.trader.ag_config
                     buy_price = prev_close * (1 + config['buy_threshold'] / 100)
-                    buy_condition = dec12_data['Close'] < buy_price
+                    buy_condition = dec12_data_original['Close'] < buy_price
                     
                     st.markdown("**매수 조건 확인:**")
                     st.write(f"- 모드: {current_mode} ({'안전모드' if current_mode == 'SF' else '공세모드'})")
                     st.write(f"- 매수 임계값: {config['buy_threshold']}%")
                     st.write(f"- 전일 종가: ${prev_close:.2f}")
                     st.write(f"- 계산된 매수가: ${buy_price:.2f}")
-                    st.write(f"- 12월 12일 종가: ${dec12_data['Close']:.2f}")
+                    st.write(f"- 12월 12일 종가: ${dec12_data_original['Close']:.2f}")
                     
                     if buy_condition:
-                        st.success(f"✅ 매수 조건 충족: ${dec12_data['Close']:.2f} < ${buy_price:.2f}")
+                        st.success(f"✅ 매수 조건 충족: ${dec12_data_original['Close']:.2f} < ${buy_price:.2f}")
                     else:
-                        st.warning(f"❌ 매수 조건 불충족: ${dec12_data['Close']:.2f} >= ${buy_price:.2f}")
+                        st.warning(f"❌ 매수 조건 불충족: ${dec12_data_original['Close']:.2f} >= ${buy_price:.2f}")
                 else:
                     st.warning(f"⚠️ 전일(12월 11일) 데이터를 찾을 수 없습니다.")
                 
@@ -905,8 +942,8 @@ def show_daily_recommendation():
                 else:
                     st.warning(f"⚠️ 12월 12일 매수 포지션이 없습니다.")
             else:
-                st.error(f"❌ {target_date_str} 데이터를 찾을 수 없습니다.")
-                st.write(f"데이터 범위: {soxl_data.index[0].strftime('%Y-%m-%d')} ~ {soxl_data.index[-1].strftime('%Y-%m-%d')}")
+                st.error(f"❌ 원본 데이터에서 {target_date_str} 데이터를 찾을 수 없습니다.")
+                st.write(f"데이터 범위: {soxl_data_original.index[0].strftime('%Y-%m-%d')} ~ {soxl_data_original.index[-1].strftime('%Y-%m-%d')}")
         else:
             st.error("❌ SOXL 데이터를 가져올 수 없습니다.")
     except Exception as e:
