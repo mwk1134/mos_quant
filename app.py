@@ -963,7 +963,12 @@ def show_daily_recommendation():
                 col1, col2 = st.columns([3, 2])
                 with col1:
                     st.info(f"📦 {pos['round']}회차 매도: {pos['shares']}주 @ ${sell_info['sell_price']:.2f}")
-                    st.caption(f"모드: {mode} ({mode_name}) • 손절예정일: {stop_loss_date if stop_loss_date else '-'}")
+                    # 모드 색상 설정 (AG: 주황색, SF: 초록색)
+                    mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
+                    mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
+                    # 손절예정일 빨간색으로 표시
+                    stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일:</span> {stop_loss_date if stop_loss_date else "-"}'
+                    st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
                     st.caption(f"매도 사유: {sell_info['reason']}")
                 with col2:
                     st.caption(f"매수체결일: {buy_date_str}")
@@ -1003,8 +1008,14 @@ def show_daily_recommendation():
                     # 레이아웃: 좌측 주요 정보, 우측 매수 정보
                     col1, col2 = st.columns([3, 2])
                     with col1:
-                        st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주")
-                        st.caption(f"모드: {mode} ({mode_name}) • 손절예정일: {stop_loss_date if stop_loss_date else '-'}")
+                        # 목표가 글씨 크기를 크게 표시
+                        st.markdown(f"📦 **{pos['round']}회차:** <span style='font-size: 1.3em; font-weight: bold;'>목표가 ${target_sell_price:.2f}</span> (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주", unsafe_allow_html=True)
+                        # 모드 색상 설정 (AG: 주황색, SF: 초록색)
+                        mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
+                        mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
+                        # 손절예정일 빨간색으로 표시
+                        stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일:</span> {stop_loss_date if stop_loss_date else "-"}'
+                        st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
                     with col2:
                         st.caption(f"매수체결일: {buy_date_str}")
                         st.caption(f"매수가: ${pos['buy_price']:.2f}")
