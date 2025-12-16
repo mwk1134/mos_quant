@@ -708,7 +708,33 @@ class SOXLQuantTrader:
                                         }
                                     }
                                 
-                                # Close가 None인 날짜 감지 및 경고
+                                # 원본 API 응답에서 Close가 None인 날짜 감지 (수동 보정 전)
+                                # 최근 10일만 확인하여 웹앱에서 경고 표시용
+                                api_missing_close_dates = []
+                                today = self.get_today_date().date()
+                                
+                                for idx, row in df.iterrows():
+                                    date_obj = row['Date'].date() if hasattr(row['Date'], 'date') else pd.Timestamp(row['Date']).date()
+                                    # 최근 10일만 확인
+                                    if (today - date_obj).days <= 10 and pd.isna(row['Close']):
+                                        date_str = row['Date'].strftime('%Y-%m-%d')
+                                        # 수동 보정이 적용될 날짜는 제외 (실제 API에서 없었던 날짜만 저장)
+                                        if date_str not in manual_corrections:
+                                            api_missing_close_dates.append(date_str)
+                                
+                                # 원본 API 응답에서 Close가 None인 날짜 저장 (웹앱 경고용)
+                                if api_missing_close_dates:
+                                    if not hasattr(self, '_api_missing_close_dates'):
+                                        self._api_missing_close_dates = {}
+                                    if symbol not in self._api_missing_close_dates:
+                                        self._api_missing_close_dates[symbol] = []
+                                    # 중복 제거 및 추가
+                                    existing_dates = set(self._api_missing_close_dates[symbol])
+                                    for date_str in api_missing_close_dates:
+                                        if date_str not in existing_dates:
+                                            self._api_missing_close_dates[symbol].append(date_str)
+                                
+                                # Close가 None인 날짜 감지 및 경고 (수동 보정 적용 전)
                                 missing_close_dates = []
                                 for idx, row in df.iterrows():
                                     if pd.isna(row['Close']):

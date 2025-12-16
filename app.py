@@ -800,15 +800,33 @@ def show_daily_recommendation():
             st.warning(f"⚠️ **데이터 경고**: 다음 날짜들의 Close 값이 None이어서 제거되었습니다: {', '.join(sorted(unique_warnings))}")
             st.info("💡 수동 보정이 필요할 수 있습니다. `soxl_quant_system.py`의 `manual_corrections` 딕셔너리에 추가하세요.")
     
-    # 기본 정보 - 모바일 최적화
-    # 모바일에서는 2x2 그리드, 데스크톱에서는 1x4 그리드
-    col1, col2 = st.columns(2)
+    # 최근 10일 SOXL 종가 데이터 확인 (원본 API 응답 기준)
+    try:
+        # SOXL 데이터를 가져와서 API 응답에서 누락된 날짜 확인
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
+        
+        # 원본 API 응답에서 Close가 None이었던 날짜 확인 (수동 보정 전)
+        if hasattr(st.session_state.trader, '_api_missing_close_dates'):
+            api_missing = st.session_state.trader._api_missing_close_dates.get("SOXL", [])
+            if api_missing:
+                # 최근 10일 내의 날짜만 필터링
+                today = datetime.now().date()
+                recent_missing = []
+                for date_str in api_missing:
+                    try:
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                        if (today - date_obj).days <= 10:
+                            recent_missing.append(date_str)
+                    except:
+                        pass
+                
+                if recent_missing:
+                    st.warning(f"⚠️ **최근 10일 SOXL 종가 데이터 누락 (원본 API 응답)**: 다음 날짜들의 종가 데이터가 API에서 제공되지 않았습니다: {', '.join(sorted(recent_missing))}")
+                    st.info("💡 이 날짜들은 거래가 없었거나 데이터 제공 오류일 수 있습니다. 수동 보정이 필요할 수 있습니다.")
+    except Exception as e:
+        st.warning(f"⚠️ 최근 10일 SOXL 종가 데이터 확인 중 오류 발생: {str(e)}")
     
-    with col1:
-        st.metric("📅 날짜", recommendation['date'])
-        mode_name = "안전모드" if recommendation['mode'] == "SF" else "공세모드"
-        mode_class = "mode-sf" if recommendation['mode'] == "SF" else "mode-ag"
-        st.markdown(f"<div class='{mode_class}'>🎯 모드: {recommendation['mode']} ({mode_name})</div>", unsafe_allow_html=True)
+    # 기본 정보 - 모바일 최적화
     # 모바일에서는 2x2 그리드, 데스크톱에서는 1x4 그리드
     col1, col2 = st.columns(2)
     
