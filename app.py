@@ -798,6 +798,20 @@ def show_daily_recommendation():
     st.subheader("🔍 [임시] 12월 12일 데이터 확인")
     
     try:
+        # 캐시 상태 확인
+        cache_key = "SOXL_1mo"
+        cache_exists = cache_key in st.session_state.trader._stock_data_cache
+        if cache_exists:
+            cached_data, cache_time = st.session_state.trader._stock_data_cache[cache_key]
+            cache_age = (datetime.now() - cache_time).seconds
+            st.info(f"📦 캐시 상태: 캐시됨 (나이: {cache_age}초)")
+        else:
+            st.info(f"📦 캐시 상태: 캐시 없음")
+        
+        # 캐시 클리어하여 최신 데이터 가져오기
+        st.session_state.trader._stock_data_cache = {}
+        st.success("✅ 캐시 클리어 완료")
+        
         # SOXL 데이터 가져오기 (원본)
         soxl_data_original = st.session_state.trader.get_stock_data("SOXL", "1mo")
         target_date_str = "2025-12-12"
