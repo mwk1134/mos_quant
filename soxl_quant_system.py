@@ -1503,8 +1503,37 @@ class SOXLQuantTrader:
                     price_diff = target_sell_price - current_price
                     price_diff_pct = (price_diff / current_price) * 100
                     
+                    # 매수체결일 포맷팅
+                    buy_date = pos.get('buy_date')
+                    if isinstance(buy_date, pd.Timestamp):
+                        buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    elif isinstance(buy_date, datetime):
+                        buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    else:
+                        buy_date_str = str(buy_date)
+                    
+                    # 모드 정보
+                    mode = pos.get('mode', 'SF')
+                    mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
+                    
+                    # 매도 목표일자 계산 (최대 보유기간)
+                    buy_date_dt = pos.get('buy_date')
+                    if isinstance(buy_date_dt, pd.Timestamp):
+                        buy_date_dt = buy_date_dt.to_pydatetime()
+                    elif not isinstance(buy_date_dt, datetime):
+                        try:
+                            buy_date_dt = datetime.strptime(buy_date_str, '%Y-%m-%d')
+                        except:
+                            buy_date_dt = datetime.now()
+                    
+                    target_sell_date = self.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
+                    
                     print(f"   📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f}")
-                    print(f"      매수가: ${pos['buy_price']:.2f} | 보유: {pos['shares']}주")
+                    print(f"      매수체결일: {buy_date_str}")
+                    print(f"      매수체결가격: ${pos['buy_price']:.2f}")
+                    print(f"      모드: {mode_name}")
+                    print(f"      매도목표일자: {target_sell_date}")
+                    print(f"      보유: {pos['shares']}주")
             else:
                 print("🟡 매도 추천 없음")
         
@@ -1529,7 +1558,27 @@ class SOXLQuantTrader:
                 pnl = current_value - pos['amount']
                 pnl_rate = (pnl / pos['amount']) * 100
                 
+                # 매수체결일 포맷팅
+                buy_date = pos.get('buy_date')
+                if isinstance(buy_date, pd.Timestamp):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                elif isinstance(buy_date, datetime):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                else:
+                    buy_date_str = str(buy_date)
+                
+                # 모드 정보
+                mode = pos.get('mode', 'SF')
+                mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
+                
+                # 매도 목표가 계산
+                config = self.sf_config if mode == "SF" else self.ag_config
+                target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
+                
                 print(f"{pos['round']}회차: {pos['shares']}주 @ ${pos['buy_price']:.2f} ({hold_days}일 보유)")
+                print(f"        매수체결일: {buy_date_str}")
+                print(f"        모드: {mode_name}")
+                print(f"        매도목표가: ${target_sell_price:.2f}")
                 print(f"        평가: ${current_value:,.0f} | 손익: ${pnl:,.0f} ({pnl_rate:+.2f}%)")
         else:
             print("보유 포지션 없음")

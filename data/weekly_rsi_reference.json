@@ -5068,13 +5068,19 @@
         "end": "2025-12-05",
         "week": 49,
         "rsi": 66.47
+      },
+      {
+        "start": "2025-12-08",
+        "end": "2025-12-12",
+        "week": 50,
+        "rsi": 60.83
       }
     ]
   },
   "metadata": {
     "last_updated": "2025-12-11",
     "total_years": 16,
-    "total_weeks": 832,
+    "total_weeks": 833,
     "description": "QQQ 주간 RSI 참조 데이터 (14주 Wilder's RSI)",
     "updated_by": "update_2021_rsi.py"
   }

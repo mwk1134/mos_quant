@@ -985,10 +985,30 @@ def show_daily_recommendation():
             pnl = current_value - pos['amount']
             pnl_rate = (pnl / pos['amount']) * 100
             
+            # 매수체결일 포맷팅
+            buy_date = pos['buy_date']
+            if isinstance(buy_date, pd.Timestamp):
+                buy_date_str = buy_date.strftime('%Y-%m-%d')
+            elif isinstance(buy_date, datetime):
+                buy_date_str = buy_date.strftime('%Y-%m-%d')
+            else:
+                buy_date_str = str(buy_date)
+            
+            # 모드 정보
+            mode = pos.get('mode', 'SF')
+            mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
+            
+            # 매도 목표가 계산
+            position_config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+            target_sell_price = pos['buy_price'] * (1 + position_config['sell_threshold'] / 100)
+            
             positions_data.append({
                 "회차": pos['round'],
+                "매수체결일": buy_date_str,
+                "모드": mode_name,
                 "주식수": pos['shares'],
                 "매수가": f"${pos['buy_price']:.2f}",
+                "매도목표가": f"${target_sell_price:.2f}",
                 "보유일": f"{hold_days}일",
                 "평가금액": f"${current_value:,.0f}",
                 "손익": f"${pnl:,.0f}",
