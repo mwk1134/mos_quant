@@ -352,6 +352,12 @@ class SOXLQuantTrader:
         # 성능 최적화를 위한 캐시
         self._stock_data_cache = {}  # 주식 데이터 캐시
         self._simulation_cache = {}  # 시뮬레이션 결과 캐시
+        
+        # 데이터 경고 저장 (Close가 None인 날짜들)
+        self._data_warnings = []
+        
+        # 데이터 경고 저장 (Close가 None인 날짜들)
+        self._data_warnings = []
 
         self.current_mode = None  # RSI 기준에 따라 동적으로 결정
         
@@ -688,40 +694,50 @@ class SOXLQuantTrader:
                                 
                                 df = pd.DataFrame(df_data)
                                 
-                                # 디버깅: 12월 12일 데이터 확인 (dropna 전)
-                                if dec12_index_in_array is not None:
-                                    row = df.iloc[dec12_index_in_array]
-                                    print(f"🔍 [DEBUG] 12월 12일 원시 데이터 (dropna 전):")
-                                    print(f"   Date: {row['Date']}")
-                                    print(f"   Open: {row['Open']}, High: {row['High']}, Low: {row['Low']}, Close: {row['Close']}, Volume: {row['Volume']}")
-                                    all_none = pd.isna(row['Open']) and pd.isna(row['High']) and pd.isna(row['Low']) and pd.isna(row['Close']) and pd.isna(row['Volume'])
-                                    print(f"   모든 값이 None인가? {all_none}")
+                                # 수동 데이터 보정 적용 (Yahoo Finance API가 제공하지 않는 날짜)
+                                # 형식: {"2025-12-12": {"Open": 46.92, "High": 47.38, "Low": 41.06, "Close": 41.71, "Volume": 138088200}}
+                                manual_corrections = {
+                                    "2025-12-12": {
+                                        "Open": 46.92,
+                                        "High": 47.38,
+                                        "Low": 41.06,
+                                        "Close": 41.71,
+                                        "Volume": 138088200
+                                    }
+                                }
+                                
+                                # Close가 None인 날짜 감지 및 경고
+                                missing_close_dates = []
+                                for idx, row in df.iterrows():
                                     if pd.isna(row['Close']):
-                                        print(f"   ⚠️ 12월 12일의 Close 값이 None입니다. 전일 종가로 보정이 필요합니다.")
+                                        date_str = row['Date'].strftime('%Y-%m-%d')
+                                        missing_close_dates.append(date_str)
                                 
-                                # Close가 None인 경우 전일 종가로 보정
-                                df_sorted = df.sort_values('Date')
-                                for idx in df_sorted.index:
-                                    if pd.isna(df_sorted.loc[idx, 'Close']):
-                                        # 전일 종가 찾기
-                                        prev_rows = df_sorted[df_sorted['Date'] < df_sorted.loc[idx, 'Date']]
-                                        if len(prev_rows) > 0:
-                                            prev_close = prev_rows.iloc[-1]['Close']
-                                            if not pd.isna(prev_close):
-                                                # Close가 None이면 전일 종가로 보정
-                                                df_sorted.loc[idx, 'Close'] = prev_close
-                                                # Open, High, Low도 None이면 전일 종가로 보정
-                                                if pd.isna(df_sorted.loc[idx, 'Open']):
-                                                    df_sorted.loc[idx, 'Open'] = prev_close
-                                                if pd.isna(df_sorted.loc[idx, 'High']):
-                                                    df_sorted.loc[idx, 'High'] = prev_close
-                                                if pd.isna(df_sorted.loc[idx, 'Low']):
-                                                    df_sorted.loc[idx, 'Low'] = prev_close
-                                                print(f"✅ [보정] {df_sorted.loc[idx, 'Date'].strftime('%Y-%m-%d')} Close 값이 None이어서 전일 종가 ${prev_close:.2f}로 보정했습니다.")
+                                # 수동 보정 적용
+                                for date_str, correction_data in manual_corrections.items():
+                                    for idx, row in df.iterrows():
+                                        if row['Date'].strftime('%Y-%m-%d') == date_str:
+                                            print(f"✅ [수동 보정] {date_str} 데이터 적용: Close=${correction_data['Close']:.2f}")
+                                            df.loc[idx, 'Open'] = correction_data.get('Open', row['Open'])
+                                            df.loc[idx, 'High'] = correction_data.get('High', row['High'])
+                                            df.loc[idx, 'Low'] = correction_data.get('Low', row['Low'])
+                                            df.loc[idx, 'Close'] = correction_data['Close']
+                                            df.loc[idx, 'Volume'] = correction_data.get('Volume', row['Volume'])
+                                            # missing_close_dates에서 제거
+                                            if date_str in missing_close_dates:
+                                                missing_close_dates.remove(date_str)
+                                            break
                                 
-                                df = df_sorted
+                                # Close가 None인 날짜가 있으면 경고 출력
+                                if missing_close_dates:
+                                    print(f"⚠️ [경고] 다음 날짜들의 Close 값이 None입니다: {', '.join(missing_close_dates)}")
+                                    print(f"   이 날짜들은 dropna()로 제거됩니다. 수동 보정이 필요할 수 있습니다.")
+                                    # 경고를 인스턴스 변수에 저장하여 웹앱에서 접근 가능하도록
+                                    if not hasattr(self, '_data_warnings'):
+                                        self._data_warnings = []
+                                    self._data_warnings.extend(missing_close_dates)
                                 
-                                # NaN 값 제거 (보정 후에도 Close가 None인 행만 제거)
+                                # NaN 값 제거 (Close가 None인 행은 제거)
                                 df = df.dropna(subset=['Close'])  # Close가 있으면 유효한 거래일로 간주
                                 df.set_index('Date', inplace=True)
                                 

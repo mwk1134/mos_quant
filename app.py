@@ -793,6 +793,13 @@ def show_daily_recommendation():
         st.error(f"추천 생성 실패: {recommendation['error']}")
         return
     
+    # 데이터 경고 표시 (Close가 None인 날짜들)
+    if hasattr(st.session_state.trader, '_data_warnings') and st.session_state.trader._data_warnings:
+        unique_warnings = list(set(st.session_state.trader._data_warnings))
+        if unique_warnings:
+            st.warning(f"⚠️ **데이터 경고**: 다음 날짜들의 Close 값이 None이어서 제거되었습니다: {', '.join(sorted(unique_warnings))}")
+            st.info("💡 수동 보정이 필요할 수 있습니다. `soxl_quant_system.py`의 `manual_corrections` 딕셔너리에 추가하세요.")
+    
     # ========== 임시 디버깅: 12월 12일 데이터 확인 ==========
     st.markdown("---")
     st.subheader("🔍 [임시] 12월 12일 데이터 확인")
