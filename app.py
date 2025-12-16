@@ -944,6 +944,59 @@ def show_daily_recommendation():
             else:
                 st.error(f"❌ 원본 데이터에서 {target_date_str} 데이터를 찾을 수 없습니다.")
                 st.write(f"데이터 범위: {soxl_data_original.index[0].strftime('%Y-%m-%d')} ~ {soxl_data_original.index[-1].strftime('%Y-%m-%d')}")
+                
+                # 실제 포함된 날짜들 확인 (12월 12일 주변)
+                st.markdown("**🔍 실제 데이터에 포함된 날짜 확인 (12월 12일 주변):**")
+                target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
+                
+                # 12월 12일 전후 5일 범위의 날짜들 확인
+                nearby_dates = []
+                for i in range(-5, 6):
+                    check_date = target_date + timedelta(days=i)
+                    check_date_str = check_date.strftime('%Y-%m-%d')
+                    
+                    # 데이터에서 찾기
+                    found = False
+                    for idx in soxl_data_original.index:
+                        if idx.strftime('%Y-%m-%d') == check_date_str:
+                            found = True
+                            nearby_dates.append({
+                                'date': check_date_str,
+                                'weekday': check_date.strftime('%A'),
+                                'found': '✅ 있음',
+                                'close': f"${soxl_data_original.loc[idx, 'Close']:.2f}"
+                            })
+                            break
+                    
+                    if not found:
+                        weekday = check_date.strftime('%A')
+                        nearby_dates.append({
+                            'date': check_date_str,
+                            'weekday': weekday,
+                            'found': '❌ 없음' if weekday not in ['Saturday', 'Sunday'] else '📅 주말',
+                            'close': '-'
+                        })
+                
+                # 날짜별 상태 표시
+                for date_info in nearby_dates:
+                    if date_info['date'] == target_date_str:
+                        st.markdown(f"**{date_info['date']} ({date_info['weekday']})**: {date_info['found']} {date_info['close']}")
+                    else:
+                        st.caption(f"{date_info['date']} ({date_info['weekday']}): {date_info['found']} {date_info['close']}")
+                
+                # 가능한 원인 설명
+                st.markdown("**💡 가능한 원인:**")
+                st.write("1. 12월 12일이 휴장일이거나 주말일 수 있습니다.")
+                st.write("2. Yahoo Finance API가 해당 날짜의 데이터를 제공하지 않았을 수 있습니다.")
+                st.write("3. 해당 날짜의 모든 가격 데이터가 None이어서 dropna()로 제거되었을 수 있습니다.")
+                st.write("4. 데이터 캐시가 오래되어 최신 데이터가 반영되지 않았을 수 있습니다.")
+                
+                # 캐시 클리어 버튼
+                if st.button("🔄 데이터 캐시 클리어 및 재로드", key="clear_cache_dec12"):
+                    st.session_state.trader.clear_cache()
+                    st.session_state.trader._stock_data_cache = {}
+                    st.success("✅ 캐시가 클리어되었습니다. 페이지를 새로고침하세요.")
+                    st.rerun()
         else:
             st.error("❌ SOXL 데이터를 가져올 수 없습니다.")
     except Exception as e:
