@@ -1391,28 +1391,45 @@ class SOXLQuantTrader:
         # 2. 과거 종가 기반 포지션 보정 (LOC 매도)
         self.reconcile_positions_with_close_history(soxl_data)
 
-        # 3. 주간 RSI 참조 기반 모드 자동 전환
+        # 3. QQQ 데이터 가져오기 (주간 RSI 계산용, soxl_quant_system.py와 동일한 방식)
+        qqq_data = self.get_stock_data("QQQ", "6mo")  # 충분한 데이터 확보
+        if qqq_data is None:
+            return {"error": "QQQ 데이터를 가져올 수 없습니다."}
+        
+        # 4. 주간 RSI 참조 기반 모드 자동 전환
         self.update_mode_from_reference(rsi_ref_data, today=today)
         
-        # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전, 참조 데이터)
-        one_week_ago_rsi = None
-        two_weeks_ago_rsi = None
-        try:
-            days_until_friday = (4 - today.weekday()) % 7
-            if days_until_friday == 0 and today.weekday() != 4:
-                days_until_friday = 7
-            this_week_friday = today + timedelta(days=days_until_friday)
-            prev_week_friday = this_week_friday - timedelta(days=7)
-            two_weeks_friday = this_week_friday - timedelta(days=14)
-            one_week_ago_rsi = self.get_rsi_from_reference(prev_week_friday, rsi_ref_data)
-            two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_friday, rsi_ref_data)
-        except Exception:
-            pass
+        # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전, soxl_quant_system.py와 동일한 방식)
+        weekly_df = qqq_data.resample('W-FRI').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
+        
+        one_week_ago_rsi = None  # 1주전 RSI (모드 판단에 사용)
+        two_weeks_ago_rsi = None  # 2주전 RSI (모드 판단에 사용)
+        
+        if len(weekly_df) >= 15:
+            # 제공된 함수 방식으로 RSI 계산
+            delta = weekly_df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            
+            # 1주전 RSI (모드 판단에 사용)
+            if len(rsi) >= 2:
+                one_week_ago_rsi = rsi.iloc[-2]
+            # 2주전 RSI (모드 판단에 사용)
+            if len(rsi) >= 3:
+                two_weeks_ago_rsi = rsi.iloc[-3]
         
         if one_week_ago_rsi is None:
-            return {"error": "주간 RSI 참조 데이터를 계산할 수 없습니다."}
+            return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
 
-        # 5. 최신 SHNY 가격 정보 (최소 2일 데이터 필요)
+        # 6. 최신 SHNY 가격 정보 (최소 2일 데이터 필요)
         if len(soxl_data) < 2:
             return {"error": "데이터가 부족합니다. 최소 2일의 데이터가 필요합니다."}
         
@@ -1436,19 +1453,19 @@ class SOXLQuantTrader:
             prev_close_basis_date = soxl_data.index[-2].strftime("%Y-%m-%d")
             display_date = current_date.strftime("%Y-%m-%d")
         
-        # 6. 매수/매도 가격 계산
+        # 7. 매수/매도 가격 계산
 
         buy_price, sell_price = self.calculate_buy_sell_prices(prev_close)
         
-        # 7. 매도 조건 확인
+        # 8. 매도 조건 확인
 
         sell_recommendations = self.check_sell_conditions(latest_soxl, current_date, prev_close)
         
-        # 8. 매수 조건 확인
+        # 9. 매수 조건 확인
         can_buy = self.can_buy_next_round()
         next_buy_amount = self.calculate_position_size(self.current_round) if can_buy else 0
         
-        # 9. 포트폴리오 현황
+        # 10. 포트폴리오 현황
         total_position_value = sum([pos["shares"] * current_price for pos in self.positions])
         total_invested = sum([pos["amount"] for pos in self.positions])
         unrealized_pnl = total_position_value - total_invested

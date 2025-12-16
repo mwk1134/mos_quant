@@ -489,7 +489,7 @@ class SOXLQuantTrader:
         Returns:
             Dict: run_backtest 요약 결과
         """
-        # 캐시 키 생성 (시작일 + 투자금 + 테스트날짜)
+        # 캐시 키 생성 (시작일 + 호투자금 + 테스트날짜)
         cache_key = f"{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}"
         
         # 캐시된 결과가 있고 2분 이내면 재사용

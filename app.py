@@ -793,6 +793,130 @@ def show_daily_recommendation():
         st.error(f"추천 생성 실패: {recommendation['error']}")
         return
     
+    # ========== 임시 디버깅: 12월 12일 데이터 확인 ==========
+    st.markdown("---")
+    st.subheader("🔍 [임시] 12월 12일 데이터 확인")
+    
+    try:
+        # SOXL 데이터 가져오기
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
+        target_date_str = "2025-12-12"
+        
+        if soxl_data is not None and len(soxl_data) > 0:
+            # 12월 12일 데이터 찾기
+            dec12_data = None
+            dec12_index = None
+            for idx in soxl_data.index:
+                if idx.strftime('%Y-%m-%d') == target_date_str:
+                    dec12_data = soxl_data.loc[idx]
+                    dec12_index = idx
+                    break
+            
+            if dec12_data is not None:
+                st.success(f"✅ {target_date_str} 데이터 발견!")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("시가", f"${dec12_data['Open']:.2f}")
+                with col2:
+                    st.metric("고가", f"${dec12_data['High']:.2f}")
+                with col3:
+                    st.metric("저가", f"${dec12_data['Low']:.2f}")
+                with col4:
+                    st.metric("종가", f"${dec12_data['Close']:.2f}")
+                
+                # 전일 종가 확인 (12월 11일)
+                prev_date_str = "2025-12-11"
+                prev_close = None
+                for idx in soxl_data.index:
+                    if idx.strftime('%Y-%m-%d') == prev_date_str:
+                        prev_close = soxl_data.loc[idx, 'Close']
+                        break
+                
+                if prev_close is not None:
+                    st.info(f"📅 전일(12월 11일) 종가: ${prev_close:.2f}")
+                    
+                    # 매수 조건 확인
+                    current_mode = st.session_state.trader.current_mode or "SF"
+                    config = st.session_state.trader.sf_config if current_mode == "SF" else st.session_state.trader.ag_config
+                    buy_price = prev_close * (1 + config['buy_threshold'] / 100)
+                    buy_condition = dec12_data['Close'] < buy_price
+                    
+                    st.markdown("**매수 조건 확인:**")
+                    st.write(f"- 모드: {current_mode} ({'안전모드' if current_mode == 'SF' else '공세모드'})")
+                    st.write(f"- 매수 임계값: {config['buy_threshold']}%")
+                    st.write(f"- 전일 종가: ${prev_close:.2f}")
+                    st.write(f"- 계산된 매수가: ${buy_price:.2f}")
+                    st.write(f"- 12월 12일 종가: ${dec12_data['Close']:.2f}")
+                    
+                    if buy_condition:
+                        st.success(f"✅ 매수 조건 충족: ${dec12_data['Close']:.2f} < ${buy_price:.2f}")
+                    else:
+                        st.warning(f"❌ 매수 조건 불충족: ${dec12_data['Close']:.2f} >= ${buy_price:.2f}")
+                else:
+                    st.warning(f"⚠️ 전일(12월 11일) 데이터를 찾을 수 없습니다.")
+                
+                # 12월 12일 매수 포지션 확인
+                dec12_positions = []
+                for pos in st.session_state.trader.positions:
+                    buy_date = pos.get('buy_date')
+                    if isinstance(buy_date, (datetime, pd.Timestamp)):
+                        buy_date_str = buy_date.strftime('%Y-%m-%d')
+                        if buy_date_str == target_date_str:
+                            dec12_positions.append(pos)
+                
+                if dec12_positions:
+                    st.markdown("**12월 12일 매수 포지션:**")
+                    for pos in dec12_positions:
+                        st.write(f"- {pos['round']}회차: {pos['shares']}주 @ ${pos['buy_price']:.2f} (모드: {pos.get('mode', 'SF')})")
+                        
+                        # 매도 조건 확인
+                        pos_config = st.session_state.trader.sf_config if pos.get('mode', 'SF') == "SF" else st.session_state.trader.ag_config
+                        target_price = pos['buy_price'] * (1 + pos_config['sell_threshold'] / 100)
+                        current_price = recommendation['soxl_current_price']
+                        sell_condition = current_price >= target_price
+                        
+                        st.write(f"  - 매도 목표가: ${target_price:.2f}")
+                        st.write(f"  - 현재가: ${current_price:.2f}")
+                        if sell_condition:
+                            st.success(f"  ✅ 매도 조건 충족: ${current_price:.2f} >= ${target_price:.2f} → 매도 추천 리스트에 표시되어야 함")
+                        else:
+                            st.info(f"  ℹ️ 매도 조건 미충족: ${current_price:.2f} < ${target_price:.2f} → 매도 추천 리스트에 표시되지 않음")
+                        
+                        # 매도 추천 리스트에 실제로 있는지 확인
+                        sell_recommendations = recommendation.get('sell_recommendations', [])
+                        found_in_sell_list = False
+                        for sell_info in sell_recommendations:
+                            sell_pos = sell_info.get('position', {})
+                            if sell_pos.get('round') == pos['round']:
+                                buy_date_check = sell_pos.get('buy_date')
+                                if isinstance(buy_date_check, (datetime, pd.Timestamp)):
+                                    if buy_date_check.strftime('%Y-%m-%d') == target_date_str:
+                                        found_in_sell_list = True
+                                        break
+                                elif str(buy_date_check) == target_date_str:
+                                    found_in_sell_list = True
+                                    break
+                        
+                        if found_in_sell_list:
+                            st.success(f"  ✅ 매도 추천 리스트에 실제로 표시됨!")
+                        else:
+                            st.error(f"  ❌ 매도 추천 리스트에 표시되지 않음!")
+                else:
+                    st.warning(f"⚠️ 12월 12일 매수 포지션이 없습니다.")
+            else:
+                st.error(f"❌ {target_date_str} 데이터를 찾을 수 없습니다.")
+                st.write(f"데이터 범위: {soxl_data.index[0].strftime('%Y-%m-%d')} ~ {soxl_data.index[-1].strftime('%Y-%m-%d')}")
+        else:
+            st.error("❌ SOXL 데이터를 가져올 수 없습니다.")
+    except Exception as e:
+        st.error(f"❌ 디버깅 중 오류 발생: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+    
+    st.markdown("---")
+    # ========== 임시 디버깅 끝 ==========
+    
     # 기본 정보 - 모바일 최적화
     # 모바일에서는 2x2 그리드, 데스크톱에서는 1x4 그리드
     col1, col2 = st.columns(2)
