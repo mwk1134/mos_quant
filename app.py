@@ -966,8 +966,9 @@ def show_daily_recommendation():
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
                     mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
-                    # 손절예정일 빨간색으로 표시
-                    stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일:</span> {stop_loss_date if stop_loss_date else "-"}'
+                    # 손절예정일 빨간색으로 표시 (날짜까지 포함)
+                    stop_loss_display = stop_loss_date if stop_loss_date else "-"
+                    stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
                     st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
                     st.caption(f"매도 사유: {sell_info['reason']}")
                 with col2:
@@ -1012,8 +1013,9 @@ def show_daily_recommendation():
                         # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                         mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
                         mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
-                        # 손절예정일 빨간색으로 표시
-                        stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일:</span> {stop_loss_date if stop_loss_date else "-"}'
+                        # 손절예정일 빨간색으로 표시 (날짜까지 포함)
+                        stop_loss_display = stop_loss_date if stop_loss_date else "-"
+                        stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
                         st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
                     with col2:
                         st.caption(f"매수체결일: {buy_date_str}")
