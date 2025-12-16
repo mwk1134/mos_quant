@@ -696,11 +696,32 @@ class SOXLQuantTrader:
                                     print(f"   Open: {row['Open']}, High: {row['High']}, Low: {row['Low']}, Close: {row['Close']}, Volume: {row['Volume']}")
                                     all_none = pd.isna(row['Open']) and pd.isna(row['High']) and pd.isna(row['Low']) and pd.isna(row['Close']) and pd.isna(row['Volume'])
                                     print(f"   모든 값이 None인가? {all_none}")
-                                    if all_none:
-                                        print(f"   ⚠️ 12월 12일의 모든 가격 데이터가 None입니다. dropna()로 제거될 예정입니다.")
+                                    if pd.isna(row['Close']):
+                                        print(f"   ⚠️ 12월 12일의 Close 값이 None입니다. 전일 종가로 보정이 필요합니다.")
                                 
-                                # NaN 값 제거 (Open, High, Low, Close가 모두 NaN인 행만 제거)
-                                # Volume은 선택적이므로 Close만 확인
+                                # Close가 None인 경우 전일 종가로 보정
+                                df_sorted = df.sort_values('Date')
+                                for idx in df_sorted.index:
+                                    if pd.isna(df_sorted.loc[idx, 'Close']):
+                                        # 전일 종가 찾기
+                                        prev_rows = df_sorted[df_sorted['Date'] < df_sorted.loc[idx, 'Date']]
+                                        if len(prev_rows) > 0:
+                                            prev_close = prev_rows.iloc[-1]['Close']
+                                            if not pd.isna(prev_close):
+                                                # Close가 None이면 전일 종가로 보정
+                                                df_sorted.loc[idx, 'Close'] = prev_close
+                                                # Open, High, Low도 None이면 전일 종가로 보정
+                                                if pd.isna(df_sorted.loc[idx, 'Open']):
+                                                    df_sorted.loc[idx, 'Open'] = prev_close
+                                                if pd.isna(df_sorted.loc[idx, 'High']):
+                                                    df_sorted.loc[idx, 'High'] = prev_close
+                                                if pd.isna(df_sorted.loc[idx, 'Low']):
+                                                    df_sorted.loc[idx, 'Low'] = prev_close
+                                                print(f"✅ [보정] {df_sorted.loc[idx, 'Date'].strftime('%Y-%m-%d')} Close 값이 None이어서 전일 종가 ${prev_close:.2f}로 보정했습니다.")
+                                
+                                df = df_sorted
+                                
+                                # NaN 값 제거 (보정 후에도 Close가 None인 행만 제거)
                                 df = df.dropna(subset=['Close'])  # Close가 있으면 유효한 거래일로 간주
                                 df.set_index('Date', inplace=True)
                                 
