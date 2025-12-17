@@ -405,7 +405,7 @@ class SOXLQuantTrader:
         else:
             self.sf_config = {
                 "buy_threshold": 3.5,   # 전일 종가 대비 +3.5%에 매수 (매수가)
-                "sell_threshold": 1.4,  # 전일 종가 대비 +1.4%에 매도 (매도가)
+                "sell_threshold": 1.1,  # 전일 종가 대비 +1.1%에 매도 (매도가)
                 "max_hold_days": 35,    # 최대 보유기간 35일
                 "split_count": 7,       # 7회 분할매수
                 "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
