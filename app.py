@@ -776,7 +776,8 @@ def show_daily_recommendation():
                         key_round = int(key_parts[0])
                         key_date = key_parts[1]
                         
-                        # 회차와 매수일이 일치하면 수정 적용
+                        # 회차와 매수일이 일치하면 수정 적용 (매가는 무시)
+                        # 기존에 매가가 포함된 키 형식도 지원 (key_parts[2]가 있으면 무시)
                         if pos['round'] == key_round and buy_date_str == key_date:
                             # 포지션 수정 (인덱스 사용)
                             st.session_state.trader.update_position(
@@ -1170,9 +1171,9 @@ def show_daily_recommendation():
                         if 'position_edits' not in st.session_state:
                             st.session_state.position_edits = {}
                         
-                        # 현재 포지션의 고유 식별자 생성 (회차 + 매수일)
+                        # 현재 포지션의 고유 식별자 생성 (회차 + 매수일만 사용, 매가는 제외)
                         buy_date_str = selected_position['buy_date'].strftime('%Y-%m-%d') if isinstance(selected_position['buy_date'], (datetime, pd.Timestamp)) else str(selected_position['buy_date'])
-                        position_key = f"{selected_position['round']}_{buy_date_str}_{selected_position['buy_price']}"
+                        position_key = f"{selected_position['round']}_{buy_date_str}"
                         st.session_state.position_edits[position_key] = {
                             'shares': new_shares,
                             'buy_price': new_buy_price
