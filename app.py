@@ -1549,7 +1549,7 @@ def show_advanced_settings():
     # 기본값 정의
     default_sf_config = {
         "buy_threshold": 3.5,
-        "sell_threshold": 1.4,
+        "sell_threshold": 1.1,
         "max_hold_days": 35,
         "split_count": 7,
         "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
@@ -1590,7 +1590,7 @@ def show_advanced_settings():
             "매도 임계값 (%)",
             min_value=0.0,
             max_value=10.0,
-            value=float(sf_config.get("sell_threshold", 1.4)),
+            value=float(sf_config.get("sell_threshold", 1.1)),
             step=0.1,
             key="sf_sell_threshold"
         )
