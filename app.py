@@ -963,7 +963,9 @@ def show_daily_recommendation():
                 # 레이아웃: 좌측 주요 정보, 우측 매수 정보
                 col1, col2 = st.columns([3, 2])
                 with col1:
-                    st.info(f"📦 {pos['round']}회차 매도: {pos['shares']}주 @ ${sell_info['sell_price']:.2f}")
+                    # 매도 수량을 정수로 명시적 변환 (소수점 처리)
+                    sell_shares = int(pos['shares']) if isinstance(pos['shares'], (int, float)) else pos['shares']
+                    st.info(f"📦 {pos['round']}회차 매도: {sell_shares}주 @ ${sell_info['sell_price']:.2f}")
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
                     mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
