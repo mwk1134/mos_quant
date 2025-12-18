@@ -327,8 +327,8 @@ def show_mobile_settings():
     # session_state에 값이 있으면 사용, 없으면 기본값
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
-    # 날짜 입력 + 오늘 버튼 + KMW/JEH/JSD 프리셋 버튼
-    start_col1, start_col2, start_col3, start_col4, start_col5, start_col6, start_col7, start_col8 = st.columns([3, 1, 1, 1, 1, 1, 1, 1])
+    # 날짜 입력 + KMW/JEH/JSD 프리셋 버튼
+    start_col1, start_col2, start_col3, start_col4, start_col5, start_col6, start_col7 = st.columns([3, 1, 1, 1, 1, 1, 1])
     with start_col1:
         session_start_date = st.date_input(
             "📅 투자 시작일",
@@ -336,12 +336,6 @@ def show_mobile_settings():
             max_value=datetime.now()
         )
     with start_col2:
-        if st.button("오늘", help="투자 시작일을 오늘 날짜로 설정"):
-            today = datetime.now().date()
-            st.session_state.session_start_date = today.strftime('%Y-%m-%d')
-            st.session_state.trader = None
-            st.rerun()
-    with start_col3:
         if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000"):
             # KMW 프리셋 불러오기
             kmw = st.session_state.kmw_preset
@@ -359,7 +353,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.success("✅ KMW 프리셋이 적용되었습니다.")
             st.rerun()
-    with start_col4:
+    with start_col3:
         if st.button("KMW 저장", help="현재 설정과 수정된 포지션 정보를 KMW 프리셋에 저장"):
             # 현재 설정을 KMW 프리셋에 저장
             st.session_state.kmw_preset = {
@@ -369,7 +363,7 @@ def show_mobile_settings():
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
             st.success("✅ KMW 프리셋이 저장되었습니다!")
-    with start_col5:
+    with start_col4:
         if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 시드증액 없음"):
             # JEH 프리셋 불러오기
             jeh = st.session_state.jeh_preset
@@ -387,7 +381,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.success("✅ JEH 프리셋이 적용되었습니다.")
             st.rerun()
-    with start_col6:
+    with start_col5:
         if st.button("JEH 저장", help="현재 설정과 수정된 포지션 정보를 JEH 프리셋에 저장"):
             # 현재 설정을 JEH 프리셋에 저장
             st.session_state.jeh_preset = {
@@ -397,7 +391,7 @@ def show_mobile_settings():
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
             st.success("✅ JEH 프리셋이 저장되었습니다!")
-    with start_col7:
+    with start_col6:
         if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음"):
             # JSD 프리셋 불러오기
             jsd = st.session_state.jsd_preset
@@ -415,7 +409,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.success("✅ JSD 프리셋이 적용되었습니다.")
             st.rerun()
-    with start_col8:
+    with start_col7:
         if st.button("JSD 저장", help="현재 설정과 수정된 포지션 정보를 JSD 프리셋에 저장"):
             # 현재 설정을 JSD 프리셋에 저장
             st.session_state.jsd_preset = {

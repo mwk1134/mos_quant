@@ -1225,6 +1225,7 @@ class SOXLQuantTrader:
         """
         과거 종가가 매도 목표가를 터치한 포지션을 보정하여 자동 매도 처리한다.
         LOC 매도 특성상 종가가 목표가 이상이면 체결되는 것을 반영하기 위함.
+        손절예정일이 지난 포지션도 종가 기준으로 LOC 매도 처리한다.
         장중에는 오늘 날짜 데이터를 제외하고 과거 확정된 데이터만 사용한다.
         Args:
             soxl_data (DataFrame): 최근 SOXL 일별 데이터 (Close 필수)
@@ -1254,28 +1255,61 @@ class SOXLQuantTrader:
             position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
             target_price = position["buy_price"] * (1 + position_config["sell_threshold"] / 100)
 
+            # 1. 목표가 도달한 경우 매도
             hit_rows = future_data[future_data["Close"] >= target_price]
-            if hit_rows.empty:
-                continue
+            if not hit_rows.empty:
+                sell_row = hit_rows.iloc[0]
+                sell_date = sell_row.name
+                sell_close = sell_row["Close"]
 
-            sell_row = hit_rows.iloc[0]
-            sell_date = sell_row.name
-            sell_close = sell_row["Close"]
+                proceeds = position["shares"] * sell_close
+                profit = proceeds - position["amount"]
+                profit_rate = (profit / position["amount"]) * 100 if position["amount"] else 0.0
 
-            proceeds = position["shares"] * sell_close
-            profit = proceeds - position["amount"]
-            profit_rate = (profit / position["amount"]) * 100 if position["amount"] else 0.0
+                self.positions.remove(position)
+                self.available_cash += proceeds
+                sold_rounds.append(position["round"])
 
-            self.positions.remove(position)
-            self.available_cash += proceeds
-            sold_rounds.append(position["round"])
+                print("🧾 과거 종가 매도 보정 실행 (목표가 도달)")
+                print(f"   - 회차: {position['round']}회차")
+                print(f"   - 매수일: {buy_date.strftime('%Y-%m-%d')} | 매수가: ${position['buy_price']:.2f}")
+                print(f"   - 목표가: ${target_price:.2f}")
+                print(f"   - sell_date: {sell_date.strftime('%Y-%m-%d')} | 종가: ${sell_close:.2f}")
+                print(f"   - 실현손익: ${profit:,.0f} ({profit_rate:+.2f}%)")
+                continue  # 이미 매도 처리했으므로 다음 포지션으로
 
-            print("🧾 과거 종가 매도 보정 실행")
-            print(f"   - 회차: {position['round']}회차")
-            print(f"   - 매수일: {buy_date.strftime('%Y-%m-%d')} | 매수가: ${position['buy_price']:.2f}")
-            print(f"   - 목표가: ${target_price:.2f}")
-            print(f"   - sell_date: {sell_date.strftime('%Y-%m-%d')} | 종가: ${sell_close:.2f}")
-            print(f"   - 실현손익: ${profit:,.0f} ({profit_rate:+.2f}%)")
+            # 2. 손절예정일이 지난 경우 종가 기준으로 LOC 매도
+            # 손절예정일 계산 (거래일 기준)
+            stop_loss_date = buy_date
+            trading_days_count = 0
+            while trading_days_count < position_config["max_hold_days"]:
+                stop_loss_date += timedelta(days=1)
+                if self.is_trading_day(stop_loss_date):
+                    trading_days_count += 1
+            
+            # 손절예정일이 지났는지 확인 (손절예정일 포함하여 그 이후 날짜)
+            # future_data에서 손절예정일 이후 데이터 확인
+            stop_loss_rows = future_data[future_data.index >= stop_loss_date]
+            if not stop_loss_rows.empty:
+                # 손절예정일의 종가로 매도 (손절예정일이 거래일이 아닐 수 있으므로 가장 가까운 거래일 사용)
+                sell_row = stop_loss_rows.iloc[0]
+                sell_date = sell_row.name
+                sell_close = sell_row["Close"]
+
+                proceeds = position["shares"] * sell_close
+                profit = proceeds - position["amount"]
+                profit_rate = (profit / position["amount"]) * 100 if position["amount"] else 0.0
+
+                self.positions.remove(position)
+                self.available_cash += proceeds
+                sold_rounds.append(position["round"])
+
+                print("🧾 과거 종가 매도 보정 실행 (손절예정일 경과)")
+                print(f"   - 회차: {position['round']}회차")
+                print(f"   - 매수일: {buy_date.strftime('%Y-%m-%d')} | 매수가: ${position['buy_price']:.2f}")
+                print(f"   - 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')}")
+                print(f"   - sell_date: {sell_date.strftime('%Y-%m-%d')} | 종가: ${sell_close:.2f}")
+                print(f"   - 실현손익: ${profit:,.0f} ({profit_rate:+.2f}%)")
 
         if sold_rounds:
             sold_count = len(sold_rounds)
@@ -1311,6 +1345,13 @@ class SOXLQuantTrader:
             # 해당 포지션의 모드 설정 가져오기
             position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
             
+            # 손절예정일 계산 (거래일 기준)
+            stop_loss_date = buy_date
+            trading_days_count = 0
+            while trading_days_count < position_config["max_hold_days"]:
+                stop_loss_date += timedelta(days=1)
+                if self.is_trading_day(stop_loss_date):
+                    trading_days_count += 1
 
             # 해당 포지션의 매수체결가 기준으로 매도가 계산
             position_buy_price = position["buy_price"]
@@ -1319,7 +1360,7 @@ class SOXLQuantTrader:
             # 디버깅: 매도 조건 상세 정보
             daily_close = row['Close']
             print(f"   📦 {position['round']}회차: 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (현재가 ${daily_close:.2f})")
-            print(f"      보유기간: {hold_days}일 (최대: {position_config['max_hold_days']}일)")
+            print(f"      보유기간: {hold_days}일 (최대: {position_config['max_hold_days']}일, 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')})")
             
             # 1. LOC 매도 조건: 종가가 매도목표가에 도달했을 때 (종가 >= 매도목표가)
             if daily_close >= sell_price:
@@ -1330,13 +1371,13 @@ class SOXLQuantTrader:
                     "sell_price": daily_close  # 종가에 매도
                 })
             
-            # 2. 보유기간 초과 시 매도 (당일 종가에 매도)
-            elif hold_days > position_config["max_hold_days"]:
-                print(f"      ✅ 매도 조건 2: 보유기간 초과 ({hold_days}일 > {position_config['max_hold_days']}일)")
+            # 2. 손절예정일 경과 시 매도 (당일 종가에 LOC 매도)
+            elif current_date >= stop_loss_date:
+                print(f"      ✅ 매도 조건 2: 손절예정일 경과 (현재: {current_date.strftime('%Y-%m-%d')} >= 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')})")
                 sell_positions.append({
                     "position": position,
-                    "reason": f"보유기간 초과 ({hold_days+1}일)",
-                    "sell_price": row['Close']  # 종가에 매도
+                    "reason": f"손절예정일 경과 (보유기간: {hold_days}일)",
+                    "sell_price": row['Close']  # 종가에 LOC 매도
                 })
         
         # 디버깅: 매도 추천 결과
