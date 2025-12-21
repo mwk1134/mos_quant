@@ -139,13 +139,15 @@ class SOXLQuantTrader:
     def check_and_update_rsi_data(self, filename: str = "weekly_rsi_reference.json") -> bool:
         """
         RSI 참조 데이터가 최신인지 확인하고 필요시 업데이트 (JSON 형식)
+        최신 주간 RSI 값이 비어있는지도 확인하여 자동 업데이트
         Args:
             filename: RSI 참조 파일명
         Returns:
-            bool: 업데이트 성공 여부
+            bool: 업데이트 성공 여부 (True: 최신 상태, False: 업데이트 필요)
         """
         try:
             today = datetime.now()
+            current_year = today.strftime('%Y')
             
             # PyInstaller 실행파일에서 파일 경로 처리
             if getattr(sys, 'frozen', False):
@@ -183,25 +185,55 @@ class SOXLQuantTrader:
                 metadata = existing_data.get('metadata', {})
                 last_updated = metadata.get('last_updated', '')
                 
+                # 최신 주간 RSI 값 확인 (현재 연도의 가장 최근 주차)
+                latest_rsi_missing = False
+                if current_year in existing_data and existing_data[current_year].get('weeks'):
+                    # 현재 연도의 가장 최근 주차 찾기
+                    current_year_weeks = existing_data[current_year]['weeks']
+                    if current_year_weeks:
+                        # 가장 최근 주차의 종료일 확인
+                        latest_week = max(current_year_weeks, key=lambda x: x.get('end', ''))
+                        latest_week_end = datetime.strptime(latest_week['end'], '%Y-%m-%d')
+                        
+                        # 오늘 날짜가 가장 최근 주차 종료일보다 7일 이상 지났으면 업데이트 필요
+                        days_since_latest = (today - latest_week_end).days
+                        if days_since_latest > 7:
+                            print(f"⚠️ 최신 주간 RSI가 {days_since_latest}일 전 데이터입니다. 업데이트가 필요합니다.")
+                            latest_rsi_missing = True
+                        else:
+                            print(f"✅ 최신 주간 RSI 확인: {latest_week['end']} ({days_since_latest}일 전)")
+                    else:
+                        print("⚠️ 현재 연도 데이터가 비어있습니다. 업데이트가 필요합니다.")
+                        latest_rsi_missing = True
+                else:
+                    print("⚠️ 현재 연도 데이터가 없습니다. 업데이트가 필요합니다.")
+                    latest_rsi_missing = True
+                
                 if last_updated:
                     last_update_date = datetime.strptime(last_updated, '%Y-%m-%d')
                     print(f"📅 RSI 참조 데이터 마지막 업데이트: {last_updated}")
                     
-                    # 마지막 업데이트가 오늘로부터 1주일 이내면 업데이트 불필요
-                    if (today - last_update_date).days <= 7:
+                    # 마지막 업데이트가 오늘로부터 1주일 이내이고 최신 RSI도 있으면 업데이트 불필요
+                    if (today - last_update_date).days <= 7 and not latest_rsi_missing:
                         print("[SUCCESS] RSI 참조 데이터가 최신 상태입니다.")
                         return True
                     
-                    print(f"⚠️ RSI 참조 데이터가 {(today - last_update_date).days}일 전 데이터입니다. 업데이트가 필요합니다.")
+                    if latest_rsi_missing:
+                        print(f"⚠️ 최신 주간 RSI 값이 비어있어 업데이트가 필요합니다.")
+                    else:
+                        print(f"⚠️ RSI 참조 데이터가 {(today - last_update_date).days}일 전 데이터입니다. 업데이트가 필요합니다.")
                 else:
                     print("⚠️ RSI 참조 데이터 메타데이터가 없습니다.")
+                    latest_rsi_missing = True
             else:
                 print("⚠️ RSI 참조 파일이 없습니다. 전체 데이터 생성이 필요합니다.")
+                latest_rsi_missing = True
             
-            # 사용자에게 업데이트 확인
-            print("\n[INFO] RSI 참조 데이터 업데이트가 필요합니다.")
-            print("[INFO] 제공해주신 2010년~2025년 RSI 데이터를 모두 추가하시겠습니까?")
-            print("   (이 작업은 한 번만 수행하면 됩니다)")
+            # 최신 RSI가 비어있거나 업데이트가 필요한 경우 False 반환 (자동 업데이트 트리거)
+            if latest_rsi_missing:
+                print("\n[INFO] 최신 주간 RSI 값이 비어있어 자동 업데이트를 진행합니다.")
+            else:
+                print("\n[INFO] RSI 참조 데이터 업데이트가 필요합니다.")
             
             return False
             
