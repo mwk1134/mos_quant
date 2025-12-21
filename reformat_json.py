@@ -52,3 +52,4 @@ if __name__ == "__main__":
     output_file = 'data/weekly_rsi_reference copy.json'
     reformat_json_file(input_file, output_file)
 
+
