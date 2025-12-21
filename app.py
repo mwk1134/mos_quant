@@ -293,6 +293,19 @@ def initialize_trader():
                             seed['amount'],
                             f"시드증액 {seed['date']}"
                         )
+                
+                # RSI 참조 데이터 자동 업데이트 체크 (웹앱 실행 시마다)
+                try:
+                    if not st.session_state.trader.check_and_update_rsi_data():
+                        # 최신 데이터가 아니면 자동으로 업데이트
+                        with st.spinner('RSI 참조 데이터 업데이트 중...'):
+                            if st.session_state.trader.update_rsi_reference_file():
+                                st.success("✅ RSI 참조 데이터가 최신 상태로 업데이트되었습니다.")
+                            else:
+                                st.warning("⚠️ RSI 참조 데이터 업데이트에 실패했습니다. 기존 데이터를 사용합니다.")
+                except Exception as e:
+                    # RSI 업데이트 실패해도 웹앱은 계속 진행
+                    st.warning(f"⚠️ RSI 데이터 확인 중 오류 발생 (무시하고 계속 진행): {str(e)[:100]}")
         except Exception as e:
             st.error(f"시스템 초기화 실패: {str(e)}")
             st.info("페이지를 새로고침해주세요.")
