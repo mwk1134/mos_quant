@@ -1399,7 +1399,30 @@ class SOXLQuantTrader:
         # 4. 주간 RSI 참조 기반 모드 자동 전환
         self.update_mode_from_reference(rsi_ref_data, today=today)
         
-        # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전, soxl_quant_system.py와 동일한 방식)
+        # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전)
+        # 실시간 QQQ 데이터로 계산하되, 오늘 날짜 기준으로 올바른 주차 사용
+        
+        # 오늘 날짜 기준으로 가장 최근 완료된 주차(지난주 금요일) 찾기
+        today_date = today.date()
+        days_until_friday = (4 - today.weekday()) % 7  # 금요일(4)까지의 일수
+        if days_until_friday == 0 and today.weekday() != 4:  # 금요일이 아닌데 계산이 0이면 다음 주 금요일
+            days_until_friday = 7
+        
+        # 이번 주 금요일 계산
+        this_week_friday = today + timedelta(days=days_until_friday)
+        # 가장 최근 완료된 주차는 지난주 금요일 (오늘이 금요일이 아니면 이번 주 금요일에서 7일 전)
+        if today.weekday() == 4:  # 오늘이 금요일이면 오늘이 가장 최근 주차
+            latest_completed_friday = today
+        else:  # 금요일이 아니면 지난주 금요일이 가장 최근 완료된 주차
+            latest_completed_friday = this_week_friday - timedelta(days=7)
+        
+        # 1주전과 2주전 금요일 계산
+        # 1주전 RSI = 지난주 금요일의 RSI (latest_completed_friday)
+        # 2주전 RSI = 지지난주 금요일의 RSI (latest_completed_friday - 7일)
+        one_week_ago_friday = latest_completed_friday  # 지난주 금요일 (1주전)
+        two_weeks_ago_friday = latest_completed_friday - timedelta(days=7)  # 지지난주 금요일 (2주전)
+        
+        # 실시간 QQQ 데이터로 주간 RSI 계산
         weekly_df = qqq_data.resample('W-FRI').agg({
             'Open': 'first',
             'High': 'max',
@@ -1419,12 +1442,42 @@ class SOXLQuantTrader:
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             
-            # 1주전 RSI (모드 판단에 사용)
-            if len(rsi) >= 2:
-                one_week_ago_rsi = rsi.iloc[-2]
-            # 2주전 RSI (모드 판단에 사용)
-            if len(rsi) >= 3:
-                two_weeks_ago_rsi = rsi.iloc[-3]
+            # RSI와 weekly_df의 인덱스(금요일 날짜)를 매칭하여 1주전, 2주전 RSI 찾기
+            # weekly_df의 인덱스는 DatetimeIndex (금요일 날짜)
+            latest_completed_friday_dt = pd.Timestamp(latest_completed_friday.date())
+            one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+            two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+            
+            # 1주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
+            earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
+            if len(earlier_dates_1w) > 0:
+                one_week_rsi_date = earlier_dates_1w[-1]
+                one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
+                if one_week_rsi_idx < len(rsi):
+                    one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
+                    if pd.isna(one_week_ago_rsi):
+                        one_week_ago_rsi = None
+            
+            # 2주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
+            earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
+            if len(earlier_dates_2w) > 0:
+                two_weeks_rsi_date = earlier_dates_2w[-1]
+                two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
+                if two_weeks_rsi_idx < len(rsi):
+                    two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
+                    if pd.isna(two_weeks_ago_rsi):
+                        two_weeks_ago_rsi = None
+            
+            # 디버깅 정보 출력
+            print(f"📅 RSI 계산 기준 (실시간 계산):")
+            print(f"   오늘: {today.strftime('%Y-%m-%d')} ({['월','화','수','목','금','토','일'][today.weekday()]})")
+            print(f"   가장 최근 완료된 주차: {latest_completed_friday.strftime('%Y-%m-%d')} (금요일)")
+            print(f"   1주전 금요일: {one_week_ago_friday.strftime('%Y-%m-%d')}")
+            print(f"   2주전 금요일: {two_weeks_ago_friday.strftime('%Y-%m-%d')}")
+            if one_week_ago_rsi is not None:
+                print(f"   1주전 RSI: {one_week_ago_rsi:.2f}")
+            if two_weeks_ago_rsi is not None:
+                print(f"   2주전 RSI: {two_weeks_ago_rsi:.2f}")
         
         if one_week_ago_rsi is None:
             return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
