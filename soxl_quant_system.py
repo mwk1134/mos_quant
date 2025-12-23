@@ -471,6 +471,7 @@ class SOXLQuantTrader:
         
         # 시드증액 관리
         self.seed_increases = []  # [{"date": "2025-10-21", "amount": 31000, "description": "시드증액"}]
+        self.processed_seed_dates = set()  # 이미 처리된 시드증액 날짜 추적
         
         # 세션 상태: 사용자 입력 시작일 (파일 저장 없음)
         self.session_start_date: Optional[str] = None
@@ -527,8 +528,15 @@ class SOXLQuantTrader:
         Returns:
             Dict: run_backtest 요약 결과
         """
-        # 캐시 키 생성 (시작일 + 호투자금 + 테스트날짜)
-        cache_key = f"{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}"
+        # 캐시 키 생성 (시작일 + 초기투자금 + 테스트날짜 + 시드증액 정보)
+        # 시드증액 정보를 문자열로 변환하여 캐시 키에 포함
+        seed_increases_str = ""
+        if self.seed_increases:
+            # 시드증액을 날짜와 금액 기준으로 정렬하여 문자열로 변환
+            sorted_seeds = sorted(self.seed_increases, key=lambda x: x["date"])
+            seed_increases_str = "_".join([f"{s['date']}_{s['amount']}" for s in sorted_seeds])
+        
+        cache_key = f"{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}_{seed_increases_str}"
         
         # 캐시된 결과가 있고 2분 이내면 재사용
         if cache_key in self._simulation_cache:
@@ -538,16 +546,31 @@ class SOXLQuantTrader:
                 return cached_result
         
         latest_trading_day = self.get_latest_trading_day()
-        end_date_str = latest_trading_day.strftime('%Y-%m-%d')
+        
+        # 시드증액 날짜 중 가장 늦은 날짜 확인 (시드증액이 시뮬레이션에 반영되도록)
+        latest_seed_date = None
+        if self.seed_increases:
+            seed_dates = [datetime.strptime(si["date"], "%Y-%m-%d").date() for si in self.seed_increases]
+            latest_seed_date = max(seed_dates)
+        
+        # 시뮬레이션 종료일 결정: 최신 거래일과 시드증액 날짜 중 더 늦은 날짜 사용
+        if latest_seed_date and latest_seed_date > latest_trading_day.date():
+            # 시드증액 날짜가 더 늦으면, 해당 날짜까지 시뮬레이션 실행
+            # (시장이 열려있어도 시드증액 날짜까지는 실행해야 함)
+            end_date_str = latest_seed_date.strftime('%Y-%m-%d')
+            effective_end_date = latest_seed_date
+        else:
+            end_date_str = latest_trading_day.strftime('%Y-%m-%d')
+            effective_end_date = latest_trading_day.date()
 
         # 시작일이 최신 거래일보다 늦는 경우(예: 시작일=오늘, 장 미마감으로 최신 거래일=어제)
         # 백테스트를 건너뛰고 포트폴리오만 초기화하여 당일 추천이 가능하도록 처리
         try:
             start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
-            end_dt = latest_trading_day.date()
+            end_dt = effective_end_date
             if start_dt > end_dt:
                 if not quiet:
-                    print(f"⚠️ 백테스트 스킵: 시작일({start_dt})이 최신 거래일({end_dt})보다 늦음")
+                    print(f"⚠️ 백테스트 스킵: 시작일({start_dt})이 종료일({end_dt})보다 늦음")
                 self.reset_portfolio()
                 minimal_result = {"skipped": True, "start_date": start_date, "end_date": end_date_str}
                 self._simulation_cache[cache_key] = (minimal_result, datetime.now())
@@ -1853,6 +1876,9 @@ class SOXLQuantTrader:
         self.current_investment_capital = self.initial_capital
         self.trading_days_count = 0
         
+        # 처리된 시드증액 날짜 초기화
+        self.processed_seed_dates = set()
+        
         # 주차 추적 초기화
         self.current_week_friday = None
     
@@ -2109,16 +2135,26 @@ class SOXLQuantTrader:
             if self.is_trading_day(current_date):
                 self.trading_days_count += 1
                 
-                # 시드증액 반영 (해당 날짜에 시드증액이 있는 경우)
+                # 시드증액 반영 (해당 날짜 또는 그 이전 날짜에 시드증액이 있는 경우)
                 current_date_str = current_date.strftime('%Y-%m-%d')
-                seed_increases_today = self.get_seed_increases_for_date(current_date_str)
-                if seed_increases_today:
+                current_date_obj = current_date.date()
+                
+                # 현재 날짜 이하의 모든 미반영 시드증액 찾기
+                unprocessed_seeds = []
+                for seed in self.seed_increases:
+                    seed_date_str = seed["date"]
+                    seed_date_obj = datetime.strptime(seed_date_str, "%Y-%m-%d").date()
+                    # 시드증액 날짜가 현재 날짜 이하이고, 아직 처리되지 않은 경우
+                    if seed_date_obj <= current_date_obj and seed_date_str not in self.processed_seed_dates:
+                        unprocessed_seeds.append(seed)
+                
+                if unprocessed_seeds:
                     # 현재 총자산 계산 (현금 + 보유주식 평가금액)
                     total_shares = sum([pos["shares"] for pos in self.positions])
                     current_total_assets = self.available_cash + (total_shares * current_price)
                     
                     # 시드증액 총합 계산
-                    total_seed_increase = sum([si["amount"] for si in seed_increases_today])
+                    total_seed_increase = sum([si["amount"] for si in unprocessed_seeds])
                     
                     # 시드증액을 현금잔고에 추가
                     self.available_cash += total_seed_increase
@@ -2128,7 +2164,12 @@ class SOXLQuantTrader:
                     old_capital = self.current_investment_capital
                     self.current_investment_capital = new_investment_capital
                     
-                    print(f"💰 시드증액 반영: {current_date_str} - ${total_seed_increase:,.0f} 추가")
+                    # 처리된 시드증액 날짜 기록
+                    for seed in unprocessed_seeds:
+                        self.processed_seed_dates.add(seed["date"])
+                    
+                    seed_dates_str = ", ".join([si["date"] for si in unprocessed_seeds])
+                    print(f"💰 시드증액 반영: {current_date_str} (시드증액 날짜: {seed_dates_str}) - ${total_seed_increase:,.0f} 추가")
                     print(f"   현재 총자산: ${current_total_assets:,.0f} + 시드증액: ${total_seed_increase:,.0f} = ${new_investment_capital:,.0f}")
                     print(f"   투자원금 갱신: ${old_capital:,.0f} → ${new_investment_capital:,.0f}")
                 
