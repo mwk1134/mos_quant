@@ -5,9 +5,30 @@ from soxl_quant_system import SOXLQuantTrader
 
 
 class SHNYQuantTrader(SOXLQuantTrader):
-    """SHNY 전용 트레이더 (기본 동작은 soxl_quant_system.py 그대로 사용)"""
-    # 별도 ticker 인자를 넘길 필요가 없도록 기본 구현을 그대로 사용
-    pass
+    """SHNY 전용 트레이더 (SHNY 티커 사용)"""
+    
+    def __init__(self, initial_capital: float = 40000, sf_config=None, ag_config=None):
+        """
+        초기화
+        Args:
+            initial_capital: 투자원금
+            sf_config: SF 모드 설정
+            ag_config: AG 모드 설정
+        """
+        super().__init__(initial_capital, sf_config, ag_config)
+        self.ticker = "SHNY"  # SHNY 티커 설정
+        self._original_get_stock_data = super().get_stock_data  # 원본 메서드 저장
+    
+    def get_stock_data(self, symbol: str, period: str = "1mo"):
+        """
+        주식 데이터 가져오기 (SOXL 요청을 SHNY로 리다이렉트)
+        """
+        # SOXL 요청을 SHNY로 변경
+        if symbol == "SOXL":
+            symbol = self.ticker
+        
+        # 원본 메서드 호출
+        return self._original_get_stock_data(symbol, period)
 
 
 def main():
