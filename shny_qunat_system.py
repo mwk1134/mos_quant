@@ -1,11 +1,11 @@
 import os
 from datetime import datetime, timedelta
 
-from input_quant_system import SOXLQuantTrader
+from soxl_quant_system import SOXLQuantTrader
 
 
 class SHNYQuantTrader(SOXLQuantTrader):
-    """SHNY 전용 트레이더 (기본 동작은 input_quant_system.py 그대로 사용)"""
+    """SHNY 전용 트레이더 (기본 동작은 soxl_quant_system.py 그대로 사용)"""
     # 별도 ticker 인자를 넘길 필요가 없도록 기본 구현을 그대로 사용
     pass
 
