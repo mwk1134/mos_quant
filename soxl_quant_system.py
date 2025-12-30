@@ -1019,14 +1019,19 @@ class SOXLQuantTrader:
         ]
         
         # 안전모드 조건 확인
-        if any(safe_conditions):
+        safe_result = any(safe_conditions)
+        if safe_result:
+            print(f"   ✅ 안전모드 조건 만족: {safe_conditions}")
             return "SF"
         
         # 공세모드 조건 확인
-        if any(aggressive_conditions):
+        aggressive_result = any(aggressive_conditions)
+        if aggressive_result:
+            print(f"   ✅ 공세모드 조건 만족: {aggressive_conditions}")
             return "AG"
         
         # 조건에 없으면 전주 모드 유지
+        print(f"   ⚠️ 조건 없음, 전주 모드 유지: {prev_mode}")
         return prev_mode
     
     def update_mode(self, qqq_data: pd.DataFrame) -> str:
@@ -1133,7 +1138,9 @@ class SOXLQuantTrader:
                 return self.current_mode
             
             # 모드 결정 (2주전 vs 1주전 비교)
+            print(f"🔍 update_mode 모드 결정: 현재 모드={self.current_mode}, 1주전 RSI={one_week_ago_rsi:.2f}, 2주전 RSI={two_weeks_ago_rsi:.2f}")
             new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, self.current_mode)
+            print(f"🔍 determine_mode 결과: {new_mode} (입력: current_rsi={one_week_ago_rsi:.2f}, prev_rsi={two_weeks_ago_rsi:.2f}, prev_mode={self.current_mode})")
             
             if new_mode != self.current_mode:
                 print(f"🔄 모드 전환: {self.current_mode} → {new_mode} (주차: {this_week_friday.strftime('%Y-%m-%d')})")
