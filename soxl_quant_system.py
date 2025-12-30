@@ -1612,10 +1612,13 @@ class SOXLQuantTrader:
         self.reconcile_positions_with_close_history(soxl_data)
 
         # 4. QQQ 주간 RSI 기반 모드 자동 전환
-        # update_mode()가 같은 주 내에서는 모드를 변경하지 않으므로,
-        # simulate_from_start_to_today()에서 설정된 모드가 현재 주차와 다를 경우에만 재계산됨
+        # simulate_from_start_to_today()에서 이미 모드가 설정되었을 수 있으므로,
+        # get_daily_recommendation()에서는 항상 최신 RSI로 모드를 재계산해야 함
+        # 같은 주 내에서는 모드를 변경하지 않지만, simulate_from_start_to_today()에서
+        # 설정된 모드가 잘못되었을 수 있으므로 current_week_friday를 리셋하여 재계산
         old_mode = self.current_mode
         old_week_friday = self.current_week_friday
+        self.current_week_friday = None  # 강제로 모드 재계산
         new_mode = self.update_mode(qqq_data)
         if old_mode != new_mode or old_week_friday != self.current_week_friday:
             print(f"🔍 get_daily_recommendation 모드 업데이트: {old_mode} → {new_mode} (주차: {old_week_friday} → {self.current_week_friday})")
