@@ -910,6 +910,32 @@ def show_daily_recommendation():
         mode_name = "안전모드" if recommendation['mode'] == "SF" else "공세모드"
         mode_class = "mode-sf" if recommendation['mode'] == "SF" else "mode-ag"
         st.markdown(f"<div class='{mode_class}'>🎯 모드: {recommendation['mode']} ({mode_name})</div>", unsafe_allow_html=True)
+        
+        # 디버깅 정보 표시
+        if 'debug_info' in recommendation and recommendation['debug_info']:
+            debug_info = recommendation['debug_info']
+            with st.expander("🔍 모드 판정 디버깅 정보", expanded=False):
+                st.write("**현재 모드:**", recommendation['mode'])
+                st.write("**1주전 RSI:**", debug_info.get('one_week_ago_rsi'))
+                st.write("**2주전 RSI:**", debug_info.get('two_weeks_ago_rsi'))
+                
+                if debug_info.get('mode_debug'):
+                    md = debug_info['mode_debug']
+                    st.write("**모드 업데이트 전:**", md.get('old_mode'))
+                    st.write("**모드 업데이트 후:**", md.get('new_mode'))
+                    st.write("**모드 변경 여부:**", "✅ 변경됨" if md.get('mode_changed') else "❌ 변경 안됨")
+                    st.write("**이전 주차:**", md.get('old_week_friday'))
+                    st.write("**새 주차:**", md.get('new_week_friday'))
+                
+                if debug_info.get('update_mode_debug'):
+                    umd = debug_info['update_mode_debug']
+                    st.write("**update_mode 호출 여부:**", "✅ 호출됨" if umd.get('update_mode_called') else "❌ 호출 안됨")
+                    st.write("**update_mode 전 모드:**", umd.get('current_mode_before'))
+                    st.write("**determine_mode 결과:**", umd.get('determine_mode_result'))
+                    st.write("**모드 변경 여부:**", "✅ 변경됨" if umd.get('mode_changed') else "❌ 변경 안됨")
+                    st.write("**현재 주차:**", umd.get('this_week_friday'))
+                
+                st.write("**현재 주차 (current_week_friday):**", debug_info.get('current_week_friday'))
     
     with col2:
         one_week_rsi = recommendation.get('qqq_one_week_ago_rsi')

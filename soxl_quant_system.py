@@ -1627,6 +1627,16 @@ class SOXLQuantTrader:
         old_week_friday = self.current_week_friday
         self.current_week_friday = None  # 강제로 모드 재계산
         new_mode = self.update_mode(qqq_data)
+        
+        # 디버깅 정보 저장 (recommendation 딕셔너리에 포함하기 위해)
+        mode_debug_info = {
+            "old_mode": old_mode,
+            "new_mode": new_mode,
+            "old_week_friday": str(old_week_friday) if old_week_friday else None,
+            "new_week_friday": str(self.current_week_friday) if self.current_week_friday else None,
+            "mode_changed": old_mode != new_mode
+        }
+        
         if old_mode != new_mode or old_week_friday != self.current_week_friday:
             print(f"🔍 get_daily_recommendation 모드 업데이트: {old_mode} → {new_mode} (주차: {old_week_friday} → {self.current_week_friday})")
         
@@ -1754,12 +1764,23 @@ class SOXLQuantTrader:
         total_invested = sum([pos["amount"] for pos in self.positions])
         unrealized_pnl = total_position_value - total_invested
         
+        # 디버깅 정보 수집
+        debug_info = {
+            "mode_debug": mode_debug_info,
+            "update_mode_debug": getattr(self, '_mode_debug_info', None),
+            "current_mode": self.current_mode,
+            "current_week_friday": str(self.current_week_friday) if self.current_week_friday else None,
+            "one_week_ago_rsi": float(one_week_ago_rsi) if one_week_ago_rsi is not None else None,
+            "two_weeks_ago_rsi": float(two_weeks_ago_rsi) if two_weeks_ago_rsi is not None else None,
+        }
+        
         recommendation = {
             "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
             "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜
             "mode": self.current_mode,
             "qqq_one_week_ago_rsi": one_week_ago_rsi,  # 1주전 RSI (모드 판단에 사용)
             "qqq_two_weeks_ago_rsi": two_weeks_ago_rsi,  # 2주전 RSI (모드 판단에 사용)
+            "debug_info": debug_info,  # 디버깅 정보
             "soxl_current_price": current_price,
             "buy_price": buy_price,
             "sell_price": sell_price,
