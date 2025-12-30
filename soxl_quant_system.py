@@ -2213,7 +2213,7 @@ class SOXLQuantTrader:
             else:
                 print("⚠️ 백테스팅 시작 전일 데이터를 찾을 수 없습니다.")
         
-        current_week_friday = None  # 현재 주차의 금요일
+        current_week_friday = None  # 현재 주차의 금요일 (로컬 변수)
         previous_day_sold_rounds = 0  # 전날 매도된 회차 수 추적
         
         for i, (current_date, row) in enumerate(soxl_backtest.iterrows()):
@@ -2292,6 +2292,8 @@ class SOXLQuantTrader:
             # 새로운 주차인지 확인 (금요일이 바뀌었는지 또는 첫 번째 날짜인 경우)
             if current_week_friday is None or current_week_friday != this_week_friday:
                 current_week_friday = this_week_friday
+                # self.current_week_friday도 업데이트 (get_daily_recommendation에서 사용)
+                self.current_week_friday = this_week_friday
                 
                 # 새로운 주차의 RSI 값 가져오기 (해당 주차의 금요일 기준)
                 current_week_rsi = self.get_rsi_from_reference(this_week_friday, rsi_ref_data)
