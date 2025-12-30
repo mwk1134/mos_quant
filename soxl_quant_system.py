@@ -1138,6 +1138,9 @@ class SOXLQuantTrader:
                 return self.current_mode
             
             # 모드 결정 (2주전 vs 1주전 비교)
+            # 전 주 모드는 determine_mode에 전달되는 prev_mode (self.current_mode)
+            prev_week_mode = self.current_mode  # 전 주 모드
+            
             print(f"🔍 update_mode 모드 결정: 현재 모드={self.current_mode}, 1주전 RSI={one_week_ago_rsi:.2f}, 2주전 RSI={two_weeks_ago_rsi:.2f}")
             new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, self.current_mode)
             print(f"🔍 determine_mode 결과: {new_mode} (입력: current_rsi={one_week_ago_rsi:.2f}, prev_rsi={two_weeks_ago_rsi:.2f}, prev_mode={self.current_mode})")
@@ -1148,6 +1151,7 @@ class SOXLQuantTrader:
             self._mode_debug_info = {
                 "update_mode_called": True,
                 "current_mode_before": self.current_mode,
+                "prev_week_mode": prev_week_mode,  # 전 주 모드
                 "one_week_ago_rsi": float(one_week_ago_rsi),
                 "two_weeks_ago_rsi": float(two_weeks_ago_rsi),
                 "determine_mode_result": new_mode,
@@ -1640,8 +1644,31 @@ class SOXLQuantTrader:
         # get_daily_recommendation()에서는 항상 최신 RSI로 모드를 재계산해야 함
         # 같은 주 내에서는 모드를 변경하지 않지만, simulate_from_start_to_today()에서
         # 설정된 모드가 잘못되었을 수 있으므로 current_week_friday를 리셋하여 재계산
+        
+        # old_week_friday는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일
+        # 하지만 이것이 현재 주의 금요일과 같을 수 있으므로, 실제 이전 주 금요일을 계산
         old_mode = self.current_mode
-        old_week_friday = self.current_week_friday
+        old_week_friday_raw = self.current_week_friday
+        
+        # 실제 이전 주 금요일 계산 (update_mode에서 사용할 1주전 금요일)
+        today = self.get_today_date()
+        days_until_friday = (4 - today.weekday()) % 7
+        if days_until_friday == 0 and today.weekday() != 4:
+            days_until_friday = 7
+        this_week_friday_calc = today + timedelta(days=days_until_friday)
+        if today.weekday() == 4:
+            latest_completed_friday = today
+        else:
+            latest_completed_friday = this_week_friday_calc - timedelta(days=7)
+        
+        # old_week_friday가 현재 주 금요일과 같다면, 실제 이전 주 금요일로 설정
+        if old_week_friday_raw and old_week_friday_raw.date() == this_week_friday_calc.date():
+            # 같은 주이므로, 실제 이전 주 금요일은 latest_completed_friday
+            old_week_friday = latest_completed_friday
+        else:
+            # 다른 주이므로, old_week_friday_raw를 그대로 사용
+            old_week_friday = old_week_friday_raw
+        
         self.current_week_friday = None  # 강제로 모드 재계산
         new_mode = self.update_mode(qqq_data)
         
@@ -1652,21 +1679,31 @@ class SOXLQuantTrader:
         # old_week_friday는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일
         # new_week_friday는 update_mode()에서 계산된 현재 주의 금요일
         # 만약 둘이 같다면, simulate_from_start_to_today()가 이미 현재 주까지 시뮬레이션했다는 의미
+        
+        # 실제 이전 주 금요일 계산
         actual_prev_week_friday = None
         if old_week_friday:
             # old_week_friday가 있다면, 실제 이전 주 금요일은 old_week_friday - 7일
             actual_prev_week_friday = old_week_friday - timedelta(days=7)
         
+        # update_mode()에서 계산된 실제 이전 주 금요일 (1주전 금요일)
+        update_mode_prev_week_friday = None
+        if hasattr(self, '_mode_debug_info') and self._mode_debug_info:
+            update_mode_prev_week_friday = self._mode_debug_info.get('one_week_ago_friday')
+        
         mode_debug_info = {
             "old_mode": old_mode,
             "new_mode": new_mode,
+            "old_week_friday_raw": old_week_friday_raw.strftime('%Y-%m-%d (%A)') if old_week_friday_raw else None,
             "old_week_friday": old_week_friday.strftime('%Y-%m-%d (%A)') if old_week_friday else None,
             "new_week_friday": self.current_week_friday.strftime('%Y-%m-%d (%A)') if self.current_week_friday else None,
             "actual_prev_week_friday": actual_prev_week_friday.strftime('%Y-%m-%d (%A)') if actual_prev_week_friday else None,
+            "update_mode_prev_week_friday": update_mode_prev_week_friday,  # update_mode에서 계산된 1주전 금요일
             "mode_changed": old_mode != new_mode,
             "today": today.strftime('%Y-%m-%d (%A)'),
             "today_weekday": today.weekday(),  # 0=월요일, 4=금요일
-            "explanation": f"old_week_friday는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일입니다. new_week_friday는 update_mode()에서 계산된 현재 주의 금요일입니다. 둘이 같다면 같은 주입니다."
+            "same_week": old_week_friday_raw and self.current_week_friday and old_week_friday_raw.date() == self.current_week_friday.date() if old_week_friday_raw and self.current_week_friday else False,
+            "explanation": f"old_week_friday_raw는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일입니다. old_week_friday는 실제 이전 주 금요일로 보정된 값입니다. new_week_friday는 update_mode()에서 계산된 현재 주의 금요일입니다."
         }
         
         if old_mode != new_mode or old_week_friday != self.current_week_friday:

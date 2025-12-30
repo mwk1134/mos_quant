@@ -927,12 +927,16 @@ def show_daily_recommendation():
                     st.write("**모드 업데이트 전:**", md.get('old_mode'))
                     st.write("**모드 업데이트 후:**", md.get('new_mode'))
                     st.write("**모드 변경 여부:**", "✅ 변경됨" if md.get('mode_changed') else "❌ 변경 안됨")
-                    st.write("**이전 주차 (old_week_friday):**", md.get('old_week_friday', 'None'))
+                    if md.get('old_week_friday_raw'):
+                        st.write("**이전 주차 (raw, simulate에서 설정):**", md.get('old_week_friday_raw'))
+                    st.write("**이전 주차 (old_week_friday, 보정됨):**", md.get('old_week_friday', 'None'))
                     st.write("**새 주차 (new_week_friday):**", md.get('new_week_friday', 'None'))
                     if md.get('actual_prev_week_friday'):
-                        st.write("**실제 이전 주 금요일:**", md.get('actual_prev_week_friday'))
-                    if md.get('old_week_friday') == md.get('new_week_friday'):
-                        st.warning("⚠️ 이전 주차와 새 주차가 같습니다! 같은 주 내에서 호출된 것입니다.")
+                        st.write("**실제 이전 주 금요일 (old_week_friday_raw - 7일):**", md.get('actual_prev_week_friday'))
+                    if md.get('update_mode_prev_week_friday'):
+                        st.write("**update_mode에서 계산된 1주전 금요일:**", md.get('update_mode_prev_week_friday'))
+                    if md.get('same_week'):
+                        st.info("💡 old_week_friday_raw와 new_week_friday가 같아서, old_week_friday를 실제 이전 주 금요일로 보정했습니다.")
                     if md.get('explanation'):
                         st.caption(md.get('explanation'))
                 
@@ -941,7 +945,8 @@ def show_daily_recommendation():
                 if debug_info.get('update_mode_debug'):
                     umd = debug_info['update_mode_debug']
                     st.write("**update_mode 호출 여부:**", "✅ 호출됨" if umd.get('update_mode_called') else "❌ 호출 안됨")
-                    st.write("**update_mode 전 모드:**", umd.get('current_mode_before'))
+                    st.write("**전 주 모드 (prev_week_mode):**", umd.get('prev_week_mode', 'N/A'))
+                    st.write("**update_mode 전 모드 (current_mode_before):**", umd.get('current_mode_before'))
                     st.write("**determine_mode 결과:**", umd.get('determine_mode_result'))
                     st.write("**모드 변경 여부:**", "✅ 변경됨" if umd.get('mode_changed') else "❌ 변경 안됨")
                     st.write("**이번 주 금요일 (this_week_friday):**", umd.get('this_week_friday'))
