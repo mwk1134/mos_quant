@@ -1043,7 +1043,36 @@ def show_daily_recommendation():
                         buy_date_str = str(buy_date) if buy_date else "-"
                         buy_date_dt = None
                     
-                    mode = pos.get('mode', 'SF')
+                    mode = pos.get('mode')
+                    if not mode and buy_date_dt:
+                        try:
+                            # 매수일이 속한 주의 금요일 계산
+                            buy_date_weekday = buy_date_dt.weekday()
+                            days_until_friday = (4 - buy_date_weekday) % 7
+                            if days_until_friday == 0 and buy_date_weekday != 4:
+                                days_until_friday = 7
+                            buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
+                            
+                            # 매수일의 1주전, 2주전 금요일 계산
+                            one_week_ago_friday = buy_week_friday - timedelta(days=7)
+                            two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
+                            
+                            # RSI 참조 데이터에서 해당 주차의 RSI 가져오기
+                            rsi_ref_data = st.session_state.trader.load_rsi_reference_data()
+                            prev_week_rsi = st.session_state.trader.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
+                            two_weeks_ago_rsi = st.session_state.trader.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
+                            
+                            if prev_week_rsi is not None and two_weeks_ago_rsi is not None:
+                                # 매수일 기준으로 모드 결정 (전주 모드는 AG로 가정)
+                                mode = st.session_state.trader.determine_mode(prev_week_rsi, two_weeks_ago_rsi, "AG")
+                        except Exception as e:
+                            # 모드 계산 실패 시 기본값 사용
+                            mode = 'SF'
+                    
+                    # 모드 정보가 여전히 없으면 기본값 사용
+                    if not mode:
+                        mode = 'SF'
+                    
                     mode_name = "안전모드" if mode == "SF" else "공세모드"
                     
                     # 손절 예정일 계산
