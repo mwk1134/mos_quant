@@ -1142,6 +1142,23 @@ class SOXLQuantTrader:
             new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, self.current_mode)
             print(f"🔍 determine_mode 결과: {new_mode} (입력: current_rsi={one_week_ago_rsi:.2f}, prev_rsi={two_weeks_ago_rsi:.2f}, prev_mode={self.current_mode})")
             
+            # 디버깅 정보 저장 (get_daily_recommendation에서 사용)
+            if not hasattr(self, '_mode_debug_info'):
+                self._mode_debug_info = {}
+            self._mode_debug_info = {
+                "update_mode_called": True,
+                "current_mode_before": self.current_mode,
+                "one_week_ago_rsi": float(one_week_ago_rsi),
+                "two_weeks_ago_rsi": float(two_weeks_ago_rsi),
+                "determine_mode_result": new_mode,
+                "mode_changed": new_mode != self.current_mode,
+                "this_week_friday": this_week_friday.strftime('%Y-%m-%d (%A)'),
+                "one_week_ago_friday": one_week_ago_friday.strftime('%Y-%m-%d (%A)'),
+                "two_weeks_ago_friday": two_weeks_ago_friday.strftime('%Y-%m-%d (%A)'),
+                "today": today.strftime('%Y-%m-%d (%A)'),
+                "today_weekday": today.weekday()
+            }
+            
             if new_mode != self.current_mode:
                 print(f"🔄 모드 전환: {self.current_mode} → {new_mode} (주차: {this_week_friday.strftime('%Y-%m-%d')})")
                 print(f"   1주전 RSI: {one_week_ago_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}")
@@ -1629,12 +1646,16 @@ class SOXLQuantTrader:
         new_mode = self.update_mode(qqq_data)
         
         # 디버깅 정보 저장 (recommendation 딕셔너리에 포함하기 위해)
+        today = self.get_today_date()
         mode_debug_info = {
             "old_mode": old_mode,
             "new_mode": new_mode,
-            "old_week_friday": str(old_week_friday) if old_week_friday else None,
-            "new_week_friday": str(self.current_week_friday) if self.current_week_friday else None,
-            "mode_changed": old_mode != new_mode
+            "old_week_friday": old_week_friday.strftime('%Y-%m-%d (%A)') if old_week_friday else None,
+            "new_week_friday": self.current_week_friday.strftime('%Y-%m-%d (%A)') if self.current_week_friday else None,
+            "mode_changed": old_mode != new_mode,
+            "today": today.strftime('%Y-%m-%d (%A)'),
+            "today_weekday": today.weekday(),  # 0=월요일, 4=금요일
+            "explanation": f"old_week_friday는 simulate_from_start_to_today()에서 설정된 이전 주차의 금요일입니다. None이면 처음 호출된 것입니다."
         }
         
         if old_mode != new_mode or old_week_friday != self.current_week_friday:
@@ -1769,9 +1790,10 @@ class SOXLQuantTrader:
             "mode_debug": mode_debug_info,
             "update_mode_debug": getattr(self, '_mode_debug_info', None),
             "current_mode": self.current_mode,
-            "current_week_friday": str(self.current_week_friday) if self.current_week_friday else None,
+            "current_week_friday": self.current_week_friday.strftime('%Y-%m-%d (%A)') if self.current_week_friday else None,
             "one_week_ago_rsi": float(one_week_ago_rsi) if one_week_ago_rsi is not None else None,
             "two_weeks_ago_rsi": float(two_weeks_ago_rsi) if two_weeks_ago_rsi is not None else None,
+            "today": today.strftime('%Y-%m-%d (%A)'),
         }
         
         recommendation = {
