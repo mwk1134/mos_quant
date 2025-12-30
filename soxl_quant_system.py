@@ -1138,12 +1138,29 @@ class SOXLQuantTrader:
                 return self.current_mode
             
             # 모드 결정 (2주전 vs 1주전 비교)
-            # 전 주 모드는 determine_mode에 전달되는 prev_mode (self.current_mode)
-            prev_week_mode = self.current_mode  # 전 주 모드
+            # 실제 전주 모드를 계산하기 위해 RSI 참조 데이터 사용
+            # 1주전 금요일의 모드를 계산하려면, 1주전 금요일의 1주전/2주전 RSI를 사용
+            actual_prev_week_mode = None
+            try:
+                rsi_ref_data = self.load_rsi_reference_data()
+                if rsi_ref_data:
+                    # 1주전 금요일의 1주전과 2주전 RSI 가져오기
+                    prev_week_prev_rsi = self.get_rsi_from_reference(one_week_ago_friday - timedelta(days=7), rsi_ref_data)  # 1주전 금요일의 1주전
+                    prev_week_two_weeks_rsi = self.get_rsi_from_reference(one_week_ago_friday - timedelta(days=14), rsi_ref_data)  # 1주전 금요일의 2주전
+                    
+                    if prev_week_prev_rsi is not None and prev_week_two_weeks_rsi is not None:
+                        # 1주전 금요일의 모드를 계산 (그 이전 모드는 기본값 SF로 가정)
+                        actual_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, "SF")
+                        print(f"🔍 실제 전주 모드 계산: 1주전 금요일({one_week_ago_friday.strftime('%Y-%m-%d')})의 모드 = {actual_prev_week_mode}")
+            except Exception as e:
+                print(f"⚠️ 실제 전주 모드 계산 실패: {e}, self.current_mode 사용")
             
-            print(f"🔍 update_mode 모드 결정: 현재 모드={self.current_mode}, 1주전 RSI={one_week_ago_rsi:.2f}, 2주전 RSI={two_weeks_ago_rsi:.2f}")
-            new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, self.current_mode)
-            print(f"🔍 determine_mode 결과: {new_mode} (입력: current_rsi={one_week_ago_rsi:.2f}, prev_rsi={two_weeks_ago_rsi:.2f}, prev_mode={self.current_mode})")
+            # 실제 전주 모드가 계산되었으면 사용, 아니면 self.current_mode 사용
+            prev_week_mode = actual_prev_week_mode if actual_prev_week_mode else self.current_mode
+            
+            print(f"🔍 update_mode 모드 결정: 현재 모드={self.current_mode}, 실제 전주 모드={prev_week_mode}, 1주전 RSI={one_week_ago_rsi:.2f}, 2주전 RSI={two_weeks_ago_rsi:.2f}")
+            new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, prev_week_mode)
+            print(f"🔍 determine_mode 결과: {new_mode} (입력: current_rsi={one_week_ago_rsi:.2f}, prev_rsi={two_weeks_ago_rsi:.2f}, prev_mode={prev_week_mode})")
             
             # 디버깅 정보 저장 (get_daily_recommendation에서 사용)
             if not hasattr(self, '_mode_debug_info'):
@@ -1151,7 +1168,8 @@ class SOXLQuantTrader:
             self._mode_debug_info = {
                 "update_mode_called": True,
                 "current_mode_before": self.current_mode,
-                "prev_week_mode": prev_week_mode,  # 전 주 모드
+                "prev_week_mode": prev_week_mode,  # 전 주 모드 (실제 계산된 값 또는 self.current_mode)
+                "actual_prev_week_mode": actual_prev_week_mode,  # 실제 계산된 전주 모드
                 "one_week_ago_rsi": float(one_week_ago_rsi),
                 "two_weeks_ago_rsi": float(two_weeks_ago_rsi),
                 "determine_mode_result": new_mode,

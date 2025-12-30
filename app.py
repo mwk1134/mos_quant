@@ -945,8 +945,12 @@ def show_daily_recommendation():
                 if debug_info.get('update_mode_debug'):
                     umd = debug_info['update_mode_debug']
                     st.write("**update_mode 호출 여부:**", "✅ 호출됨" if umd.get('update_mode_called') else "❌ 호출 안됨")
-                    st.write("**전 주 모드 (prev_week_mode):**", umd.get('prev_week_mode', 'N/A'))
                     st.write("**update_mode 전 모드 (current_mode_before):**", umd.get('current_mode_before'))
+                    if umd.get('actual_prev_week_mode'):
+                        st.write("**실제 전주 모드 (계산됨):**", umd.get('actual_prev_week_mode'))
+                        if umd.get('prev_week_mode') != umd.get('actual_prev_week_mode'):
+                            st.warning(f"⚠️ 전주 모드 불일치: current_mode_before={umd.get('current_mode_before')}, 실제 전주 모드={umd.get('actual_prev_week_mode')}")
+                    st.write("**전 주 모드 (prev_week_mode, determine_mode에 전달됨):**", umd.get('prev_week_mode', 'N/A'))
                     st.write("**determine_mode 결과:**", umd.get('determine_mode_result'))
                     st.write("**모드 변경 여부:**", "✅ 변경됨" if umd.get('mode_changed') else "❌ 변경 안됨")
                     st.write("**이번 주 금요일 (this_week_friday):**", umd.get('this_week_friday'))
