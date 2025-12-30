@@ -1075,9 +1075,49 @@ class SOXLQuantTrader:
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             
-            # 모드 판단에 사용되는 RSI: 1주전과 2주전
-            one_week_ago_rsi = rsi.iloc[-2] if len(rsi) >= 2 else None  # 1주전 RSI
-            two_weeks_ago_rsi = rsi.iloc[-3] if len(rsi) >= 3 else None  # 2주전 RSI
+            # get_daily_recommendation과 동일한 방식으로 1주전, 2주전 금요일 계산
+            # 오늘 날짜 기준으로 가장 최근 완료된 주차(지난주 금요일) 찾기
+            days_until_friday = (4 - today.weekday()) % 7  # 금요일(4)까지의 일수
+            if days_until_friday == 0 and today.weekday() != 4:  # 금요일이 아닌데 계산이 0이면 다음 주 금요일
+                days_until_friday = 7
+            this_week_friday_calc = today + timedelta(days=days_until_friday)
+            # 가장 최근 완료된 주차는 지난주 금요일 (오늘이 금요일이 아니면 이번 주 금요일에서 7일 전)
+            if today.weekday() == 4:  # 오늘이 금요일이면 오늘이 가장 최근 주차
+                latest_completed_friday = today
+            else:  # 금요일이 아니면 지난주 금요일이 가장 최근 완료된 주차
+                latest_completed_friday = this_week_friday_calc - timedelta(days=7)
+            
+            # 1주전과 2주전 금요일 계산
+            # 1주전 RSI = 지난주 금요일의 RSI (latest_completed_friday)
+            # 2주전 RSI = 지지난주 금요일의 RSI (latest_completed_friday - 7일)
+            one_week_ago_friday = latest_completed_friday  # 지난주 금요일 (1주전)
+            two_weeks_ago_friday = latest_completed_friday - timedelta(days=7)  # 지지난주 금요일 (2주전)
+            
+            # RSI와 weekly_df의 인덱스(금요일 날짜)를 매칭하여 1주전, 2주전 RSI 찾기
+            one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+            two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+            
+            # 1주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
+            one_week_ago_rsi = None
+            earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
+            if len(earlier_dates_1w) > 0:
+                one_week_rsi_date = earlier_dates_1w[-1]
+                one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
+                if one_week_rsi_idx < len(rsi):
+                    one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
+                    if pd.isna(one_week_ago_rsi):
+                        one_week_ago_rsi = None
+            
+            # 2주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
+            two_weeks_ago_rsi = None
+            earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
+            if len(earlier_dates_2w) > 0:
+                two_weeks_rsi_date = earlier_dates_2w[-1]
+                two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
+                if two_weeks_rsi_idx < len(rsi):
+                    two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
+                    if pd.isna(two_weeks_ago_rsi):
+                        two_weeks_ago_rsi = None
             
             if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
                 print("⚠️ RSI 계산 실패, 현재 모드 유지")
@@ -1085,12 +1125,11 @@ class SOXLQuantTrader:
             
             # 초기 모드가 없는 경우 RSI 기준으로 결정
             if self.current_mode is None:
-                # RSI 50을 기준으로 초기 모드 결정 (1주전 RSI 사용)
-                if one_week_ago_rsi >= 50:
-                    self.current_mode = "SF"  # 안전모드
-                else:
-                    self.current_mode = "AG"  # 공세모드
-                print(f"🎯 초기 모드 결정: {self.current_mode} (1주전 RSI: {one_week_ago_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
+                # 초기 모드 결정을 위해 기본값으로 SF 사용
+                initial_mode = "SF"
+                # 모드 결정 (2주전 vs 1주전 비교) - 초기 모드도 determine_mode로 결정
+                self.current_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, initial_mode)
+                print(f"🎯 초기 모드 결정: {self.current_mode} (1주전 RSI: {one_week_ago_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
                 return self.current_mode
             
             # 모드 결정 (2주전 vs 1주전 비교)
@@ -1573,7 +1612,13 @@ class SOXLQuantTrader:
         self.reconcile_positions_with_close_history(soxl_data)
 
         # 4. QQQ 주간 RSI 기반 모드 자동 전환
-        self.update_mode(qqq_data)
+        # update_mode()가 같은 주 내에서는 모드를 변경하지 않으므로,
+        # simulate_from_start_to_today()에서 설정된 모드가 현재 주차와 다를 경우에만 재계산됨
+        old_mode = self.current_mode
+        old_week_friday = self.current_week_friday
+        new_mode = self.update_mode(qqq_data)
+        if old_mode != new_mode or old_week_friday != self.current_week_friday:
+            print(f"🔍 get_daily_recommendation 모드 업데이트: {old_mode} → {new_mode} (주차: {old_week_friday} → {self.current_week_friday})")
         
         # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전)
         # 실시간 QQQ 데이터로 계산하되, 오늘 날짜 기준으로 올바른 주차 사용
