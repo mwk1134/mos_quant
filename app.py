@@ -929,6 +929,10 @@ def show_daily_recommendation():
                     st.write("**모드 변경 여부:**", "✅ 변경됨" if md.get('mode_changed') else "❌ 변경 안됨")
                     st.write("**이전 주차 (old_week_friday):**", md.get('old_week_friday', 'None'))
                     st.write("**새 주차 (new_week_friday):**", md.get('new_week_friday', 'None'))
+                    if md.get('actual_prev_week_friday'):
+                        st.write("**실제 이전 주 금요일:**", md.get('actual_prev_week_friday'))
+                    if md.get('old_week_friday') == md.get('new_week_friday'):
+                        st.warning("⚠️ 이전 주차와 새 주차가 같습니다! 같은 주 내에서 호출된 것입니다.")
                     if md.get('explanation'):
                         st.caption(md.get('explanation'))
                 

@@ -1647,15 +1647,26 @@ class SOXLQuantTrader:
         
         # 디버깅 정보 저장 (recommendation 딕셔너리에 포함하기 위해)
         today = self.get_today_date()
+        
+        # old_week_friday가 실제 이전 주 금요일인지 확인
+        # old_week_friday는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일
+        # new_week_friday는 update_mode()에서 계산된 현재 주의 금요일
+        # 만약 둘이 같다면, simulate_from_start_to_today()가 이미 현재 주까지 시뮬레이션했다는 의미
+        actual_prev_week_friday = None
+        if old_week_friday:
+            # old_week_friday가 있다면, 실제 이전 주 금요일은 old_week_friday - 7일
+            actual_prev_week_friday = old_week_friday - timedelta(days=7)
+        
         mode_debug_info = {
             "old_mode": old_mode,
             "new_mode": new_mode,
             "old_week_friday": old_week_friday.strftime('%Y-%m-%d (%A)') if old_week_friday else None,
             "new_week_friday": self.current_week_friday.strftime('%Y-%m-%d (%A)') if self.current_week_friday else None,
+            "actual_prev_week_friday": actual_prev_week_friday.strftime('%Y-%m-%d (%A)') if actual_prev_week_friday else None,
             "mode_changed": old_mode != new_mode,
             "today": today.strftime('%Y-%m-%d (%A)'),
             "today_weekday": today.weekday(),  # 0=월요일, 4=금요일
-            "explanation": f"old_week_friday는 simulate_from_start_to_today()에서 설정된 이전 주차의 금요일입니다. None이면 처음 호출된 것입니다."
+            "explanation": f"old_week_friday는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일입니다. new_week_friday는 update_mode()에서 계산된 현재 주의 금요일입니다. 둘이 같다면 같은 주입니다."
         }
         
         if old_mode != new_mode or old_week_friday != self.current_week_friday:
