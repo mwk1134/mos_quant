@@ -911,57 +911,6 @@ def show_daily_recommendation():
         mode_class = "mode-sf" if recommendation['mode'] == "SF" else "mode-ag"
         st.markdown(f"<div class='{mode_class}'>🎯 모드: {recommendation['mode']} ({mode_name})</div>", unsafe_allow_html=True)
         
-        # 디버깅 정보 표시
-        if 'debug_info' in recommendation and recommendation['debug_info']:
-            debug_info = recommendation['debug_info']
-            with st.expander("🔍 모드 판정 디버깅 정보", expanded=True):
-                st.write("**현재 모드:**", recommendation['mode'])
-                st.write("**오늘 날짜:**", debug_info.get('today', 'N/A'))
-                st.write("**1주전 RSI:**", debug_info.get('one_week_ago_rsi'))
-                st.write("**2주전 RSI:**", debug_info.get('two_weeks_ago_rsi'))
-                
-                st.markdown("---")
-                st.markdown("### 모드 업데이트 정보")
-                if debug_info.get('mode_debug'):
-                    md = debug_info['mode_debug']
-                    st.write("**모드 업데이트 전:**", md.get('old_mode'))
-                    st.write("**모드 업데이트 후:**", md.get('new_mode'))
-                    st.write("**모드 변경 여부:**", "✅ 변경됨" if md.get('mode_changed') else "❌ 변경 안됨")
-                    if md.get('old_week_friday_raw'):
-                        st.write("**이전 주차 (raw, simulate에서 설정):**", md.get('old_week_friday_raw'))
-                    st.write("**이전 주차 (old_week_friday, 보정됨):**", md.get('old_week_friday', 'None'))
-                    st.write("**새 주차 (new_week_friday):**", md.get('new_week_friday', 'None'))
-                    if md.get('actual_prev_week_friday'):
-                        st.write("**실제 이전 주 금요일 (old_week_friday_raw - 7일):**", md.get('actual_prev_week_friday'))
-                    if md.get('update_mode_prev_week_friday'):
-                        st.write("**update_mode에서 계산된 1주전 금요일:**", md.get('update_mode_prev_week_friday'))
-                    if md.get('same_week'):
-                        st.info("💡 old_week_friday_raw와 new_week_friday가 같아서, old_week_friday를 실제 이전 주 금요일로 보정했습니다.")
-                    if md.get('explanation'):
-                        st.caption(md.get('explanation'))
-                
-                st.markdown("---")
-                st.markdown("### update_mode() 상세 정보")
-                if debug_info.get('update_mode_debug'):
-                    umd = debug_info['update_mode_debug']
-                    st.write("**update_mode 호출 여부:**", "✅ 호출됨" if umd.get('update_mode_called') else "❌ 호출 안됨")
-                    st.write("**update_mode 전 모드 (current_mode_before):**", umd.get('current_mode_before'))
-                    if umd.get('actual_prev_week_mode'):
-                        st.write("**실제 전주 모드 (계산됨):**", umd.get('actual_prev_week_mode'))
-                        if umd.get('prev_week_mode') != umd.get('actual_prev_week_mode'):
-                            st.warning(f"⚠️ 전주 모드 불일치: current_mode_before={umd.get('current_mode_before')}, 실제 전주 모드={umd.get('actual_prev_week_mode')}")
-                    st.write("**전 주 모드 (prev_week_mode, determine_mode에 전달됨):**", umd.get('prev_week_mode', 'N/A'))
-                    st.write("**determine_mode 결과:**", umd.get('determine_mode_result'))
-                    st.write("**모드 변경 여부:**", "✅ 변경됨" if umd.get('mode_changed') else "❌ 변경 안됨")
-                    st.write("**이번 주 금요일 (this_week_friday):**", umd.get('this_week_friday'))
-                    st.write("**1주전 금요일:**", umd.get('one_week_ago_friday', 'N/A'))
-                    st.write("**2주전 금요일:**", umd.get('two_weeks_ago_friday', 'N/A'))
-                    st.write("**오늘 날짜 (update_mode 내부):**", umd.get('today', 'N/A'))
-                    st.write("**오늘 요일 (0=월, 4=금):**", umd.get('today_weekday', 'N/A'))
-                
-                st.markdown("---")
-                st.write("**현재 주차 (current_week_friday):**", debug_info.get('current_week_friday'))
-    
     with col2:
         one_week_rsi = recommendation.get('qqq_one_week_ago_rsi')
         two_weeks_rsi = recommendation.get('qqq_two_weeks_ago_rsi')

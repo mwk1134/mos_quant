@@ -1021,17 +1021,14 @@ class SOXLQuantTrader:
         # 안전모드 조건 확인
         safe_result = any(safe_conditions)
         if safe_result:
-            print(f"   ✅ 안전모드 조건 만족: {safe_conditions}")
             return "SF"
         
         # 공세모드 조건 확인
         aggressive_result = any(aggressive_conditions)
         if aggressive_result:
-            print(f"   ✅ 공세모드 조건 만족: {aggressive_conditions}")
             return "AG"
         
         # 조건에 없으면 전주 모드 유지
-        print(f"   ⚠️ 조건 없음, 전주 모드 유지: {prev_mode}")
         return prev_mode
     
     def update_mode(self, qqq_data: pd.DataFrame) -> str:
@@ -1134,7 +1131,6 @@ class SOXLQuantTrader:
                 initial_mode = "SF"
                 # 모드 결정 (2주전 vs 1주전 비교) - 초기 모드도 determine_mode로 결정
                 self.current_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, initial_mode)
-                print(f"🎯 초기 모드 결정: {self.current_mode} (1주전 RSI: {one_week_ago_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
                 return self.current_mode
             
             # 모드 결정 (2주전 vs 1주전 비교)
@@ -1151,42 +1147,16 @@ class SOXLQuantTrader:
                     if prev_week_prev_rsi is not None and prev_week_two_weeks_rsi is not None:
                         # 1주전 금요일의 모드를 계산 (그 이전 모드는 기본값 SF로 가정)
                         actual_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, "SF")
-                        print(f"🔍 실제 전주 모드 계산: 1주전 금요일({one_week_ago_friday.strftime('%Y-%m-%d')})의 모드 = {actual_prev_week_mode}")
-            except Exception as e:
-                print(f"⚠️ 실제 전주 모드 계산 실패: {e}, self.current_mode 사용")
+            except Exception:
+                pass
             
             # 실제 전주 모드가 계산되었으면 사용, 아니면 self.current_mode 사용
             prev_week_mode = actual_prev_week_mode if actual_prev_week_mode else self.current_mode
             
-            print(f"🔍 update_mode 모드 결정: 현재 모드={self.current_mode}, 실제 전주 모드={prev_week_mode}, 1주전 RSI={one_week_ago_rsi:.2f}, 2주전 RSI={two_weeks_ago_rsi:.2f}")
             new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, prev_week_mode)
-            print(f"🔍 determine_mode 결과: {new_mode} (입력: current_rsi={one_week_ago_rsi:.2f}, prev_rsi={two_weeks_ago_rsi:.2f}, prev_mode={prev_week_mode})")
-            
-            # 디버깅 정보 저장 (get_daily_recommendation에서 사용)
-            if not hasattr(self, '_mode_debug_info'):
-                self._mode_debug_info = {}
-            self._mode_debug_info = {
-                "update_mode_called": True,
-                "current_mode_before": self.current_mode,
-                "prev_week_mode": prev_week_mode,  # 전 주 모드 (실제 계산된 값 또는 self.current_mode)
-                "actual_prev_week_mode": actual_prev_week_mode,  # 실제 계산된 전주 모드
-                "one_week_ago_rsi": float(one_week_ago_rsi),
-                "two_weeks_ago_rsi": float(two_weeks_ago_rsi),
-                "determine_mode_result": new_mode,
-                "mode_changed": new_mode != self.current_mode,
-                "this_week_friday": this_week_friday.strftime('%Y-%m-%d (%A)'),
-                "one_week_ago_friday": one_week_ago_friday.strftime('%Y-%m-%d (%A)'),
-                "two_weeks_ago_friday": two_weeks_ago_friday.strftime('%Y-%m-%d (%A)'),
-                "today": today.strftime('%Y-%m-%d (%A)'),
-                "today_weekday": today.weekday()
-            }
             
             if new_mode != self.current_mode:
-                print(f"🔄 모드 전환: {self.current_mode} → {new_mode} (주차: {this_week_friday.strftime('%Y-%m-%d')})")
-                print(f"   1주전 RSI: {one_week_ago_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}")
                 self.current_mode = new_mode
-            else:
-                print(f"📊 현재 모드 유지: {self.current_mode} (1주전 RSI: {one_week_ago_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}, 주차: {this_week_friday.strftime('%Y-%m-%d')})")
             
             return self.current_mode
             
@@ -1654,10 +1624,75 @@ class SOXLQuantTrader:
         if qqq_data is None:
             return {"error": "QQQ 데이터를 가져올 수 없습니다."}
 
-        # 3. 과거 종가 기반 포지션 보정 (LOC 매도)
+        # 3. 12/29일 매수 포지션 보정 (안전모드로 강제 변경 및 매수 금액 재계산)
+        target_date = datetime(2025, 12, 29)
+        for pos in self.positions:
+            buy_date = pos.get('buy_date')
+            if isinstance(buy_date, pd.Timestamp):
+                buy_date_dt = buy_date.to_pydatetime()
+            elif isinstance(buy_date, datetime):
+                buy_date_dt = buy_date
+            else:
+                continue
+            
+            # 12/29일 매수 포지션인지 확인
+            if buy_date_dt.date() == target_date.date():
+                # 모드를 안전모드로 강제 변경
+                pos['mode'] = 'SF'
+                
+                # 12/29일 이전 보유중인 안전모드 포지션 확인
+                prev_positions = []
+                for p in self.positions:
+                    p_buy_date = p.get('buy_date')
+                    if not p_buy_date:
+                        continue
+                    if isinstance(p_buy_date, pd.Timestamp):
+                        p_buy_date_dt = p_buy_date.to_pydatetime()
+                    elif isinstance(p_buy_date, datetime):
+                        p_buy_date_dt = p_buy_date
+                    else:
+                        continue
+                    
+                    if p_buy_date_dt.date() < target_date.date() and p.get('mode') == 'SF':
+                        prev_positions.append(p)
+                
+                # 12/29일 포지션의 회차 결정 (이전 안전모드 포지션 수 + 1)
+                new_round = len(prev_positions) + 1
+                
+                # 안전모드의 회차별 시드금액 계산
+                if new_round <= len(self.sf_config["split_ratios"]):
+                    ratio = self.sf_config["split_ratios"][new_round - 1]
+                    
+                    # 12/29일 시점의 투자원금 추정
+                    # 이전 안전모드 포지션이 있으면 그 포지션의 매수 금액과 split_ratios를 사용하여 역산
+                    investment_capital = self.current_investment_capital  # 기본값
+                    if prev_positions:
+                        # 첫 번째 안전모드 포지션의 매수 금액과 split_ratios로 투자원금 역산
+                        first_sf_pos = prev_positions[0]
+                        first_round = first_sf_pos.get('round', 1)
+                        if first_round <= len(self.sf_config["split_ratios"]):
+                            first_ratio = self.sf_config["split_ratios"][first_round - 1]
+                            first_amount = first_sf_pos.get('amount', 0)
+                            if first_ratio > 0:
+                                investment_capital = first_amount / first_ratio
+                    
+                    target_amount = investment_capital * ratio
+                    
+                    # 매수 가격은 그대로 유지하고, 수량과 금액만 재계산
+                    buy_price = pos['buy_price']
+                    new_shares = int(target_amount / buy_price)
+                    if new_shares > 0:
+                        new_amount = new_shares * buy_price
+                        pos['shares'] = new_shares
+                        pos['amount'] = new_amount
+                        pos['round'] = new_round
+                
+                break  # 12/29일 포지션은 하나만 있을 것으로 예상
+        
+        # 4. 과거 종가 기반 포지션 보정 (LOC 매도)
         self.reconcile_positions_with_close_history(soxl_data)
 
-        # 4. QQQ 주간 RSI 기반 모드 자동 전환
+        # 5. QQQ 주간 RSI 기반 모드 자동 전환
         # simulate_from_start_to_today()에서 이미 모드가 설정되었을 수 있으므로,
         # get_daily_recommendation()에서는 항상 최신 RSI로 모드를 재계산해야 함
         # 같은 주 내에서는 모드를 변경하지 않지만, simulate_from_start_to_today()에서
@@ -1690,42 +1725,7 @@ class SOXLQuantTrader:
         self.current_week_friday = None  # 강제로 모드 재계산
         new_mode = self.update_mode(qqq_data)
         
-        # 디버깅 정보 저장 (recommendation 딕셔너리에 포함하기 위해)
         today = self.get_today_date()
-        
-        # old_week_friday가 실제 이전 주 금요일인지 확인
-        # old_week_friday는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일
-        # new_week_friday는 update_mode()에서 계산된 현재 주의 금요일
-        # 만약 둘이 같다면, simulate_from_start_to_today()가 이미 현재 주까지 시뮬레이션했다는 의미
-        
-        # 실제 이전 주 금요일 계산
-        actual_prev_week_friday = None
-        if old_week_friday:
-            # old_week_friday가 있다면, 실제 이전 주 금요일은 old_week_friday - 7일
-            actual_prev_week_friday = old_week_friday - timedelta(days=7)
-        
-        # update_mode()에서 계산된 실제 이전 주 금요일 (1주전 금요일)
-        update_mode_prev_week_friday = None
-        if hasattr(self, '_mode_debug_info') and self._mode_debug_info:
-            update_mode_prev_week_friday = self._mode_debug_info.get('one_week_ago_friday')
-        
-        mode_debug_info = {
-            "old_mode": old_mode,
-            "new_mode": new_mode,
-            "old_week_friday_raw": old_week_friday_raw.strftime('%Y-%m-%d (%A)') if old_week_friday_raw else None,
-            "old_week_friday": old_week_friday.strftime('%Y-%m-%d (%A)') if old_week_friday else None,
-            "new_week_friday": self.current_week_friday.strftime('%Y-%m-%d (%A)') if self.current_week_friday else None,
-            "actual_prev_week_friday": actual_prev_week_friday.strftime('%Y-%m-%d (%A)') if actual_prev_week_friday else None,
-            "update_mode_prev_week_friday": update_mode_prev_week_friday,  # update_mode에서 계산된 1주전 금요일
-            "mode_changed": old_mode != new_mode,
-            "today": today.strftime('%Y-%m-%d (%A)'),
-            "today_weekday": today.weekday(),  # 0=월요일, 4=금요일
-            "same_week": old_week_friday_raw and self.current_week_friday and old_week_friday_raw.date() == self.current_week_friday.date() if old_week_friday_raw and self.current_week_friday else False,
-            "explanation": f"old_week_friday_raw는 simulate_from_start_to_today()에서 설정된 마지막 주차의 금요일입니다. old_week_friday는 실제 이전 주 금요일로 보정된 값입니다. new_week_friday는 update_mode()에서 계산된 현재 주의 금요일입니다."
-        }
-        
-        if old_mode != new_mode or old_week_friday != self.current_week_friday:
-            print(f"🔍 get_daily_recommendation 모드 업데이트: {old_mode} → {new_mode} (주차: {old_week_friday} → {self.current_week_friday})")
         
         # 모드 판단에 사용되는 RSI 계산 (1주전과 2주전)
         # 실시간 QQQ 데이터로 계산하되, 오늘 날짜 기준으로 올바른 주차 사용
@@ -1796,17 +1796,6 @@ class SOXLQuantTrader:
                     if pd.isna(two_weeks_ago_rsi):
                         two_weeks_ago_rsi = None
             
-            # 디버깅 정보 출력
-            print(f"📅 RSI 계산 기준 (실시간 계산):")
-            print(f"   오늘: {today.strftime('%Y-%m-%d')} ({['월','화','수','목','금','토','일'][today.weekday()]})")
-            print(f"   가장 최근 완료된 주차: {latest_completed_friday.strftime('%Y-%m-%d')} (금요일)")
-            print(f"   1주전 금요일: {one_week_ago_friday.strftime('%Y-%m-%d')}")
-            print(f"   2주전 금요일: {two_weeks_ago_friday.strftime('%Y-%m-%d')}")
-            if one_week_ago_rsi is not None:
-                print(f"   1주전 RSI: {one_week_ago_rsi:.2f}")
-            if two_weeks_ago_rsi is not None:
-                print(f"   2주전 RSI: {two_weeks_ago_rsi:.2f}")
-        
         if one_week_ago_rsi is None:
             return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
 
@@ -1851,24 +1840,12 @@ class SOXLQuantTrader:
         total_invested = sum([pos["amount"] for pos in self.positions])
         unrealized_pnl = total_position_value - total_invested
         
-        # 디버깅 정보 수집
-        debug_info = {
-            "mode_debug": mode_debug_info,
-            "update_mode_debug": getattr(self, '_mode_debug_info', None),
-            "current_mode": self.current_mode,
-            "current_week_friday": self.current_week_friday.strftime('%Y-%m-%d (%A)') if self.current_week_friday else None,
-            "one_week_ago_rsi": float(one_week_ago_rsi) if one_week_ago_rsi is not None else None,
-            "two_weeks_ago_rsi": float(two_weeks_ago_rsi) if two_weeks_ago_rsi is not None else None,
-            "today": today.strftime('%Y-%m-%d (%A)'),
-        }
-        
         recommendation = {
             "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
             "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜
             "mode": self.current_mode,
             "qqq_one_week_ago_rsi": one_week_ago_rsi,  # 1주전 RSI (모드 판단에 사용)
             "qqq_two_weeks_ago_rsi": two_weeks_ago_rsi,  # 2주전 RSI (모드 판단에 사용)
-            "debug_info": debug_info,  # 디버깅 정보
             "soxl_current_price": current_price,
             "buy_price": buy_price,
             "sell_price": sell_price,
