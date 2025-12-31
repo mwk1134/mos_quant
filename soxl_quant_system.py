@@ -1643,7 +1643,26 @@ class SOXLQuantTrader:
         if qqq_data is None:
             return {"error": "QQQ 데이터를 가져올 수 없습니다."}
 
-        # 3. 12/29일 매수 포지션 보정 (안전모드로 강제 변경 및 매수 금액 재계산)
+        # 3. 기존 포지션의 모드 백업 (get_daily_recommendation에서 모드 재계산 시 보존)
+        # 시뮬레이션 후 포지션 모드를 백업하여 이후 모드 재계산 시 보존
+        position_mode_backup = {}
+        for pos in self.positions:
+            buy_date = pos.get('buy_date')
+            if isinstance(buy_date, pd.Timestamp):
+                buy_date_dt = buy_date.to_pydatetime()
+            elif isinstance(buy_date, datetime):
+                buy_date_dt = buy_date
+            else:
+                continue
+            
+            # 포지션 키 생성 (회차_매수일)
+            pos_key = f"{pos['round']}_{buy_date_dt.strftime('%Y-%m-%d')}"
+            stored_mode = pos.get('mode')
+            if stored_mode:
+                position_mode_backup[pos_key] = stored_mode
+                print(f"🔍 포지션 모드 백업: {pos_key} = {stored_mode}")
+        
+        # 3-1. 12/29일 매수 포지션 보정 (안전모드로 강제 변경 및 매수 금액 재계산)
         target_date = datetime(2025, 12, 29)
         for pos in self.positions:
             buy_date = pos.get('buy_date')
@@ -1743,6 +1762,25 @@ class SOXLQuantTrader:
         
         self.current_week_friday = None  # 강제로 모드 재계산
         new_mode = self.update_mode(qqq_data)
+        
+        # 기존 포지션의 모드 복원 (매수 시점의 모드 보존)
+        for pos in self.positions:
+            buy_date = pos.get('buy_date')
+            if isinstance(buy_date, pd.Timestamp):
+                buy_date_dt = buy_date.to_pydatetime()
+            elif isinstance(buy_date, datetime):
+                buy_date_dt = buy_date
+            else:
+                continue
+            
+            # 포지션 키 생성 (회차_매수일)
+            pos_key = f"{pos['round']}_{buy_date_dt.strftime('%Y-%m-%d')}"
+            if pos_key in position_mode_backup:
+                original_mode = position_mode_backup[pos_key]
+                current_stored_mode = pos.get('mode')
+                if current_stored_mode != original_mode:
+                    print(f"🔧 포지션 모드 복원: {pos_key} = {current_stored_mode} → {original_mode}")
+                    pos['mode'] = original_mode
         
         today = self.get_today_date()
         
@@ -2505,9 +2543,12 @@ class SOXLQuantTrader:
                         # 매수 실행 전 모드 확인 및 검증
                         mode_before_buy = current_mode
                         if current_mode != self.current_mode:
-                            print(f"❌ CRITICAL: 매수 전 모드 불일치! current_mode={current_mode}, self.current_mode={self.current_mode}")
-                            # 강제로 동기화
+                            print(f"⚠️ 매수 전 모드 불일치 감지! current_mode={current_mode}, self.current_mode={self.current_mode}")
+                            print(f"   → current_mode를 self.current_mode로 동기화")
+                            # 강제로 동기화 (self.current_mode가 더 최신일 수 있음)
                             current_mode = self.current_mode
+                        
+                        # 매수 시점의 모드 로그 (디버깅)
                         print(f"🔍 매수 실행 전: 날짜={current_date.strftime('%Y-%m-%d')}, 주차 모드={current_mode}, self.current_mode={self.current_mode}")
                         
                         if self.execute_buy(buy_price, daily_close, current_date, current_mode):  # 목표가 기준 수량으로 계산하여 종가에 매수, 매수 시점의 모드 전달
