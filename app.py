@@ -1024,7 +1024,9 @@ def show_daily_recommendation():
             if st.session_state.trader.positions:
                 st.warning("📋 보유 포지션이 있습니다. 매도 목표가를 확인하세요:")
                 for pos in st.session_state.trader.positions:
-                    config = st.session_state.trader.sf_config if pos['mode'] == "SF" else st.session_state.trader.ag_config
+                    # 포지션에 저장된 모드 사용 (재계산하지 않음)
+                    pos_mode = pos.get('mode', 'SF')  # 기본값 SF
+                    config = st.session_state.trader.sf_config if pos_mode == "SF" else st.session_state.trader.ag_config
                     target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
                     current_price = recommendation['soxl_current_price']
                     price_diff = target_sell_price - current_price
@@ -1043,35 +1045,43 @@ def show_daily_recommendation():
                         buy_date_str = str(buy_date) if buy_date else "-"
                         buy_date_dt = None
                     
+                    # 포지션에 저장된 모드 사용 (재계산하지 않음)
                     mode = pos.get('mode')
-                    if not mode and buy_date_dt:
-                        try:
-                            # 매수일이 속한 주의 금요일 계산
-                            buy_date_weekday = buy_date_dt.weekday()
-                            days_until_friday = (4 - buy_date_weekday) % 7
-                            if days_until_friday == 0 and buy_date_weekday != 4:
-                                days_until_friday = 7
-                            buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
-                            
-                            # 매수일의 1주전, 2주전 금요일 계산
-                            one_week_ago_friday = buy_week_friday - timedelta(days=7)
-                            two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
-                            
-                            # RSI 참조 데이터에서 해당 주차의 RSI 가져오기
-                            rsi_ref_data = st.session_state.trader.load_rsi_reference_data()
-                            prev_week_rsi = st.session_state.trader.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
-                            two_weeks_ago_rsi = st.session_state.trader.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
-                            
-                            if prev_week_rsi is not None and two_weeks_ago_rsi is not None:
-                                # 매수일 기준으로 모드 결정 (전주 모드는 AG로 가정)
-                                mode = st.session_state.trader.determine_mode(prev_week_rsi, two_weeks_ago_rsi, "AG")
-                        except Exception as e:
-                            # 모드 계산 실패 시 기본값 사용
+                    
+                    # 모드가 없는 경우에만 재계산 (하지만 이는 정상적인 경우가 아님)
+                    if not mode:
+                        st.warning(f"⚠️ 포지션 {pos['round']}회차에 모드 정보가 없습니다. 매수일: {buy_date_str}")
+                        if buy_date_dt:
+                            try:
+                                # 매수일이 속한 주의 금요일 계산
+                                buy_date_weekday = buy_date_dt.weekday()
+                                days_until_friday = (4 - buy_date_weekday) % 7
+                                if days_until_friday == 0 and buy_date_weekday != 4:
+                                    days_until_friday = 7
+                                buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
+                                
+                                # 매수일의 1주전, 2주전 금요일 계산
+                                one_week_ago_friday = buy_week_friday - timedelta(days=7)
+                                two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
+                                
+                                # RSI 참조 데이터에서 해당 주차의 RSI 가져오기
+                                rsi_ref_data = st.session_state.trader.load_rsi_reference_data()
+                                prev_week_rsi = st.session_state.trader.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
+                                two_weeks_ago_rsi = st.session_state.trader.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
+                                
+                                if prev_week_rsi is not None and two_weeks_ago_rsi is not None:
+                                    # 매수일 기준으로 모드 결정 (전주 모드는 AG로 가정)
+                                    mode = st.session_state.trader.determine_mode(prev_week_rsi, two_weeks_ago_rsi, "AG")
+                            except Exception as e:
+                                # 모드 계산 실패 시 기본값 사용
+                                mode = 'SF'
+                        else:
                             mode = 'SF'
                     
-                    # 모드 정보가 여전히 없으면 기본값 사용
-                    if not mode:
-                        mode = 'SF'
+                    # 디버깅: 저장된 모드 확인
+                    stored_mode_debug = pos.get('mode', 'N/A')
+                    if stored_mode_debug != mode:
+                        st.error(f"❌ 모드 불일치! 포지션 {pos['round']}회차: 저장된 모드={stored_mode_debug}, 사용할 모드={mode}")
                     
                     mode_name = "안전모드" if mode == "SF" else "공세모드"
                     

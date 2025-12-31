@@ -1324,10 +1324,23 @@ class SOXLQuantTrader:
             "mode": buy_mode  # 매수 시점의 모드 저장
         }
         
-        # 디버깅: 매수 시점의 모드 확인
+        # 디버깅: 매수 시점의 모드 확인 및 검증
+        if mode is not None and mode != buy_mode:
+            print(f"⚠️ execute_buy 모드 불일치: 전달된 모드={mode}, buy_mode={buy_mode}, self.current_mode={self.current_mode}")
         print(f"🔍 execute_buy: 매수일 {current_date.strftime('%Y-%m-%d')}, 전달된 모드: {mode}, 저장할 모드: {buy_mode}, 현재 self.current_mode: {self.current_mode}")
         
+        # 포지션에 모드가 제대로 저장되었는지 확인
+        if position.get('mode') != buy_mode:
+            print(f"❌ CRITICAL: 포지션에 모드 저장 실패! 예상: {buy_mode}, 실제: {position.get('mode')}")
+            position['mode'] = buy_mode  # 강제로 수정
+        
         self.positions.append(position)
+        
+        # 저장 후 검증
+        saved_position = self.positions[-1]
+        if saved_position.get('mode') != buy_mode:
+            print(f"❌ CRITICAL: 포지션 저장 후 모드 불일치! 예상: {buy_mode}, 실제: {saved_position.get('mode')}")
+            self.positions[-1]['mode'] = buy_mode  # 강제로 수정
 
         self.available_cash -= actual_amount
         self.current_round += 1  # 매수 성공 시에만 회차 증가
@@ -2457,6 +2470,10 @@ class SOXLQuantTrader:
                         print(success_msg)
                         self.backtest_logs.append(success_msg)
                         
+                        # 매수 실행 전 모드 확인
+                        mode_before_buy = current_mode
+                        print(f"🔍 매수 실행 전: 날짜={current_date.strftime('%Y-%m-%d')}, 주차 모드={current_mode}, self.current_mode={self.current_mode}")
+                        
                         if self.execute_buy(buy_price, daily_close, current_date, current_mode):  # 목표가 기준 수량으로 계산하여 종가에 매수, 매수 시점의 모드 전달
                             exec_msg = f"✅ 매수 체결 성공! (모드: {current_mode})"
                             print(exec_msg)
@@ -2467,12 +2484,19 @@ class SOXLQuantTrader:
                             buy_price_executed = position["buy_price"]
                             buy_quantity = position["shares"]
                             buy_amount = position["amount"]
-                            # 디버깅: 저장된 모드 확인
+                            
+                            # 디버깅: 저장된 모드 확인 및 검증
                             stored_mode = position.get("mode", "N/A")
                             if stored_mode != current_mode:
-                                debug_msg = f"⚠️ 모드 불일치 감지! 전달된 모드: {current_mode}, 저장된 모드: {stored_mode}"
-                                print(debug_msg)
-                                self.backtest_logs.append(debug_msg)
+                                error_msg = f"❌ CRITICAL: 모드 불일치 감지! 매수일={current_date.strftime('%Y-%m-%d')}, 전달된 모드={current_mode}, 저장된 모드={stored_mode}"
+                                print(error_msg)
+                                self.backtest_logs.append(error_msg)
+                                # 강제로 올바른 모드로 수정
+                                position["mode"] = current_mode
+                                self.positions[-1]["mode"] = current_mode
+                                print(f"🔧 모드 수정 완료: {stored_mode} → {current_mode}")
+                            else:
+                                print(f"✅ 모드 일치 확인: 매수일={current_date.strftime('%Y-%m-%d')}, 모드={stored_mode}")
                             total_invested += buy_amount
                             cash_balance -= buy_amount
                             
