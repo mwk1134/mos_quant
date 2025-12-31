@@ -2334,6 +2334,19 @@ class SOXLQuantTrader:
         current_week_friday = None  # 현재 주차의 금요일 (로컬 변수)
         previous_day_sold_rounds = 0  # 전날 매도된 회차 수 추적
         
+        # 주차별 모드 저장 (금요일 날짜를 키로 사용)
+        week_modes = {}  # {금요일 날짜 문자열: 모드}
+        
+        # 시작 주차의 모드 저장
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        days_until_friday = (4 - start_dt.weekday()) % 7
+        if days_until_friday == 0 and start_dt.weekday() != 4:
+            days_until_friday = 7
+        start_week_friday = start_dt + timedelta(days=days_until_friday)
+        start_week_friday_str = start_week_friday.strftime('%Y-%m-%d')
+        week_modes[start_week_friday_str] = current_mode
+        print(f"🔍 시작 주차 모드 저장: {start_week_friday_str} = {current_mode}")
+        
         for i, (current_date, row) in enumerate(soxl_backtest.iterrows()):
             current_price = row['Close']
             
@@ -2439,14 +2452,62 @@ class SOXLQuantTrader:
                 prev_week_prev_rsi = self.get_rsi_from_reference(prev_week_friday - timedelta(days=7), rsi_ref_data)  # 이전 주차의 1주전 RSI
                 prev_week_two_weeks_rsi = self.get_rsi_from_reference(prev_week_friday - timedelta(days=14), rsi_ref_data)  # 이전 주차의 2주전 RSI
                 
-                # 이전 주차의 모드를 정확히 계산 (이전 주차의 이전 모드는 기본값 SF로 가정)
-                actual_prev_week_mode = current_mode  # 기본값은 현재 모드
+                # 이전 주차의 모드를 정확히 계산하기 위해 순차적으로 이전 주차들의 모드를 계산
+                # 전전주, 전전전주의 모드를 확인하여 전 주의 모드를 정확히 결정
+                actual_prev_week_mode = current_mode  # 기본값은 현재 모드 (이전 주차의 모드)
+                
                 if prev_week_prev_rsi is not None and prev_week_two_weeks_rsi is not None:
-                    # 이전 주차의 이전 모드를 계산하기 위해 더 이전 주차의 모드가 필요하지만,
-                    # 여기서는 간단히 이전 주차의 모드를 계산 (이전 주차의 이전 모드는 SF로 가정)
-                    prev_prev_week_mode = "SF"  # 이전 주차의 이전 모드는 기본값 SF
-                    actual_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, prev_prev_week_mode)
-                    print(f"🔍 이전 주차 모드 재계산: 1주전 RSI={prev_week_prev_rsi:.2f}, 2주전 RSI={prev_week_two_weeks_rsi:.2f} → {actual_prev_week_mode}")
+                    # 이전 주차의 금요일 문자열
+                    prev_week_friday_str = prev_week_friday.strftime('%Y-%m-%d')
+                    
+                    # 이전 주차의 모드가 이미 계산되어 있으면 사용
+                    if prev_week_friday_str in week_modes:
+                        actual_prev_week_mode = week_modes[prev_week_friday_str]
+                        print(f"🔍 이전 주차 모드 (저장된 값 사용): {prev_week_friday_str} = {actual_prev_week_mode}")
+                    else:
+                        # 이전 주차의 모드를 계산하기 위해 전전주, 전전전주의 모드를 확인
+                        prev_prev_week_friday = prev_week_friday - timedelta(days=7)
+                        prev_prev_prev_week_friday = prev_week_friday - timedelta(days=14)
+                        
+                        prev_prev_week_friday_str = prev_prev_week_friday.strftime('%Y-%m-%d')
+                        prev_prev_prev_week_friday_str = prev_prev_prev_week_friday.strftime('%Y-%m-%d')
+                        
+                        # 전전주의 모드 확인
+                        prev_prev_week_mode = "SF"  # 기본값
+                        if prev_prev_week_friday_str in week_modes:
+                            prev_prev_week_mode = week_modes[prev_prev_week_friday_str]
+                            print(f"🔍 전전주 모드 (저장된 값 사용): {prev_prev_week_friday_str} = {prev_prev_week_mode}")
+                        else:
+                            # 전전주의 모드를 계산하기 위해 전전전주의 모드 확인
+                            prev_prev_prev_week_mode = "SF"  # 기본값
+                            if prev_prev_prev_week_friday_str in week_modes:
+                                prev_prev_prev_week_mode = week_modes[prev_prev_prev_week_friday_str]
+                                print(f"🔍 전전전주 모드 (저장된 값 사용): {prev_prev_prev_week_friday_str} = {prev_prev_prev_week_mode}")
+                            
+                            # 전전주의 RSI 확인
+                            prev_prev_prev_rsi = self.get_rsi_from_reference(prev_prev_prev_week_friday, rsi_ref_data)
+                            prev_prev_prev_two_weeks_rsi = self.get_rsi_from_reference(prev_prev_prev_week_friday - timedelta(days=7), rsi_ref_data)
+                            
+                            if prev_prev_prev_rsi is not None and prev_prev_prev_two_weeks_rsi is not None:
+                                prev_prev_week_mode = self.determine_mode(prev_prev_prev_rsi, prev_prev_prev_two_weeks_rsi, prev_prev_prev_week_mode)
+                                print(f"🔍 전전주 모드 계산: 1주전 RSI={prev_prev_prev_rsi:.2f}, 2주전 RSI={prev_prev_prev_two_weeks_rsi:.2f}, 이전 모드={prev_prev_prev_week_mode} → {prev_prev_week_mode}")
+                                # 전전주 모드 저장
+                                week_modes[prev_prev_week_friday_str] = prev_prev_week_mode
+                            
+                        # 이전 주차의 모드 계산 (전전주 모드 사용)
+                        calculated_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, prev_prev_week_mode)
+                        print(f"🔍 이전 주차 모드 재계산: 1주전 RSI={prev_week_prev_rsi:.2f}, 2주전 RSI={prev_week_two_weeks_rsi:.2f}, 전전주 모드={prev_prev_week_mode} → {calculated_prev_week_mode}")
+                        
+                        # 이전 주차 모드 저장
+                        week_modes[prev_week_friday_str] = calculated_prev_week_mode
+                        
+                        # 재계산된 모드와 현재 모드가 다르면 경고
+                        if calculated_prev_week_mode != current_mode:
+                            print(f"⚠️ 이전 주차 모드 불일치: current_mode={current_mode}, 재계산={calculated_prev_week_mode}")
+                            # 재계산된 모드를 사용 (더 정확함)
+                            actual_prev_week_mode = calculated_prev_week_mode
+                        else:
+                            print(f"✅ 이전 주차 모드 일치 확인: {current_mode}")
                 
                 new_mode = self.determine_mode(prev_week_rsi, two_weeks_ago_rsi, actual_prev_week_mode)
                 
@@ -2492,6 +2553,11 @@ class SOXLQuantTrader:
                 
                 current_mode = new_mode
                 self.current_mode = new_mode  # 클래스 변수도 업데이트 (모드가 변경되지 않았어도 주차 시작 시점에 명확히 설정)
+                
+                # 현재 주차의 모드 저장
+                this_week_friday_str = this_week_friday.strftime('%Y-%m-%d')
+                week_modes[this_week_friday_str] = new_mode
+                
                 # 모드 변경 시 current_round 유지 (최대 회차만 변경)
                 
                 current_week += 1  # 주차 번호 증가 (0 → 1, 1 → 2, ...)
