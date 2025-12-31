@@ -805,6 +805,19 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
+        # 디버깅: 시뮬레이션 후 포지션 모드 확인
+        if st.session_state.trader.positions:
+            with st.expander("🔍 시뮬레이션 후 포지션 모드 확인 (디버깅)", expanded=True):
+                for pos in st.session_state.trader.positions:
+                    buy_date = pos.get('buy_date')
+                    if isinstance(buy_date, (datetime, pd.Timestamp)):
+                        buy_date_str = buy_date.strftime('%Y-%m-%d') if hasattr(buy_date, 'strftime') else str(buy_date)
+                    else:
+                        buy_date_str = str(buy_date)
+                    stored_mode = pos.get('mode', 'N/A')
+                    mode_color = "🟢" if stored_mode == "SF" else "🔴" if stored_mode == "AG" else "⚪"
+                    st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {buy_date_str}, 저장된 모드: **{stored_mode}**")
+        
         # 시뮬레이션 후 수정된 포지션 복원
         if 'position_edits' in st.session_state and st.session_state.position_edits:
             # 수정된 포지션 정보를 회차와 매수일로 매칭하여 복원
@@ -1078,10 +1091,15 @@ def show_daily_recommendation():
                         else:
                             mode = 'SF'
                     
-                    # 디버깅: 저장된 모드 확인
+                    # 디버깅: 저장된 모드 확인 및 강제 수정
                     stored_mode_debug = pos.get('mode', 'N/A')
                     if stored_mode_debug != mode:
-                        st.error(f"❌ 모드 불일치! 포지션 {pos['round']}회차: 저장된 모드={stored_mode_debug}, 사용할 모드={mode}")
+                        st.error(f"❌ 모드 불일치 감지! 포지션 {pos['round']}회차: 저장된 모드={stored_mode_debug}, 재계산 모드={mode}")
+                        st.warning(f"⚠️ 저장된 모드를 사용합니다: {stored_mode_debug}")
+                        # 저장된 모드를 사용하도록 수정
+                        mode = stored_mode_debug
+                        # 포지션의 모드도 강제로 수정 (혹시 모를 경우를 대비)
+                        pos['mode'] = stored_mode_debug
                     
                     mode_name = "안전모드" if mode == "SF" else "공세모드"
                     

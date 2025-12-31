@@ -2088,9 +2088,15 @@ class SOXLQuantTrader:
                 prev_week_mode = "SF"
                 if prev_prev_week_rsi is not None and prev_prev_two_weeks_rsi is not None:
                     prev_week_mode = self.determine_mode(prev_prev_week_rsi, prev_prev_two_weeks_rsi, "SF")
+                    print(f"🔍 백테스팅 시작 모드 계산:")
+                    print(f"   시작일: {start_date}")
+                    print(f"   시작 주차 금요일: {start_week_friday.strftime('%Y-%m-%d')}")
+                    print(f"   1주전 RSI: {prev_week_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}")
+                    print(f"   이전 주차 모드: {prev_week_mode}")
                 
                 # 시작 모드 결정 (이전 주차의 모드를 사용)
                 start_mode = self.determine_mode(prev_week_rsi, two_weeks_ago_rsi, prev_week_mode)
+                print(f"   결정된 시작 모드: {start_mode}")
             else:
                 print(f"[ERROR] 백테스팅 시작 시점의 RSI 데이터가 없습니다.")
                 print(f"   시작 주차 RSI: {start_week_rsi}")
@@ -2407,13 +2413,19 @@ class SOXLQuantTrader:
                     # 모드가 변경되지 않았어도 주차 시작 시점임을 명확히 표시
                     print(f"📅 주차 시작: {current_date.strftime('%Y-%m-%d')} (모드: {current_mode} 유지)")
                 
+                # 모드 업데이트 전 검증
+                if current_mode != new_mode:
+                    print(f"⚠️ 모드 변경: {current_mode} → {new_mode}")
+                else:
+                    print(f"✅ 모드 유지: {current_mode}")
+                
                 current_mode = new_mode
                 self.current_mode = new_mode  # 클래스 변수도 업데이트 (모드가 변경되지 않았어도 주차 시작 시점에 명확히 설정)
                 # 모드 변경 시 current_round 유지 (최대 회차만 변경)
                 
                 current_week += 1  # 주차 번호 증가 (0 → 1, 1 → 2, ...)
                 current_rsi_display = f"{current_week_rsi:.2f}" if current_week_rsi is not None else "None"
-                print(f"📅 주차 {current_week}: ~{this_week_friday.strftime('%m-%d')} | RSI: {current_rsi_display} | 모드: {current_mode}")
+                print(f"📅 주차 {current_week}: ~{this_week_friday.strftime('%m-%d')} | RSI: {current_rsi_display} | 모드: {current_mode} | self.current_mode: {self.current_mode}")
             
             # 매매 실행 (전일 종가가 있는 경우만)
             if prev_close is not None:
@@ -2490,8 +2502,12 @@ class SOXLQuantTrader:
                         print(success_msg)
                         self.backtest_logs.append(success_msg)
                         
-                        # 매수 실행 전 모드 확인
+                        # 매수 실행 전 모드 확인 및 검증
                         mode_before_buy = current_mode
+                        if current_mode != self.current_mode:
+                            print(f"❌ CRITICAL: 매수 전 모드 불일치! current_mode={current_mode}, self.current_mode={self.current_mode}")
+                            # 강제로 동기화
+                            current_mode = self.current_mode
                         print(f"🔍 매수 실행 전: 날짜={current_date.strftime('%Y-%m-%d')}, 주차 모드={current_mode}, self.current_mode={self.current_mode}")
                         
                         if self.execute_buy(buy_price, daily_close, current_date, current_mode):  # 목표가 기준 수량으로 계산하여 종가에 매수, 매수 시점의 모드 전달
