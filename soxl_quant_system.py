@@ -2435,14 +2435,47 @@ class SOXLQuantTrader:
                 # 모드 결정 (2주전 vs 1주전 비교)
                 # 중요: 이전 주차의 모드를 사용하여 현재 주차의 모드를 결정
                 # 하지만 RSI가 같으면 이전 모드를 유지하므로, 이전 주차의 모드가 중요함
-                new_mode = self.determine_mode(prev_week_rsi, two_weeks_ago_rsi, current_mode)
+                # 이전 주차의 모드를 정확히 계산하기 위해 이전 주차의 1주전/2주전 RSI를 사용
+                prev_week_prev_rsi = self.get_rsi_from_reference(prev_week_friday - timedelta(days=7), rsi_ref_data)  # 이전 주차의 1주전 RSI
+                prev_week_two_weeks_rsi = self.get_rsi_from_reference(prev_week_friday - timedelta(days=14), rsi_ref_data)  # 이전 주차의 2주전 RSI
+                
+                # 이전 주차의 모드를 정확히 계산 (이전 주차의 이전 모드는 기본값 SF로 가정)
+                actual_prev_week_mode = current_mode  # 기본값은 현재 모드
+                if prev_week_prev_rsi is not None and prev_week_two_weeks_rsi is not None:
+                    # 이전 주차의 이전 모드를 계산하기 위해 더 이전 주차의 모드가 필요하지만,
+                    # 여기서는 간단히 이전 주차의 모드를 계산 (이전 주차의 이전 모드는 SF로 가정)
+                    prev_prev_week_mode = "SF"  # 이전 주차의 이전 모드는 기본값 SF
+                    actual_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, prev_prev_week_mode)
+                    print(f"🔍 이전 주차 모드 재계산: 1주전 RSI={prev_week_prev_rsi:.2f}, 2주전 RSI={prev_week_two_weeks_rsi:.2f} → {actual_prev_week_mode}")
+                
+                new_mode = self.determine_mode(prev_week_rsi, two_weeks_ago_rsi, actual_prev_week_mode)
                 
                 # 디버깅: 모드 결정 과정 로그
                 prev_rsi_display = f"{prev_week_rsi:.2f}" if prev_week_rsi is not None else "None"
                 two_weeks_rsi_display = f"{two_weeks_ago_rsi:.2f}" if two_weeks_ago_rsi is not None else "None"
                 print(f"🔍 주차 모드 결정: 날짜={current_date.strftime('%Y-%m-%d')}, 이번주 금요일={this_week_friday.strftime('%Y-%m-%d')}")
-                print(f"   1주전 RSI: {prev_rsi_display}, 2주전 RSI: {two_weeks_rsi_display}")
+                print(f"   1주전 금요일: {prev_week_friday.strftime('%Y-%m-%d')}, RSI: {prev_rsi_display}")
+                print(f"   2주전 금요일: {two_weeks_ago_friday.strftime('%Y-%m-%d')}, RSI: {two_weeks_rsi_display}")
                 print(f"   이전 주차 모드: {current_mode} → 결정된 모드: {new_mode}")
+                
+                # 12/29~1/2 주차 특별 디버깅
+                if this_week_friday.date() >= datetime(2025, 12, 29).date() and this_week_friday.date() <= datetime(2026, 1, 2).date():
+                    print(f"⚠️ [12/29~1/2 주차 디버깅]")
+                    print(f"   이번주 금요일: {this_week_friday.strftime('%Y-%m-%d')}")
+                    print(f"   1주전 RSI: {prev_week_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}")
+                    print(f"   이전 주차 모드: {current_mode}")
+                    print(f"   결정된 모드: {new_mode}")
+                    # determine_mode 조건 확인
+                    safe_cond1 = prev_week_rsi > 65 and prev_week_rsi > two_weeks_ago_rsi
+                    safe_cond2 = 40 < prev_week_rsi < 50 and prev_week_rsi > two_weeks_ago_rsi
+                    safe_cond3 = prev_week_rsi >= 50 and two_weeks_ago_rsi < 50
+                    ag_cond1 = prev_week_rsi < 50 and prev_week_rsi < two_weeks_ago_rsi and two_weeks_ago_rsi > 50
+                    ag_cond2 = 50 < prev_week_rsi < 60 and prev_week_rsi < two_weeks_ago_rsi
+                    ag_cond3 = prev_week_rsi < 35 and prev_week_rsi < two_weeks_ago_rsi
+                    print(f"   안전모드 조건: cond1={safe_cond1}, cond2={safe_cond2}, cond3={safe_cond3}")
+                    print(f"   공세모드 조건: cond1={ag_cond1}, cond2={ag_cond2}, cond3={ag_cond3}")
+                    if not (safe_cond1 or safe_cond2 or safe_cond3) and not (ag_cond1 or ag_cond2 or ag_cond3):
+                        print(f"   ⚠️ 조건 충족 없음 → 이전 모드 유지: {current_mode}")
                 
                 if new_mode != current_mode:
                     print(f"🔄 백테스팅 모드 전환: {current_mode} → {new_mode} (1주전 RSI: {prev_rsi_display}, 2주전 RSI: {two_weeks_rsi_display})")
