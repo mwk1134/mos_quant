@@ -1274,19 +1274,22 @@ class SOXLQuantTrader:
         
         return True
     
-    def execute_buy(self, target_price: float, actual_price: float, current_date: datetime) -> bool:
+    def execute_buy(self, target_price: float, actual_price: float, current_date: datetime, mode: Optional[str] = None) -> bool:
         """
         매수 실행 (목표가 기준 수량으로 계산하여 실제가에 매수)
         Args:
             target_price: 목표 매수가 (수량 계산용)
             actual_price: 실제 매수가 (당일 종가)
             current_date: 매수 날짜
+            mode: 매수 시점의 모드 (None이면 self.current_mode 사용)
         Returns:
             bool: 매수 성공 여부
         """
         if not self.can_buy_next_round():
             return False
         
+        # 매수 시점의 모드 결정 (매개변수가 없으면 self.current_mode 사용)
+        buy_mode = mode if mode is not None else self.current_mode
 
         # 1회시드 금액 계산
         target_amount = self.calculate_position_size(self.current_round)
@@ -1318,7 +1321,7 @@ class SOXLQuantTrader:
             "shares": actual_shares,    # 실제 매수 수량
             "target_price": target_price,  # 목표가 (참조용)
             "amount": actual_amount,    # 실제 투자금액
-            "mode": self.current_mode
+            "mode": buy_mode  # 매수 시점의 모드 저장
         }
         
         self.positions.append(position)
@@ -2442,7 +2445,7 @@ class SOXLQuantTrader:
                         print(success_msg)
                         self.backtest_logs.append(success_msg)
                         
-                        if self.execute_buy(buy_price, daily_close, current_date):  # 목표가 기준 수량으로 계산하여 종가에 매수
+                        if self.execute_buy(buy_price, daily_close, current_date, current_mode):  # 목표가 기준 수량으로 계산하여 종가에 매수, 매수 시점의 모드 전달
                             exec_msg = f"✅ 매수 체결 성공!"
                             print(exec_msg)
                             self.backtest_logs.append(exec_msg)
