@@ -1,6 +1,6 @@
 """
 파라미터.xlsx 파일에서 파라미터를 읽어서 백테스팅을 실행하는 스크립트 (임의 티커 지원)
-초기자산 40000달러, 기간 2011-01-01 ~ 2025-12-07
+초기자산 40000달러, 백테스팅 기간은 실행 시 수동으로 설정 가능
 """
 import openpyxl
 from datetime import datetime, timedelta
@@ -175,6 +175,21 @@ def load_parameters_from_excel(excel_file: str = "파라미터.xlsx"):
         raise
 
 
+def validate_date(date_str: str) -> bool:
+    """
+    날짜 형식 검증 (YYYY-MM-DD)
+    Args:
+        date_str: 검증할 날짜 문자열
+    Returns:
+        bool: 유효한 날짜 형식이면 True
+    """
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
 def calculate_mdd(daily_records):
     """
     최대 낙폭(MDD) 계산
@@ -251,6 +266,43 @@ def main():
     
     print(f"📈 선택된 티커: {ticker}")
     
+    # 백테스팅 기간 입력 받기
+    default_start_date = "2011-01-01"
+    default_end_date = "2025-12-07"
+    
+    print(f"\n📅 백테스팅 기간 설정")
+    print(f"   기본값: {default_start_date} ~ {default_end_date}")
+    print(f"   (엔터를 누르면 기본값 사용)")
+    
+    # 시작일 입력
+    start_date_input = input(f"\n   시작일을 입력하세요 (YYYY-MM-DD, 기본값: {default_start_date}): ").strip()
+    if not start_date_input:
+        start_date = default_start_date
+    else:
+        if not validate_date(start_date_input):
+            print(f"❌ 잘못된 날짜 형식입니다. YYYY-MM-DD 형식으로 입력해주세요.")
+            return
+        start_date = start_date_input
+    
+    # 종료일 입력
+    end_date_input = input(f"   종료일을 입력하세요 (YYYY-MM-DD, 기본값: {default_end_date}): ").strip()
+    if not end_date_input:
+        end_date = default_end_date
+    else:
+        if not validate_date(end_date_input):
+            print(f"❌ 잘못된 날짜 형식입니다. YYYY-MM-DD 형식으로 입력해주세요.")
+            return
+        end_date = end_date_input
+    
+    # 시작일이 종료일보다 늦으면 오류
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+    if start_dt > end_dt:
+        print(f"❌ 시작일({start_date})이 종료일({end_date})보다 늦습니다.")
+        return
+    
+    print(f"\n✅ 설정된 기간: {start_date} ~ {end_date}")
+    
     # 엑셀 파일에서 파라미터 읽기
     try:
         ag_config, sf_config = load_parameters_from_excel("파라미터.xlsx")
@@ -260,8 +312,6 @@ def main():
     
     # 기본 설정값
     initial_capital = 40000  # 투자원금 4만 달러
-    start_date = "2011-01-01"  # 투자시작일
-    end_date = "2025-12-07"  # 투자종료일
     
     print(f"\n💰 투자원금: ${initial_capital:,.0f}")
     print(f"📅 투자기간: {start_date} ~ {end_date}")
@@ -293,8 +343,7 @@ def main():
             print("   웹앱을 실행하거나 update_rsi_data.py를 실행하여 RSI 데이터를 생성하세요.")
             return
         
-        # 시작 날짜의 주차 RSI 확인
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        # 시작 날짜의 주차 RSI 확인 (start_dt는 이미 위에서 정의됨)
         # 시작일이 속한 주의 금요일 계산 (soxl_quant_system.py와 동일한 로직)
         days_until_friday = (4 - start_dt.weekday()) % 7  # 금요일(4)까지의 일수
         if days_until_friday == 0 and start_dt.weekday() != 4:  # 금요일이 아닌데 계산이 0이면 다음 주 금요일
