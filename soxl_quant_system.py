@@ -1134,21 +1134,83 @@ class SOXLQuantTrader:
                 return self.current_mode
             
             # 모드 결정 (2주전 vs 1주전 비교)
-            # 실제 전주 모드를 계산하기 위해 RSI 참조 데이터 사용
+            # 실제 전주 모드를 계산하기 위해 실시간 QQQ 데이터 사용
             # 1주전 금요일의 모드를 계산하려면, 1주전 금요일의 1주전/2주전 RSI를 사용
             actual_prev_week_mode = None
+            
+            # 실시간 QQQ 데이터로 전주 모드 계산 시도
             try:
-                rsi_ref_data = self.load_rsi_reference_data()
-                if rsi_ref_data:
-                    # 1주전 금요일의 1주전과 2주전 RSI 가져오기
-                    prev_week_prev_rsi = self.get_rsi_from_reference(one_week_ago_friday - timedelta(days=7), rsi_ref_data)  # 1주전 금요일의 1주전
-                    prev_week_two_weeks_rsi = self.get_rsi_from_reference(one_week_ago_friday - timedelta(days=14), rsi_ref_data)  # 1주전 금요일의 2주전
+                # 1주전 금요일의 1주전과 2주전 금요일 계산
+                prev_week_prev_friday = one_week_ago_friday - timedelta(days=7)  # 1주전 금요일의 1주전
+                prev_week_two_weeks_friday = one_week_ago_friday - timedelta(days=14)  # 1주전 금요일의 2주전
+                
+                # RSI 계산
+                prev_week_prev_friday_dt = pd.Timestamp(prev_week_prev_friday.date())
+                prev_week_two_weeks_friday_dt = pd.Timestamp(prev_week_two_weeks_friday.date())
+                
+                # 1주전 금요일의 1주전 RSI 찾기
+                prev_week_prev_rsi = None
+                earlier_dates_prev_1w = weekly_df.index[weekly_df.index <= prev_week_prev_friday_dt]
+                if len(earlier_dates_prev_1w) > 0:
+                    prev_week_prev_rsi_date = earlier_dates_prev_1w[-1]
+                    prev_week_prev_rsi_idx = weekly_df.index.get_loc(prev_week_prev_rsi_date)
+                    if prev_week_prev_rsi_idx < len(rsi):
+                        prev_week_prev_rsi = rsi.iloc[prev_week_prev_rsi_idx]
+                        if pd.isna(prev_week_prev_rsi):
+                            prev_week_prev_rsi = None
+                
+                # 1주전 금요일의 2주전 RSI 찾기
+                prev_week_two_weeks_rsi = None
+                earlier_dates_prev_2w = weekly_df.index[weekly_df.index <= prev_week_two_weeks_friday_dt]
+                if len(earlier_dates_prev_2w) > 0:
+                    prev_week_two_weeks_rsi_date = earlier_dates_prev_2w[-1]
+                    prev_week_two_weeks_rsi_idx = weekly_df.index.get_loc(prev_week_two_weeks_rsi_date)
+                    if prev_week_two_weeks_rsi_idx < len(rsi):
+                        prev_week_two_weeks_rsi = rsi.iloc[prev_week_two_weeks_rsi_idx]
+                        if pd.isna(prev_week_two_weeks_rsi):
+                            prev_week_two_weeks_rsi = None
+                
+                if prev_week_prev_rsi is not None and prev_week_two_weeks_rsi is not None:
+                    # 1주전 금요일의 모드를 계산하기 위해, 전주 이전의 모드도 계산
+                    # 전주 이전의 모드를 계산하기 위해 더 이전 RSI 필요
+                    prev_prev_week_prev_friday = prev_week_prev_friday - timedelta(days=7)  # 전주 이전의 1주전
+                    prev_prev_week_two_weeks_friday = prev_week_prev_friday - timedelta(days=14)  # 전주 이전의 2주전
                     
-                    if prev_week_prev_rsi is not None and prev_week_two_weeks_rsi is not None:
-                        # 1주전 금요일의 모드를 계산 (그 이전 모드는 기본값 SF로 가정)
-                        actual_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, "SF")
-            except Exception:
-                pass
+                    prev_prev_week_prev_friday_dt = pd.Timestamp(prev_prev_week_prev_friday.date())
+                    prev_prev_week_two_weeks_friday_dt = pd.Timestamp(prev_prev_week_two_weeks_friday.date())
+                    
+                    # 전주 이전의 1주전 RSI 찾기
+                    prev_prev_week_prev_rsi = None
+                    earlier_dates_prev_prev_1w = weekly_df.index[weekly_df.index <= prev_prev_week_prev_friday_dt]
+                    if len(earlier_dates_prev_prev_1w) > 0:
+                        prev_prev_week_prev_rsi_date = earlier_dates_prev_prev_1w[-1]
+                        prev_prev_week_prev_rsi_idx = weekly_df.index.get_loc(prev_prev_week_prev_rsi_date)
+                        if prev_prev_week_prev_rsi_idx < len(rsi):
+                            prev_prev_week_prev_rsi = rsi.iloc[prev_prev_week_prev_rsi_idx]
+                            if pd.isna(prev_prev_week_prev_rsi):
+                                prev_prev_week_prev_rsi = None
+                    
+                    # 전주 이전의 2주전 RSI 찾기
+                    prev_prev_week_two_weeks_rsi = None
+                    earlier_dates_prev_prev_2w = weekly_df.index[weekly_df.index <= prev_prev_week_two_weeks_friday_dt]
+                    if len(earlier_dates_prev_prev_2w) > 0:
+                        prev_prev_week_two_weeks_rsi_date = earlier_dates_prev_prev_2w[-1]
+                        prev_prev_week_two_weeks_rsi_idx = weekly_df.index.get_loc(prev_prev_week_two_weeks_rsi_date)
+                        if prev_prev_week_two_weeks_rsi_idx < len(rsi):
+                            prev_prev_week_two_weeks_rsi = rsi.iloc[prev_prev_week_two_weeks_rsi_idx]
+                            if pd.isna(prev_prev_week_two_weeks_rsi):
+                                prev_prev_week_two_weeks_rsi = None
+                    
+                    # 전주 이전의 모드 계산 (기본값 SF 사용)
+                    prev_prev_week_mode = "SF"
+                    if prev_prev_week_prev_rsi is not None and prev_prev_week_two_weeks_rsi is not None:
+                        prev_prev_week_mode = self.determine_mode(prev_prev_week_prev_rsi, prev_prev_week_two_weeks_rsi, "SF")
+                    
+                    # 1주전 금요일의 모드를 계산 (전주 이전의 모드 사용)
+                    actual_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, prev_prev_week_mode)
+                    print(f"🔍 전주 모드 계산: 1주전 RSI={prev_week_prev_rsi:.2f}, 2주전 RSI={prev_week_two_weeks_rsi:.2f}, 전주이전모드={prev_prev_week_mode} → {actual_prev_week_mode}")
+            except Exception as e:
+                print(f"⚠️ 전주 모드 계산 실패: {e}")
             
             # 실제 전주 모드가 계산되었으면 사용, 아니면 self.current_mode 사용
             prev_week_mode = actual_prev_week_mode if actual_prev_week_mode else self.current_mode
