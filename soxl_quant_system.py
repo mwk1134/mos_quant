@@ -1804,7 +1804,8 @@ class SOXLQuantTrader:
         # 5. QQQ 주간 RSI 기반 모드 자동 전환
         # get_daily_recommendation()에서는 항상 오늘 날짜 기준으로 실시간 QQQ 데이터를 사용하여 모드를 계산함
         # 투자시작일과 무관하게 오늘 날짜 기준으로 모드를 판정해야 함
-        # 같은 주 내에서는 모드를 변경하지 않지만, 시작일 변경 시 오늘 날짜 기준 모드를 강제로 재계산해야 함
+        # simulate_from_start_to_today()가 시작일 기준으로 모드를 설정했을 수 있으므로,
+        # 항상 오늘 날짜 기준으로 모드를 재계산해야 함
         
         today = self.get_today_date()
         days_until_friday = (4 - today.weekday()) % 7
@@ -1816,8 +1817,8 @@ class SOXLQuantTrader:
         old_week_friday_raw = self.current_week_friday
         
         # 투자시작일과 무관하게 항상 오늘 날짜 기준으로 모드 계산
-        # 같은 주 내에서는 모드를 변경하지 않지만, 시작일이 변경되었을 수 있으므로
-        # 시작일이 이번 주 내에 있으면 강제로 재계산 (시작일의 모드가 아닌 오늘 날짜 기준 모드 사용)
+        # 시작일이 이번 주 내에 있으면, simulate_from_start_to_today()가 시작일 기준으로 모드를 설정했을 수 있으므로
+        # 강제로 오늘 날짜 기준 모드를 재계산해야 함
         force_recalculate = False
         if self.session_start_date:
             try:
@@ -1828,23 +1829,99 @@ class SOXLQuantTrader:
                 start_week_friday = session_start_dt + timedelta(days=start_days_until_friday)
                 
                 # 시작일이 이번 주 내에 있으면 강제로 재계산
+                # (시작일의 모드가 아닌 오늘 날짜 기준 모드를 사용해야 함)
                 if start_week_friday.date() == this_week_friday_calc.date():
                     force_recalculate = True
                     print(f"🔄 시작일({self.session_start_date})이 이번 주 내에 있음. 오늘 날짜 기준 모드 강제 재계산")
             except Exception as e:
                 print(f"⚠️ 시작일 확인 중 오류: {e}")
         
+        # 강제 재계산이 필요하거나 새로운 주차인 경우
         if force_recalculate or (old_week_friday_raw is None or old_week_friday_raw.date() != this_week_friday_calc.date()):
-            # 강제 재계산이 필요하거나 새로운 주차인 경우
             if force_recalculate:
                 # 같은 주 체크를 우회하기 위해 current_week_friday를 임시로 None으로 설정
+                # 이렇게 하면 update_mode()가 같은 주 체크를 건너뛰고 모드를 재계산함
+                # 또한 시작일 기준으로 설정된 모드가 전주 모드로 사용되지 않도록,
+                # current_mode를 임시로 저장하고 None으로 설정하여 update_mode()가 전주 모드를 올바르게 계산하도록 함
+                temp_current_mode = self.current_mode
                 self.current_week_friday = None
-            print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
-            new_mode = self.update_mode(qqq_data)
-            if force_recalculate:
-                print(f"✅ 오늘 날짜 기준 모드 재계산 완료: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {new_mode}")
+                self.current_mode = None  # 전주 모드를 올바르게 계산하도록 None으로 설정
+                print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
+                new_mode = self.update_mode(qqq_data)
+                # update_mode()가 전주 모드를 올바르게 계산했는지 확인
+                # 만약 update_mode()가 전주 모드 계산에 실패하면 self.current_mode(None)를 사용하므로,
+                # 이 경우 기본값 "SF"를 사용하여 모드를 계산해야 함
+                if new_mode is None:
+                    # 전주 모드를 기본값 "SF"로 가정하고 모드 계산
+                    print(f"⚠️ update_mode()가 모드 계산에 실패. 기본값 SF로 재계산합니다.")
+                    # 주간 데이터로 변환하여 RSI 계산
+                    weekly_df = qqq_data.resample('W-FRI').agg({
+                        'Open': 'first',
+                        'High': 'max',
+                        'Low': 'min',
+                        'Close': 'last',
+                        'Volume': 'sum'
+                    }).dropna()
+                    
+                    if len(weekly_df) >= 15:
+                        delta = weekly_df['Close'].diff()
+                        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                        rs = gain / loss
+                        rsi = 100 - (100 / (1 + rs))
+                        
+                        # 오늘 날짜 기준으로 1주전, 2주전 금요일 계산
+                        days_until_friday = (4 - today.weekday()) % 7
+                        if days_until_friday == 0 and today.weekday() != 4:
+                            days_until_friday = 7
+                        this_week_friday = today + timedelta(days=days_until_friday)
+                        if today.weekday() == 4:
+                            latest_completed_friday = today
+                        else:
+                            latest_completed_friday = this_week_friday - timedelta(days=7)
+                        
+                        one_week_ago_friday = latest_completed_friday
+                        two_weeks_ago_friday = latest_completed_friday - timedelta(days=7)
+                        
+                        # RSI 찾기
+                        one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+                        two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                        
+                        one_week_ago_rsi = None
+                        two_weeks_ago_rsi = None
+                        
+                        earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
+                        if len(earlier_dates_1w) > 0:
+                            one_week_rsi_date = earlier_dates_1w[-1]
+                            one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
+                            if one_week_rsi_idx < len(rsi):
+                                one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
+                                if pd.isna(one_week_ago_rsi):
+                                    one_week_ago_rsi = None
+                        
+                        earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
+                        if len(earlier_dates_2w) > 0:
+                            two_weeks_rsi_date = earlier_dates_2w[-1]
+                            two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
+                            if two_weeks_rsi_idx < len(rsi):
+                                two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
+                                if pd.isna(two_weeks_ago_rsi):
+                                    two_weeks_ago_rsi = None
+                        
+                        # 전주 모드를 기본값 "SF"로 가정하고 오늘의 모드 계산
+                        if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
+                            new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, "SF")
+                            self.current_mode = new_mode
+                            self.current_week_friday = this_week_friday_calc
+                            print(f"✅ 기본값 SF로 모드 결정: {new_mode}")
+                else:
+                    print(f"✅ 오늘 날짜 기준 모드 재계산 완료: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {new_mode}")
+            else:
+                print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
+                new_mode = self.update_mode(qqq_data)
         else:
             # 같은 주 내이고 시작일이 다른 주에 있으면 모드 유지
+            # 하지만 시작일이 변경되었을 수 있으므로, 모드가 올바른지 확인
             print(f"✅ 같은 주 내 모드 유지: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {self.current_mode}")
             new_mode = self.current_mode
         
