@@ -1018,17 +1018,26 @@ class SOXLQuantTrader:
             prev_rsi < 35 and prev_rsi < current_rsi
         ]
         
-        # 안전모드 조건 확인
+        # 디버깅: 조건 확인
         safe_result = any(safe_conditions)
+        aggressive_result = any(aggressive_conditions)
+        
+        print(f"🔍 determine_mode 호출: 1주전 RSI={current_rsi:.2f}, 2주전 RSI={prev_rsi:.2f}, 전주모드={prev_mode}")
+        print(f"   안전모드 조건: {safe_conditions} → {safe_result}")
+        print(f"   공세모드 조건: {aggressive_conditions} → {aggressive_result}")
+        
+        # 안전모드 조건 확인
         if safe_result:
+            print(f"   → 결과: SF (안전모드)")
             return "SF"
         
         # 공세모드 조건 확인
-        aggressive_result = any(aggressive_conditions)
         if aggressive_result:
+            print(f"   → 결과: AG (공세모드)")
             return "AG"
         
         # 조건에 없으면 전주 모드 유지
+        print(f"   → 결과: {prev_mode} (전주 모드 유지)")
         return prev_mode
     
     def update_mode(self, qqq_data: pd.DataFrame) -> str:
@@ -1793,9 +1802,9 @@ class SOXLQuantTrader:
         self.reconcile_positions_with_close_history(soxl_data)
 
         # 5. QQQ 주간 RSI 기반 모드 자동 전환
-        # simulate_from_start_to_today()에서 이미 모드가 설정되었을 수 있으므로,
-        # get_daily_recommendation()에서는 같은 주 내에서는 모드를 변경하지 않도록 해야 함
-        # 이번주 시작일(월요일)에 모드가 결정되면, 그 주의 모든 거래일에 동일한 모드가 적용되어야 함
+        # get_daily_recommendation()에서는 항상 오늘 날짜 기준으로 실시간 QQQ 데이터를 사용하여 모드를 계산함
+        # 투자시작일과 무관하게 오늘 날짜 기준으로 모드를 판정해야 함
+        # 같은 주 내에서는 모드를 변경하지 않지만, 시작일 변경 시 오늘 날짜 기준 모드를 강제로 재계산해야 함
         
         today = self.get_today_date()
         days_until_friday = (4 - today.weekday()) % 7
@@ -1806,25 +1815,38 @@ class SOXLQuantTrader:
         # simulate_from_start_to_today()에서 설정된 현재 주 금요일 확인
         old_week_friday_raw = self.current_week_friday
         
-        # 같은 주 내에서는 모드를 변경하지 않음 (이번주 시작일의 모드가 그 주 전체에 적용)
-        if old_week_friday_raw and old_week_friday_raw.date() == this_week_friday_calc.date():
-            # 같은 주이므로 모드를 재계산하지 않음
+        # 투자시작일과 무관하게 항상 오늘 날짜 기준으로 모드 계산
+        # 같은 주 내에서는 모드를 변경하지 않지만, 시작일이 변경되었을 수 있으므로
+        # 시작일이 이번 주 내에 있으면 강제로 재계산 (시작일의 모드가 아닌 오늘 날짜 기준 모드 사용)
+        force_recalculate = False
+        if self.session_start_date:
+            try:
+                session_start_dt = datetime.strptime(self.session_start_date, "%Y-%m-%d")
+                start_days_until_friday = (4 - session_start_dt.weekday()) % 7
+                if start_days_until_friday == 0 and session_start_dt.weekday() != 4:
+                    start_days_until_friday = 7
+                start_week_friday = session_start_dt + timedelta(days=start_days_until_friday)
+                
+                # 시작일이 이번 주 내에 있으면 강제로 재계산
+                if start_week_friday.date() == this_week_friday_calc.date():
+                    force_recalculate = True
+                    print(f"🔄 시작일({self.session_start_date})이 이번 주 내에 있음. 오늘 날짜 기준 모드 강제 재계산")
+            except Exception as e:
+                print(f"⚠️ 시작일 확인 중 오류: {e}")
+        
+        if force_recalculate or (old_week_friday_raw is None or old_week_friday_raw.date() != this_week_friday_calc.date()):
+            # 강제 재계산이 필요하거나 새로운 주차인 경우
+            if force_recalculate:
+                # 같은 주 체크를 우회하기 위해 current_week_friday를 임시로 None으로 설정
+                self.current_week_friday = None
+            print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
+            new_mode = self.update_mode(qqq_data)
+            if force_recalculate:
+                print(f"✅ 오늘 날짜 기준 모드 재계산 완료: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {new_mode}")
+        else:
+            # 같은 주 내이고 시작일이 다른 주에 있으면 모드 유지
             print(f"✅ 같은 주 내 모드 유지: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {self.current_mode}")
             new_mode = self.current_mode
-        else:
-            # 새로운 주차이거나 초기화인 경우에만 모드 재계산
-            print(f"🔄 새로운 주차 또는 초기화: 모드 재계산 필요")
-            # update_mode()를 호출하되, 같은 주 내에서는 모드를 변경하지 않도록 보장
-            old_mode = self.current_mode
-            new_mode = self.update_mode(qqq_data)
-            
-            # update_mode()가 같은 주 내에서 모드를 변경하지 않도록 보장
-            if old_week_friday_raw and old_week_friday_raw.date() == this_week_friday_calc.date():
-                # 같은 주인데 모드가 변경되었다면 원래 모드로 복원
-                if new_mode != old_mode:
-                    print(f"⚠️ 같은 주 내 모드 변경 감지: {old_mode} → {new_mode}, 원래 모드로 복원")
-                    new_mode = old_mode
-                    self.current_mode = old_mode
         
         # 기존 포지션의 모드 복원 (매수 시점의 모드 보존)
         for pos in self.positions:
