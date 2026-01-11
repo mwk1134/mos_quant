@@ -980,7 +980,45 @@ class SOXLQuantTrader:
             return None
     
 
-    def determine_mode(self, current_rsi: float, prev_rsi: float, prev_mode: str = "SF") -> str:
+    def _is_mode_case_matched(self, current_rsi: float, prev_rsi: float) -> tuple[bool, str]:
+        """
+        RSI 값으로 안전모드 또는 공세모드 조건에 해당하는지 확인
+        Args:
+            current_rsi: 1주전 RSI
+            prev_rsi: 2주전 RSI
+        Returns:
+            tuple: (조건에 해당하는지 여부, 모드("SF" 또는 "AG" 또는 None))
+        """
+        # 안전모드 조건들 (OR로 연결)
+        safe_conditions = [
+            # RSI > 65 영역에서 하락 (2주전 RSI > 65이고 2주전 > 1주전)
+            prev_rsi > 65 and prev_rsi > current_rsi,
+            # 40 < RSI < 50에서 하락 (2주전 RSI가 40~50 사이이고 2주전 > 1주전)
+            40 < prev_rsi < 50 and prev_rsi > current_rsi,
+            # RSI가 50 밑으로 하락 (2주전 >= 50이고 1주전 < 50)
+            prev_rsi >= 50 and current_rsi < 50
+        ]
+        
+        # 공세모드 조건들 (OR로 연결)
+        aggressive_conditions = [
+            # RSI가 50 위로 상승 (2주전 < 50이고 2주전 < 1주전이고 1주전 > 50)
+            prev_rsi < 50 and prev_rsi < current_rsi and current_rsi > 50,
+            # 50 < RSI < 60에서 상승 (2주전 RSI가 50~60 사이이고 2주전 < 1주전)
+            50 < prev_rsi < 60 and prev_rsi < current_rsi,
+            # RSI < 35 영역에서 상승 (2주전 < 35이고 2주전 < 1주전)
+            prev_rsi < 35 and prev_rsi < current_rsi
+        ]
+        
+        safe_result = any(safe_conditions)
+        aggressive_result = any(aggressive_conditions)
+        
+        if safe_result:
+            return (True, "SF")
+        if aggressive_result:
+            return (True, "AG")
+        return (False, None)
+    
+    def determine_mode(self, current_rsi: float, prev_rsi: float, prev_mode: str) -> str:
         """
         구글스프레드시트 수식 기반 모드 판단
         Args:
@@ -994,51 +1032,164 @@ class SOXLQuantTrader:
         if current_rsi is None or prev_rsi is None:
             raise ValueError(f"RSI 데이터가 없습니다. current_rsi: {current_rsi}, prev_rsi: {prev_rsi}")
         
-        # 안전모드 조건들 (OR로 연결)
-        safe_conditions = [
-            # RSI > 65 영역에서 하락 (2주전 RSI > 65이고 2주전 > 1주전)
-            prev_rsi > 65 and prev_rsi > current_rsi,
-            
-            # 40 < RSI < 50에서 하락 (2주전 RSI가 40~50 사이이고 2주전 > 1주전)
-            40 < prev_rsi < 50 and prev_rsi > current_rsi,
-            
-            # RSI가 50 밑으로 하락 (2주전 >= 50이고 1주전 < 50)
-            prev_rsi >= 50 and current_rsi < 50
-        ]
-        
-        # 공세모드 조건들 (OR로 연결)
-        aggressive_conditions = [
-            # RSI가 50 위로 상승 (2주전 < 50이고 2주전 < 1주전이고 1주전 > 50)
-            prev_rsi < 50 and prev_rsi < current_rsi and current_rsi > 50,
-            
-            # 50 < RSI < 60에서 상승 (2주전 RSI가 50~60 사이이고 2주전 < 1주전)
-            50 < prev_rsi < 60 and prev_rsi < current_rsi,
-            
-            # RSI < 35 영역에서 상승 (2주전 < 35이고 2주전 < 1주전)
-            prev_rsi < 35 and prev_rsi < current_rsi
-        ]
-        
-        # 디버깅: 조건 확인
-        safe_result = any(safe_conditions)
-        aggressive_result = any(aggressive_conditions)
+        # _is_mode_case_matched를 사용하여 조건 확인
+        is_matched, matched_mode = self._is_mode_case_matched(current_rsi, prev_rsi)
         
         print(f"🔍 determine_mode 호출: 1주전 RSI={current_rsi:.2f}, 2주전 RSI={prev_rsi:.2f}, 전주모드={prev_mode}")
-        print(f"   안전모드 조건: {safe_conditions} → {safe_result}")
-        print(f"   공세모드 조건: {aggressive_conditions} → {aggressive_result}")
         
-        # 안전모드 조건 확인
-        if safe_result:
-            print(f"   → 결과: SF (안전모드)")
-            return "SF"
-        
-        # 공세모드 조건 확인
-        if aggressive_result:
-            print(f"   → 결과: AG (공세모드)")
-            return "AG"
+        # 조건에 해당하면 해당 모드 반환
+        if is_matched:
+            print(f"   → 결과: {matched_mode} (조건에 해당)")
+            return matched_mode
         
         # 조건에 없으면 전주 모드 유지
-        print(f"   → 결과: {prev_mode} (전주 모드 유지)")
+        print(f"   → 결과: {prev_mode} (전주 모드 유지 - 조건에 해당하지 않음)")
         return prev_mode
+    
+    def _calculate_week_mode_recursive_with_reference(self, target_friday: datetime, rsi_ref_data: dict, max_depth: int = 20) -> tuple[str | None, bool]:
+        """
+        RSI 참조 데이터를 사용하여 특정 주차의 모드를 재귀적으로 계산
+        안전모드 3가지 조건 또는 공세모드 3가지 조건에 해당하는 모드가 나올 때까지 이전 주차를 확인
+        Args:
+            target_friday: 계산할 주차의 금요일
+            rsi_ref_data: RSI 참조 데이터 딕셔너리
+            max_depth: 최대 재귀 깊이 (무한 루프 방지)
+        Returns:
+            tuple: (모드("SF" 또는 "AG"), 성공 여부)
+        """
+        if max_depth <= 0:
+            print(f"❌ 모드판정실패: 최대 재귀 깊이 도달 ({target_friday.strftime('%Y-%m-%d')})")
+            return None, False
+        
+        # 1주전, 2주전 금요일 계산
+        one_week_ago_friday = target_friday - timedelta(days=7)
+        two_weeks_ago_friday = target_friday - timedelta(days=14)
+        
+        # RSI 찾기
+        one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
+        two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
+        
+        # RSI 데이터가 없으면 실패
+        if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
+            failure_reason = []
+            if one_week_ago_rsi is None:
+                failure_reason.append(f"1주전 RSI 데이터 없음")
+            if two_weeks_ago_rsi is None:
+                failure_reason.append(f"2주전 RSI 데이터 없음")
+            print(f"❌ 모드판정실패: {target_friday.strftime('%Y-%m-%d')} 주차 모드 계산 불가 - {', '.join(failure_reason)}")
+            return None, False
+        
+        # 조건에 해당하는지 확인
+        is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
+        
+        if is_matched:
+            # 조건에 해당하는 모드를 찾았음
+            print(f"✅ {target_friday.strftime('%Y-%m-%d')} 주차 모드 계산: 1주전 RSI={one_week_ago_rsi:.2f}, 2주전 RSI={two_weeks_ago_rsi:.2f} → {matched_mode} (조건에 해당)")
+            return matched_mode, True
+        
+        # 조건에 해당하지 않으면 이전 주차의 모드를 재귀적으로 확인
+        print(f"🔍 {target_friday.strftime('%Y-%m-%d')} 주차: 조건에 해당하지 않음, 이전 주차 확인 중...")
+        prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(one_week_ago_friday, rsi_ref_data, max_depth - 1)
+        
+        if not success:
+            print(f"❌ 모드판정실패: {target_friday.strftime('%Y-%m-%d')} 주차의 이전 주차 모드 계산 실패")
+            return None, False
+        
+        # 이전 주차의 모드를 사용하여 현재 주차의 모드 결정
+        final_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, prev_week_mode)
+        
+        # determine_mode가 prev_week_mode를 반환했는지 확인
+        if final_mode == prev_week_mode:
+            print(f"✅ {target_friday.strftime('%Y-%m-%d')} 주차 모드: {final_mode} (이전 주차 모드 유지)")
+        else:
+            print(f"✅ {target_friday.strftime('%Y-%m-%d')} 주차 모드: {final_mode} (이전 주차 모드 {prev_week_mode}에서 변경)")
+        
+        return final_mode, True
+    
+    def _calculate_week_mode_recursive(self, target_friday: datetime, weekly_df: pd.DataFrame, rsi: pd.Series, max_depth: int = 20) -> tuple[str | None, bool]:
+        """
+        특정 주차의 모드를 재귀적으로 계산
+        안전모드 3가지 조건 또는 공세모드 3가지 조건에 해당하는 모드가 나올 때까지 이전 주차를 확인
+        Args:
+            target_friday: 계산할 주차의 금요일
+            weekly_df: 주간 데이터프레임
+            rsi: RSI 시리즈
+            max_depth: 최대 재귀 깊이 (무한 루프 방지)
+        Returns:
+            tuple: (모드("SF" 또는 "AG"), 성공 여부)
+        """
+        if max_depth <= 0:
+            print(f"❌ 모드판정실패: 최대 재귀 깊이 도달 ({target_friday.strftime('%Y-%m-%d')})")
+            return None, False
+        
+        # 1주전, 2주전 금요일 계산
+        one_week_ago_friday = target_friday - timedelta(days=7)
+        two_weeks_ago_friday = target_friday - timedelta(days=14)
+        
+        # RSI 찾기
+        one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+        two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+        
+        # 1주전 RSI 찾기
+        one_week_ago_rsi = None
+        earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
+        if len(earlier_dates_1w) > 0:
+            one_week_rsi_date = earlier_dates_1w[-1]
+            one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
+            if one_week_rsi_idx < len(rsi):
+                one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
+                if pd.isna(one_week_ago_rsi):
+                    one_week_ago_rsi = None
+        
+        # 2주전 RSI 찾기
+        two_weeks_ago_rsi = None
+        earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
+        if len(earlier_dates_2w) > 0:
+            two_weeks_rsi_date = earlier_dates_2w[-1]
+            two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
+            if two_weeks_rsi_idx < len(rsi):
+                two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
+                if pd.isna(two_weeks_ago_rsi):
+                    two_weeks_ago_rsi = None
+        
+        # RSI 데이터가 없으면 실패
+        if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
+            failure_reason = []
+            if one_week_ago_rsi is None:
+                failure_reason.append(f"1주전 RSI 데이터 없음")
+            if two_weeks_ago_rsi is None:
+                failure_reason.append(f"2주전 RSI 데이터 없음")
+            print(f"❌ 모드판정실패: {target_friday.strftime('%Y-%m-%d')} 주차 모드 계산 불가 - {', '.join(failure_reason)}")
+            return None, False
+        
+        # 조건에 해당하는지 확인
+        is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
+        
+        if is_matched:
+            # 조건에 해당하는 모드를 찾았음
+            print(f"✅ {target_friday.strftime('%Y-%m-%d')} 주차 모드 계산: 1주전 RSI={one_week_ago_rsi:.2f}, 2주전 RSI={two_weeks_ago_rsi:.2f} → {matched_mode} (조건에 해당)")
+            return matched_mode, True
+        
+        # 조건에 해당하지 않으면 이전 주차의 모드를 재귀적으로 확인
+        print(f"🔍 {target_friday.strftime('%Y-%m-%d')} 주차: 조건에 해당하지 않음, 이전 주차 확인 중...")
+        prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df, rsi, max_depth - 1)
+        
+        if not success:
+            print(f"❌ 모드판정실패: {target_friday.strftime('%Y-%m-%d')} 주차의 이전 주차 모드 계산 실패")
+            return None, False
+        
+        # 이전 주차의 모드를 사용하여 현재 주차의 모드 결정
+        # determine_mode를 호출하지만, 이미 prev_week_mode가 case에 해당하는 모드이므로
+        # 조건에 해당하지 않으면 prev_week_mode를 반환할 것임
+        final_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, prev_week_mode)
+        
+        # determine_mode가 prev_week_mode를 반환했는지 확인
+        if final_mode == prev_week_mode:
+            print(f"✅ {target_friday.strftime('%Y-%m-%d')} 주차 모드: {final_mode} (이전 주차 모드 유지)")
+        else:
+            print(f"✅ {target_friday.strftime('%Y-%m-%d')} 주차 모드: {final_mode} (이전 주차 모드 {prev_week_mode}에서 변경)")
+        
+        return final_mode, True
     
     def update_mode(self, qqq_data: pd.DataFrame) -> str:
         """
@@ -1134,97 +1285,29 @@ class SOXLQuantTrader:
                 print("⚠️ RSI 계산 실패, 현재 모드 유지")
                 return self.current_mode
             
-            # 초기 모드가 없는 경우 RSI 기준으로 결정
-            if self.current_mode is None:
-                # 초기 모드 결정을 위해 기본값으로 SF 사용
-                initial_mode = "SF"
-                # 모드 결정 (2주전 vs 1주전 비교) - 초기 모드도 determine_mode로 결정
-                self.current_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, initial_mode)
-                return self.current_mode
+            # 전주 모드를 재귀적으로 계산 (case에 해당하는 모드가 나올 때까지)
+            prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df, rsi)
             
-            # 모드 결정 (2주전 vs 1주전 비교)
-            # 실제 전주 모드를 계산하기 위해 실시간 QQQ 데이터 사용
-            # 1주전 금요일의 모드를 계산하려면, 1주전 금요일의 1주전/2주전 RSI를 사용
-            actual_prev_week_mode = None
+            if not success:
+                print(f"❌ 모드판정실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다.")
+                print(f"   - 1주전 금요일: {one_week_ago_friday.strftime('%Y-%m-%d')}")
+                print(f"   - 2주전 금요일: {two_weeks_ago_friday.strftime('%Y-%m-%d')}")
+                print(f"   - 1주전 RSI: {one_week_ago_rsi:.2f if one_week_ago_rsi is not None else 'None'}")
+                print(f"   - 2주전 RSI: {two_weeks_ago_rsi:.2f if two_weeks_ago_rsi is not None else 'None'}")
+                return None
             
-            # 실시간 QQQ 데이터로 전주 모드 계산 시도
-            try:
-                # 1주전 금요일의 1주전과 2주전 금요일 계산
-                prev_week_prev_friday = one_week_ago_friday - timedelta(days=7)  # 1주전 금요일의 1주전
-                prev_week_two_weeks_friday = one_week_ago_friday - timedelta(days=14)  # 1주전 금요일의 2주전
-                
-                # RSI 계산
-                prev_week_prev_friday_dt = pd.Timestamp(prev_week_prev_friday.date())
-                prev_week_two_weeks_friday_dt = pd.Timestamp(prev_week_two_weeks_friday.date())
-                
-                # 1주전 금요일의 1주전 RSI 찾기
-                prev_week_prev_rsi = None
-                earlier_dates_prev_1w = weekly_df.index[weekly_df.index <= prev_week_prev_friday_dt]
-                if len(earlier_dates_prev_1w) > 0:
-                    prev_week_prev_rsi_date = earlier_dates_prev_1w[-1]
-                    prev_week_prev_rsi_idx = weekly_df.index.get_loc(prev_week_prev_rsi_date)
-                    if prev_week_prev_rsi_idx < len(rsi):
-                        prev_week_prev_rsi = rsi.iloc[prev_week_prev_rsi_idx]
-                        if pd.isna(prev_week_prev_rsi):
-                            prev_week_prev_rsi = None
-                
-                # 1주전 금요일의 2주전 RSI 찾기
-                prev_week_two_weeks_rsi = None
-                earlier_dates_prev_2w = weekly_df.index[weekly_df.index <= prev_week_two_weeks_friday_dt]
-                if len(earlier_dates_prev_2w) > 0:
-                    prev_week_two_weeks_rsi_date = earlier_dates_prev_2w[-1]
-                    prev_week_two_weeks_rsi_idx = weekly_df.index.get_loc(prev_week_two_weeks_rsi_date)
-                    if prev_week_two_weeks_rsi_idx < len(rsi):
-                        prev_week_two_weeks_rsi = rsi.iloc[prev_week_two_weeks_rsi_idx]
-                        if pd.isna(prev_week_two_weeks_rsi):
-                            prev_week_two_weeks_rsi = None
-                
-                if prev_week_prev_rsi is not None and prev_week_two_weeks_rsi is not None:
-                    # 1주전 금요일의 모드를 계산하기 위해, 전주 이전의 모드도 계산
-                    # 전주 이전의 모드를 계산하기 위해 더 이전 RSI 필요
-                    prev_prev_week_prev_friday = prev_week_prev_friday - timedelta(days=7)  # 전주 이전의 1주전
-                    prev_prev_week_two_weeks_friday = prev_week_prev_friday - timedelta(days=14)  # 전주 이전의 2주전
-                    
-                    prev_prev_week_prev_friday_dt = pd.Timestamp(prev_prev_week_prev_friday.date())
-                    prev_prev_week_two_weeks_friday_dt = pd.Timestamp(prev_prev_week_two_weeks_friday.date())
-                    
-                    # 전주 이전의 1주전 RSI 찾기
-                    prev_prev_week_prev_rsi = None
-                    earlier_dates_prev_prev_1w = weekly_df.index[weekly_df.index <= prev_prev_week_prev_friday_dt]
-                    if len(earlier_dates_prev_prev_1w) > 0:
-                        prev_prev_week_prev_rsi_date = earlier_dates_prev_prev_1w[-1]
-                        prev_prev_week_prev_rsi_idx = weekly_df.index.get_loc(prev_prev_week_prev_rsi_date)
-                        if prev_prev_week_prev_rsi_idx < len(rsi):
-                            prev_prev_week_prev_rsi = rsi.iloc[prev_prev_week_prev_rsi_idx]
-                            if pd.isna(prev_prev_week_prev_rsi):
-                                prev_prev_week_prev_rsi = None
-                    
-                    # 전주 이전의 2주전 RSI 찾기
-                    prev_prev_week_two_weeks_rsi = None
-                    earlier_dates_prev_prev_2w = weekly_df.index[weekly_df.index <= prev_prev_week_two_weeks_friday_dt]
-                    if len(earlier_dates_prev_prev_2w) > 0:
-                        prev_prev_week_two_weeks_rsi_date = earlier_dates_prev_prev_2w[-1]
-                        prev_prev_week_two_weeks_rsi_idx = weekly_df.index.get_loc(prev_prev_week_two_weeks_rsi_date)
-                        if prev_prev_week_two_weeks_rsi_idx < len(rsi):
-                            prev_prev_week_two_weeks_rsi = rsi.iloc[prev_prev_week_two_weeks_rsi_idx]
-                            if pd.isna(prev_prev_week_two_weeks_rsi):
-                                prev_prev_week_two_weeks_rsi = None
-                    
-                    # 전주 이전의 모드 계산 (기본값 SF 사용)
-                    prev_prev_week_mode = "SF"
-                    if prev_prev_week_prev_rsi is not None and prev_prev_week_two_weeks_rsi is not None:
-                        prev_prev_week_mode = self.determine_mode(prev_prev_week_prev_rsi, prev_prev_week_two_weeks_rsi, "SF")
-                    
-                    # 1주전 금요일의 모드를 계산 (전주 이전의 모드 사용)
-                    actual_prev_week_mode = self.determine_mode(prev_week_prev_rsi, prev_week_two_weeks_rsi, prev_prev_week_mode)
-                    print(f"🔍 전주 모드 계산: 1주전 RSI={prev_week_prev_rsi:.2f}, 2주전 RSI={prev_week_two_weeks_rsi:.2f}, 전주이전모드={prev_prev_week_mode} → {actual_prev_week_mode}")
-            except Exception as e:
-                print(f"⚠️ 전주 모드 계산 실패: {e}")
+            # 현재 주차의 모드 결정
+            # 1주전, 2주전 RSI로 조건 확인
+            is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
             
-            # 실제 전주 모드가 계산되었으면 사용, 아니면 self.current_mode 사용
-            prev_week_mode = actual_prev_week_mode if actual_prev_week_mode else self.current_mode
-            
-            new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, prev_week_mode)
+            if is_matched:
+                # 조건에 해당하는 모드
+                new_mode = matched_mode
+                print(f"✅ 현재 주차 모드: {new_mode} (조건에 해당)")
+            else:
+                # 조건에 해당하지 않으면 전주 모드 사용
+                new_mode = prev_week_mode
+                print(f"✅ 현재 주차 모드: {new_mode} (전주 모드 유지 - 조건에 해당하지 않음)")
             
             if new_mode != self.current_mode:
                 self.current_mode = new_mode
@@ -1848,77 +1931,15 @@ class SOXLQuantTrader:
                 self.current_mode = None  # 전주 모드를 올바르게 계산하도록 None으로 설정
                 print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
                 new_mode = self.update_mode(qqq_data)
-                # update_mode()가 전주 모드를 올바르게 계산했는지 확인
-                # 만약 update_mode()가 전주 모드 계산에 실패하면 self.current_mode(None)를 사용하므로,
-                # 이 경우 기본값 "SF"를 사용하여 모드를 계산해야 함
+                # update_mode()가 모드 판정 실패 시 None 반환
                 if new_mode is None:
-                    # 전주 모드를 기본값 "SF"로 가정하고 모드 계산
-                    print(f"⚠️ update_mode()가 모드 계산에 실패. 기본값 SF로 재계산합니다.")
-                    # 주간 데이터로 변환하여 RSI 계산
-                    weekly_df = qqq_data.resample('W-FRI').agg({
-                        'Open': 'first',
-                        'High': 'max',
-                        'Low': 'min',
-                        'Close': 'last',
-                        'Volume': 'sum'
-                    }).dropna()
-                    
-                    if len(weekly_df) >= 15:
-                        delta = weekly_df['Close'].diff()
-                        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                        rs = gain / loss
-                        rsi = 100 - (100 / (1 + rs))
-                        
-                        # 오늘 날짜 기준으로 1주전, 2주전 금요일 계산
-                        days_until_friday = (4 - today.weekday()) % 7
-                        if days_until_friday == 0 and today.weekday() != 4:
-                            days_until_friday = 7
-                        this_week_friday = today + timedelta(days=days_until_friday)
-                        if today.weekday() == 4:
-                            latest_completed_friday = today
-                        else:
-                            latest_completed_friday = this_week_friday - timedelta(days=7)
-                        
-                        one_week_ago_friday = latest_completed_friday
-                        two_weeks_ago_friday = latest_completed_friday - timedelta(days=7)
-                        
-                        # RSI 찾기
-                        one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                        two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
-                        
-                        one_week_ago_rsi = None
-                        two_weeks_ago_rsi = None
-                        
-                        earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
-                        if len(earlier_dates_1w) > 0:
-                            one_week_rsi_date = earlier_dates_1w[-1]
-                            one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
-                            if one_week_rsi_idx < len(rsi):
-                                one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
-                                if pd.isna(one_week_ago_rsi):
-                                    one_week_ago_rsi = None
-                        
-                        earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
-                        if len(earlier_dates_2w) > 0:
-                            two_weeks_rsi_date = earlier_dates_2w[-1]
-                            two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
-                            if two_weeks_rsi_idx < len(rsi):
-                                two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
-                                if pd.isna(two_weeks_ago_rsi):
-                                    two_weeks_ago_rsi = None
-                        
-                        # 전주 모드를 기본값 "SF"로 가정하고 오늘의 모드 계산
-                        if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
-                            new_mode = self.determine_mode(one_week_ago_rsi, two_weeks_ago_rsi, "SF")
-                            self.current_mode = new_mode
-                            self.current_week_friday = this_week_friday_calc
-                            print(f"✅ 기본값 SF로 모드 결정: {new_mode}")
-                else:
-                    print(f"✅ 오늘 날짜 기준 모드 재계산 완료: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {new_mode}")
+                    return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
+                print(f"✅ 오늘 날짜 기준 모드 재계산 완료: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {new_mode}")
             else:
                 print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
                 new_mode = self.update_mode(qqq_data)
+                if new_mode is None:
+                    return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
         else:
             # 같은 주 내이고 시작일이 다른 주에 있으면 모드 유지
             # 하지만 시작일이 변경되었을 수 있으므로, 모드가 올바른지 확인
@@ -2284,15 +2305,25 @@ class SOXLQuantTrader:
                 prev_prev_week_rsi = self.get_rsi_from_reference(prev_prev_week_friday, rsi_ref_data)
                 prev_prev_two_weeks_rsi = self.get_rsi_from_reference(prev_prev_week_friday - timedelta(days=7), rsi_ref_data)
                 
-                # 시작일 이전 주차의 모드 계산 (기본값 SF)
-                prev_week_mode = "SF"
-                if prev_prev_week_rsi is not None and prev_prev_two_weeks_rsi is not None:
-                    prev_week_mode = self.determine_mode(prev_prev_week_rsi, prev_prev_two_weeks_rsi, "SF")
-                    print(f"🔍 백테스팅 시작 모드 계산:")
-                    print(f"   시작일: {start_date}")
-                    print(f"   시작 주차 금요일: {start_week_friday.strftime('%Y-%m-%d')}")
-                    print(f"   1주전 RSI: {prev_week_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}")
-                    print(f"   이전 주차 모드: {prev_week_mode}")
+                # 시작일 이전 주차의 모드를 재귀적으로 계산 (case에 해당하는 모드가 나올 때까지)
+                prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(prev_week_friday, rsi_ref_data)
+                
+                if not success:
+                    print(f"❌ 모드판정실패: 백테스팅 시작일 이전 주차 모드 계산 실패")
+                    return {
+                        "error": f"백테스팅 시작일 이전 주차 모드 계산 실패",
+                        "start_mode": None,
+                        "start_round": 1,
+                        "start_week_rsi": start_week_rsi,
+                        "prev_week_rsi": prev_week_rsi,
+                        "two_weeks_ago_rsi": two_weeks_ago_rsi
+                    }
+                
+                print(f"🔍 백테스팅 시작 모드 계산:")
+                print(f"   시작일: {start_date}")
+                print(f"   시작 주차 금요일: {start_week_friday.strftime('%Y-%m-%d')}")
+                print(f"   1주전 RSI: {prev_week_rsi:.2f}, 2주전 RSI: {two_weeks_ago_rsi:.2f}")
+                print(f"   이전 주차 모드: {prev_week_mode}")
                 
                 # 시작 모드 결정 (이전 주차의 모드를 사용)
                 start_mode = self.determine_mode(prev_week_rsi, two_weeks_ago_rsi, prev_week_mode)
