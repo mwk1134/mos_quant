@@ -1208,11 +1208,24 @@ class SOXLQuantTrader:
                 days_until_friday = 7
             this_week_friday = today + timedelta(days=days_until_friday)
             
-            # 같은 주 내에서는 모드 변경하지 않음
-            if self.current_week_friday is not None and self.current_week_friday == this_week_friday:
-                if self.current_mode:
-                    return self.current_mode
-                # 모드가 없으면 초기화만 진행
+            # 같은 주 내에서는 모드 변경하지 않음 (날짜만 비교하여 시간 차이 무시)
+            if self.current_week_friday is not None:
+                # 날짜만 비교 (시간 부분 무시)
+                if isinstance(self.current_week_friday, datetime):
+                    current_week_friday_date = self.current_week_friday.date()
+                else:
+                    current_week_friday_date = self.current_week_friday
+                
+                if isinstance(this_week_friday, datetime):
+                    this_week_friday_date = this_week_friday.date()
+                else:
+                    this_week_friday_date = this_week_friday
+                
+                if current_week_friday_date == this_week_friday_date:
+                    if self.current_mode:
+                        print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode}")
+                        return self.current_mode
+                    # 모드가 없으면 초기화만 진행
             
             # 새로운 주차이거나 초기화인 경우 모드 업데이트
             self.current_week_friday = this_week_friday
@@ -1919,31 +1932,48 @@ class SOXLQuantTrader:
             except Exception as e:
                 print(f"⚠️ 시작일 확인 중 오류: {e}")
         
-        # 강제 재계산이 필요하거나 새로운 주차인 경우
-        if force_recalculate or (old_week_friday_raw is None or old_week_friday_raw.date() != this_week_friday_calc.date()):
-            if force_recalculate:
-                # 같은 주 체크를 우회하기 위해 current_week_friday를 임시로 None으로 설정
-                # 이렇게 하면 update_mode()가 같은 주 체크를 건너뛰고 모드를 재계산함
-                # 또한 시작일 기준으로 설정된 모드가 전주 모드로 사용되지 않도록,
-                # current_mode를 임시로 저장하고 None으로 설정하여 update_mode()가 전주 모드를 올바르게 계산하도록 함
-                temp_current_mode = self.current_mode
-                self.current_week_friday = None
-                self.current_mode = None  # 전주 모드를 올바르게 계산하도록 None으로 설정
-                print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
-                new_mode = self.update_mode(qqq_data)
-                # update_mode()가 모드 판정 실패 시 None 반환
-                if new_mode is None:
-                    return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
-                print(f"✅ 오늘 날짜 기준 모드 재계산 완료: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {new_mode}")
+        # 같은 주 내에서는 모드를 재계산하지 않음 (월요일에 정해진 모드는 그 주 내내 유지)
+        # 날짜만 비교하여 시간 차이 무시
+        old_week_friday_date = None
+        if old_week_friday_raw is not None:
+            if isinstance(old_week_friday_raw, datetime):
+                old_week_friday_date = old_week_friday_raw.date()
             else:
-                print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
-                new_mode = self.update_mode(qqq_data)
-                if new_mode is None:
-                    return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
+                old_week_friday_date = old_week_friday_raw
+        
+        this_week_friday_date = this_week_friday_calc.date()
+        
+        # 같은 주 내이고 모드가 이미 설정되어 있으면 모드 유지
+        is_same_week = (old_week_friday_date is not None and old_week_friday_date == this_week_friday_date)
+        
+        if is_same_week and self.current_mode is not None:
+            # 같은 주 내에서는 모드를 재계산하지 않음 (월요일에 정해진 모드는 그 주 내내 유지)
+            print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode} (월요일에 정해진 모드는 그 주 내내 유지)")
+            new_mode = self.current_mode
+        elif force_recalculate:
+            # 강제 재계산이 필요한 경우 (시작일이 이번 주 내에 있는 경우)
+            # 같은 주 체크를 우회하기 위해 current_week_friday를 임시로 None으로 설정
+            # 이렇게 하면 update_mode()가 같은 주 체크를 건너뛰고 모드를 재계산함
+            # 또한 시작일 기준으로 설정된 모드가 전주 모드로 사용되지 않도록,
+            # current_mode를 임시로 저장하고 None으로 설정하여 update_mode()가 전주 모드를 올바르게 계산하도록 함
+            temp_current_mode = self.current_mode
+            self.current_week_friday = None
+            self.current_mode = None  # 전주 모드를 올바르게 계산하도록 None으로 설정
+            print(f"🔄 모드 재계산 필요 (오늘 날짜 기준, 실시간 QQQ 데이터 사용)")
+            new_mode = self.update_mode(qqq_data)
+            # update_mode()가 모드 판정 실패 시 None 반환
+            if new_mode is None:
+                return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
+            print(f"✅ 오늘 날짜 기준 모드 재계산 완료: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {new_mode}")
+        elif old_week_friday_date is None or old_week_friday_date != this_week_friday_date:
+            # 새로운 주차인 경우 모드 재계산
+            print(f"🔄 새로운 주차 모드 계산: {this_week_friday_date} 주차")
+            new_mode = self.update_mode(qqq_data)
+            if new_mode is None:
+                return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
         else:
             # 같은 주 내이고 시작일이 다른 주에 있으면 모드 유지
-            # 하지만 시작일이 변경되었을 수 있으므로, 모드가 올바른지 확인
-            print(f"✅ 같은 주 내 모드 유지: {this_week_friday_calc.strftime('%Y-%m-%d')} 주차 모드 = {self.current_mode}")
+            print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode}")
             new_mode = self.current_mode
         
         # 기존 포지션의 모드 복원 (매수 시점의 모드 보존)
