@@ -1933,6 +1933,7 @@ class SOXLQuantTrader:
                 print(f"⚠️ 시작일 확인 중 오류: {e}")
         
         # 같은 주 내에서는 모드를 재계산하지 않음 (월요일에 정해진 모드는 그 주 내내 유지)
+        # 단, 월요일이거나 모드가 없는 경우에는 항상 재계산
         # 날짜만 비교하여 시간 차이 무시
         old_week_friday_date = None
         if old_week_friday_raw is not None:
@@ -1943,13 +1944,29 @@ class SOXLQuantTrader:
         
         this_week_friday_date = this_week_friday_calc.date()
         
+        # 월요일인지 확인 (월요일 = 0)
+        is_monday = today.weekday() == 0
+        
         # 같은 주 내이고 모드가 이미 설정되어 있으면 모드 유지
+        # 단, 월요일이거나 모드가 없는 경우에는 항상 재계산
         is_same_week = (old_week_friday_date is not None and old_week_friday_date == this_week_friday_date)
         
-        if is_same_week and self.current_mode is not None:
+        if is_same_week and self.current_mode is not None and not is_monday:
             # 같은 주 내에서는 모드를 재계산하지 않음 (월요일에 정해진 모드는 그 주 내내 유지)
+            # 단, 월요일이 아닌 경우에만 유지
             print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode} (월요일에 정해진 모드는 그 주 내내 유지)")
             new_mode = self.current_mode
+        elif is_monday:
+            # 월요일인 경우 항상 모드를 재계산 (이번 주 모드를 올바르게 설정)
+            print(f"🔄 월요일 모드 재계산: {this_week_friday_date} 주차 (월요일이므로 항상 재계산)")
+            # 같은 주 체크를 우회하기 위해 current_week_friday를 임시로 None으로 설정
+            temp_current_mode = self.current_mode
+            self.current_week_friday = None
+            self.current_mode = None  # 전주 모드를 올바르게 계산하도록 None으로 설정
+            new_mode = self.update_mode(qqq_data)
+            if new_mode is None:
+                return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
+            print(f"✅ 월요일 모드 재계산 완료: {this_week_friday_date} 주차 모드 = {new_mode}")
         elif force_recalculate:
             # 강제 재계산이 필요한 경우 (시작일이 이번 주 내에 있는 경우)
             # 같은 주 체크를 우회하기 위해 current_week_friday를 임시로 None으로 설정
