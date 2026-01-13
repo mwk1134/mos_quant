@@ -19,8 +19,8 @@ CURRENT_DIR = Path(__file__).resolve().parent
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
-# UGL 전용 트레이더 import
-from ugl_quant_system import UGLQuantTrader
+# SOXL 전용 트레이더 import
+from soxl_quant_system2 import SOXLQuantTrader2
 
 # 프리셋 파일 경로
 PRESETS_FILE = Path(__file__).resolve().parent / "data" / "presets.json"
@@ -28,9 +28,27 @@ PRESETS_FILE = Path(__file__).resolve().parent / "data" / "presets.json"
 def load_presets():
     """프리셋 데이터를 JSON 파일에서 로드"""
     default_presets = {
+        'kmw_preset': {
+            'initial_capital': 9000.0,
+            'session_start_date': "2025-08-27",
+            'seed_increases': [{"date": "2025-10-21", "amount": 31000.0}],
+            'position_edits': {}
+        },
+        'jeh_preset': {
+            'initial_capital': 2793.0,
+            'session_start_date': "2025-10-30",
+            'seed_increases': [{"date": "2025-12-22", "amount": 13499.0}],
+            'position_edits': {}
+        },
         'jsd_preset': {
-            'initial_capital': 3000.0,
-            'session_start_date': "2025-12-31",
+            'initial_capital': 17300.0,
+            'session_start_date': "2025-10-30",
+            'seed_increases': [],
+            'position_edits': {}
+        },
+        'jeh2_preset': {
+            'initial_capital': 2704.0,
+            'session_start_date': "2025-12-22",
             'seed_increases': [],
             'position_edits': {}
         }
@@ -66,7 +84,7 @@ def save_presets(presets_data):
 
 # 페이지 설정
 st.set_page_config(
-    page_title="UGL 퀀트투자 시스템",
+    page_title="SOXL 퀀트투자 시스템",
     page_icon="📈",
     layout="wide"
 )
@@ -258,7 +276,10 @@ if 'position_edits' not in st.session_state:
 # 프리셋 데이터 로드 (영구 저장)
 if 'presets_loaded' not in st.session_state:
     presets = load_presets()
+    st.session_state.kmw_preset = presets['kmw_preset']
+    st.session_state.jeh_preset = presets['jeh_preset']
     st.session_state.jsd_preset = presets['jsd_preset']
+    st.session_state.jeh2_preset = presets['jeh2_preset']
     st.session_state.presets_loaded = True
 
 def initialize_trader():
@@ -270,7 +291,7 @@ def initialize_trader():
                 sf_config = st.session_state.get('sf_config')
                 ag_config = st.session_state.get('ag_config')
                 
-                st.session_state.trader = UGLQuantTrader(
+                st.session_state.trader = SOXLQuantTrader2(
                     initial_capital=st.session_state.initial_capital,
                     sf_config=sf_config,
                     ag_config=ag_config
@@ -320,8 +341,8 @@ def show_mobile_settings():
     # session_state에 값이 있으면 사용, 없으면 기본값
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
-    # 날짜 입력 + 오늘 버튼 + JSD 프리셋 버튼
-    start_col1, start_col2, start_col3, start_col4 = st.columns([3, 1, 1, 1])
+    # 날짜 입력 + 오늘 버튼 + KMW/JEH/JSD/JEH2 프리셋 버튼
+    start_col1, start_col2, start_col3, start_col4, start_col5, start_col6, start_col7, start_col8, start_col9 = st.columns([3, 1, 1, 1, 1, 1, 1, 1, 1])
     with start_col1:
         session_start_date = st.date_input(
             "📅 투자 시작일",
@@ -335,7 +356,83 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with start_col3:
-        if st.button("JSD", help="초기설정: 3000달러, 시작일 2025/12/31, 시드증액 없음"):
+        if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000"):
+            # KMW 프리셋 불러오기
+            kmw = st.session_state.kmw_preset
+            st.session_state.initial_capital = kmw['initial_capital']
+            st.session_state.session_start_date = kmw['session_start_date']
+            st.session_state.seed_increases = kmw['seed_increases'].copy()
+            
+            # 저장된 포지션 수정 정보 불러오기
+            if 'position_edits' in kmw and kmw['position_edits']:
+                st.session_state.position_edits = kmw['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            
+            # 트레이더 재초기화 후 즉시 적용
+            st.session_state.trader = None
+            st.success("✅ KMW 프리셋이 적용되었습니다.")
+            st.rerun()
+    with start_col4:
+        if st.button("KMW 저장", help="현재 설정과 수정된 포지션 정보를 KMW 프리셋에 저장"):
+            # 현재 설정을 KMW 프리셋에 저장
+            st.session_state.kmw_preset = {
+                'initial_capital': st.session_state.initial_capital,
+                'session_start_date': st.session_state.session_start_date,
+                'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
+                'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
+            }
+            # 영구 저장
+            presets_data = {
+                'kmw_preset': st.session_state.kmw_preset,
+                'jeh_preset': st.session_state.jeh_preset,
+                'jsd_preset': st.session_state.jsd_preset,
+                'jeh2_preset': st.session_state.jeh2_preset
+            }
+            if save_presets(presets_data):
+                st.success("✅ KMW 프리셋이 저장되었습니다!")
+            else:
+                st.error("❌ 프리셋 저장에 실패했습니다.")
+    with start_col5:
+        if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 2025/12/22 +13,499"):
+            # JEH 프리셋 불러오기
+            jeh = st.session_state.jeh_preset
+            st.session_state.initial_capital = jeh['initial_capital']
+            st.session_state.session_start_date = jeh['session_start_date']
+            st.session_state.seed_increases = jeh['seed_increases'].copy()
+            
+            # 저장된 포지션 수정 정보 불러오기
+            if 'position_edits' in jeh and jeh['position_edits']:
+                st.session_state.position_edits = jeh['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            
+            # 트레이더 재초기화 후 즉시 적용
+            st.session_state.trader = None
+            st.success("✅ JEH 프리셋이 적용되었습니다.")
+            st.rerun()
+    with start_col6:
+        if st.button("JEH 저장", help="현재 설정과 수정된 포지션 정보를 JEH 프리셋에 저장"):
+            # 현재 설정을 JEH 프리셋에 저장
+            st.session_state.jeh_preset = {
+                'initial_capital': st.session_state.initial_capital,
+                'session_start_date': st.session_state.session_start_date,
+                'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
+                'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
+            }
+            # 영구 저장
+            presets_data = {
+                'kmw_preset': st.session_state.kmw_preset,
+                'jeh_preset': st.session_state.jeh_preset,
+                'jsd_preset': st.session_state.jsd_preset,
+                'jeh2_preset': st.session_state.jeh2_preset
+            }
+            if save_presets(presets_data):
+                st.success("✅ JEH 프리셋이 저장되었습니다!")
+            else:
+                st.error("❌ 프리셋 저장에 실패했습니다.")
+    with start_col7:
+        if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음"):
             # JSD 프리셋 불러오기
             jsd = st.session_state.jsd_preset
             st.session_state.initial_capital = jsd['initial_capital']
@@ -352,7 +449,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.success("✅ JSD 프리셋이 적용되었습니다.")
             st.rerun()
-    with start_col4:
+    with start_col8:
         if st.button("JSD 저장", help="현재 설정과 수정된 포지션 정보를 JSD 프리셋에 저장"):
             # 현재 설정을 JSD 프리셋에 저장
             st.session_state.jsd_preset = {
@@ -363,12 +460,33 @@ def show_mobile_settings():
             }
             # 영구 저장
             presets_data = {
-                'jsd_preset': st.session_state.jsd_preset
+                'kmw_preset': st.session_state.kmw_preset,
+                'jeh_preset': st.session_state.jeh_preset,
+                'jsd_preset': st.session_state.jsd_preset,
+                'jeh2_preset': st.session_state.jeh2_preset
             }
             if save_presets(presets_data):
                 st.success("✅ JSD 프리셋이 저장되었습니다!")
             else:
                 st.error("❌ 프리셋 저장에 실패했습니다.")
+    with start_col9:
+        if st.button("JEH2", help="초기설정: 2704달러, 시작일 2025/12/22, 시드증액 없음"):
+            # JEH2 프리셋 불러오기
+            jeh2 = st.session_state.jeh2_preset
+            st.session_state.initial_capital = jeh2['initial_capital']
+            st.session_state.session_start_date = jeh2['session_start_date']
+            st.session_state.seed_increases = jeh2['seed_increases'].copy()
+            
+            # 저장된 포지션 수정 정보 불러오기
+            if 'position_edits' in jeh2 and jeh2['position_edits']:
+                st.session_state.position_edits = jeh2['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            
+            # 트레이더 재초기화 후 즉시 적용
+            st.session_state.trader = None
+            st.success("✅ JEH2 프리셋이 적용되었습니다.")
+            st.rerun()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
@@ -450,7 +568,7 @@ def show_mobile_settings():
 
 def main():
     # 메인 헤더
-    st.markdown('<div class="main-header">📈 UGL 퀀트투자 시스템</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">📈 SOXL 퀀트투자 시스템</div>', unsafe_allow_html=True)
     
     # 실시간 시간 표시 (한국시간)
     from datetime import datetime, timezone, timedelta
@@ -597,11 +715,11 @@ def show_dashboard():
     if latest_trading_day.strftime('%Y-%m-%d') == '2025-10-10':
         st.subheader("🔍 10/10일 매수 조건 확인")
         
-        # UGL 데이터 가져오기
-        soxl_data = st.session_state.trader.get_stock_data("UGL", "1mo")
+        # SOXL 데이터 가져오기
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
         if soxl_data is not None and len(soxl_data) > 0:
             # 디버깅: 데이터 범위 확인
-            st.info(f"📊 UGL 데이터 범위: {soxl_data.index[0].strftime('%Y-%m-%d')} ~ {soxl_data.index[-1].strftime('%Y-%m-%d')}")
+            st.info(f"📊 SOXL 데이터 범위: {soxl_data.index[0].strftime('%Y-%m-%d')} ~ {soxl_data.index[-1].strftime('%Y-%m-%d')}")
             st.info(f"📊 총 데이터 수: {len(soxl_data)}개")
             
             # 최근 5개 날짜 표시
@@ -759,7 +877,7 @@ def show_daily_recommendation():
                 st.metric("📊 QQQ 주간 RSI", f"1주전: {one_week_rsi:.2f}")
         else:
             st.metric("📊 QQQ 주간 RSI", "계산 불가")
-        st.metric("💰 UGL 현재가", f"${recommendation['soxl_current_price']:.2f}")
+        st.metric("💰 SOXL 현재가", f"${recommendation['soxl_current_price']:.2f}")
     
     # 매매 추천
     st.subheader("📋 오늘의 매매 추천")
@@ -1107,8 +1225,8 @@ def show_portfolio():
         st.metric("💵 현금잔고", f"${st.session_state.trader.available_cash:,.0f}")
     
     with col4:
-        # UGL 현재가 가져오기
-        soxl_data = st.session_state.trader.get_stock_data("UGL", "1mo")
+        # SOXL 현재가 가져오기
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
         if soxl_data is not None and len(soxl_data) > 0:
             current_price = soxl_data.iloc[-1]['Close']
             total_position_value = sum([pos["shares"] * current_price for pos in st.session_state.trader.positions])
@@ -1364,7 +1482,7 @@ def show_backtest():
             with st.spinner('엑셀 파일 생성 중...'):
                 # 임시 파일명 생성
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                temp_filename = f"UGL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx"
+                temp_filename = f"SOXL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx"
                 
                 # 엑셀 파일 생성
                 result_filename = st.session_state.trader.export_backtest_to_excel(backtest_result, temp_filename)
@@ -1384,7 +1502,7 @@ def show_backtest():
                     st.download_button(
                         label="💾 엑셀 파일 다운로드",
                         data=excel_data,
-                        file_name=f"UGL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx",
+                        file_name=f"SOXL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key="download_excel"
                     )
