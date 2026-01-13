@@ -1810,7 +1810,7 @@ class SOXLQuantTrader:
         if qqq_data is None:
             return {"error": "QQQ 데이터를 가져올 수 없습니다."}
 
-        # 3. 기존 포지션의 모드 백업 (get_daily_recommendation에서 모드 재계산 시 보존)
+        # 3. 기존 포지션의 모드 백업 및 재검증 (매수일 기준으로 재계산)
         # 시뮬레이션 후 포지션 모드를 백업하여 이후 모드 재계산 시 보존
         position_mode_backup = {}
         for pos in self.positions:
@@ -1828,6 +1828,144 @@ class SOXLQuantTrader:
             if stored_mode:
                 position_mode_backup[pos_key] = stored_mode
                 print(f"🔍 포지션 모드 백업: {pos_key} = {stored_mode}")
+        
+        # 3-0. 포지션 모드 재검증 및 수정 (매수일 기준으로 재계산, 수량/금액도 재계산)
+        # QQQ 데이터로 주간 RSI 계산
+        weekly_df_for_positions = qqq_data.resample('W-FRI').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
+        
+        if len(weekly_df_for_positions) >= 15:
+            # RSI 계산
+            delta = weekly_df_for_positions['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi_for_positions = 100 - (100 / (1 + rs))
+            
+            for pos in self.positions:
+                buy_date = pos.get('buy_date')
+                if isinstance(buy_date, pd.Timestamp):
+                    buy_date_dt = buy_date.to_pydatetime()
+                elif isinstance(buy_date, datetime):
+                    buy_date_dt = buy_date
+                else:
+                    continue
+                
+                # 포지션 키 생성 (회차_매수일)
+                pos_key = f"{pos['round']}_{buy_date_dt.strftime('%Y-%m-%d')}"
+                current_stored_mode = pos.get('mode')
+                
+                # 매수일이 속한 주의 금요일 계산
+                buy_date_weekday = buy_date_dt.weekday()
+                days_until_friday = (4 - buy_date_weekday) % 7
+                if days_until_friday == 0 and buy_date_weekday != 4:
+                    days_until_friday = 7
+                buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
+                
+                # 매수일의 1주전, 2주전 금요일 계산
+                one_week_ago_friday = buy_week_friday - timedelta(days=7)
+                two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
+                
+                # RSI 값 추출
+                one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+                two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                
+                one_week_ago_rsi = None
+                earlier_dates_1w = weekly_df_for_positions.index[weekly_df_for_positions.index <= one_week_ago_friday_dt]
+                if len(earlier_dates_1w) > 0:
+                    one_week_rsi_date = earlier_dates_1w[-1]
+                    one_week_rsi_idx = weekly_df_for_positions.index.get_loc(one_week_rsi_date)
+                    if one_week_rsi_idx < len(rsi_for_positions):
+                        one_week_ago_rsi = rsi_for_positions.iloc[one_week_rsi_idx]
+                        if pd.isna(one_week_ago_rsi):
+                            one_week_ago_rsi = None
+                
+                two_weeks_ago_rsi = None
+                earlier_dates_2w = weekly_df_for_positions.index[weekly_df_for_positions.index <= two_weeks_ago_friday_dt]
+                if len(earlier_dates_2w) > 0:
+                    two_weeks_rsi_date = earlier_dates_2w[-1]
+                    two_weeks_rsi_idx = weekly_df_for_positions.index.get_loc(two_weeks_rsi_date)
+                    if two_weeks_rsi_idx < len(rsi_for_positions):
+                        two_weeks_ago_rsi = rsi_for_positions.iloc[two_weeks_rsi_idx]
+                        if pd.isna(two_weeks_ago_rsi):
+                            two_weeks_ago_rsi = None
+                
+                # RSI 값으로 매수일의 모드 재계산
+                if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
+                    # 전주 모드를 재귀적으로 계산
+                    prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_for_positions, rsi_for_positions)
+                    
+                    if success:
+                        # 매수일의 모드 결정
+                        is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
+                        if is_matched:
+                            correct_mode = matched_mode
+                        else:
+                            correct_mode = prev_week_mode
+                        
+                        # 저장된 모드와 비교
+                        if current_stored_mode != correct_mode:
+                            print(f"⚠️ 포지션 모드 불일치 감지: {pos_key}")
+                            print(f"   매수일: {buy_date_dt.strftime('%Y-%m-%d')}, 저장된 모드: {current_stored_mode}, 올바른 모드: {correct_mode}")
+                            print(f"   RSI 값: 1주전={one_week_ago_rsi:.2f}, 2주전={two_weeks_ago_rsi:.2f}")
+                            print(f"🔧 포지션 모드 수정: {pos_key} = {current_stored_mode} → {correct_mode}")
+                            
+                            # 모드 변경 시 수량과 금액도 재계산
+                            old_mode = current_stored_mode
+                            old_config = self.sf_config if old_mode == "SF" else self.ag_config
+                            new_config = self.sf_config if correct_mode == "SF" else self.ag_config
+                            
+                            # 매수일 시점의 투자원금 추정 (기존 금액과 split_ratios로 역산)
+                            old_round = pos['round']
+                            if old_round <= len(old_config["split_ratios"]):
+                                old_ratio = old_config["split_ratios"][old_round - 1]
+                                if old_ratio > 0:
+                                    estimated_investment_capital = pos['amount'] / old_ratio
+                                    
+                                    # 새로운 모드의 split_ratios로 재계산
+                                    if old_round <= len(new_config["split_ratios"]):
+                                        new_ratio = new_config["split_ratios"][old_round - 1]
+                                        new_target_amount = estimated_investment_capital * new_ratio
+                                        
+                                        # 수량과 금액 재계산
+                                        buy_price = pos['buy_price']
+                                        new_shares = int(new_target_amount / buy_price)
+                                        if new_shares > 0:
+                                            new_amount = new_shares * buy_price
+                                            
+                                            print(f"   수량/금액 재계산: {pos['shares']}주 @ ${pos['amount']:,.0f} → {new_shares}주 @ ${new_amount:,.0f}")
+                                            
+                                            # 예수금 차이 계산 (기존 금액에서 새 금액 차감)
+                                            amount_diff = pos['amount'] - new_amount
+                                            self.available_cash += amount_diff
+                                            
+                                            # 포지션 업데이트
+                                            pos['mode'] = correct_mode
+                                            pos['shares'] = new_shares
+                                            pos['amount'] = new_amount
+                                            
+                                            print(f"   예수금 조정: ${amount_diff:+,.0f} (총 예수금: ${self.available_cash:,.0f})")
+                                        else:
+                                            # 수량이 0이면 모드만 변경
+                                            pos['mode'] = correct_mode
+                                            print(f"   ⚠️ 수량이 0이므로 모드만 변경")
+                                    else:
+                                        # 새로운 모드의 회차가 범위를 벗어나면 모드만 변경
+                                        pos['mode'] = correct_mode
+                                        print(f"   ⚠️ 새로운 모드의 회차 범위를 벗어나므로 모드만 변경")
+                                else:
+                                    # 비율이 0이면 모드만 변경
+                                    pos['mode'] = correct_mode
+                                    print(f"   ⚠️ 기존 비율이 0이므로 모드만 변경")
+                            else:
+                                # 기존 회차가 범위를 벗어나면 모드만 변경
+                                pos['mode'] = correct_mode
+                                print(f"   ⚠️ 기존 회차가 범위를 벗어나므로 모드만 변경")
         
         # 3-1. 12/29일 매수 포지션 보정 (안전모드로 강제 변경 및 매수 금액 재계산)
         target_date = datetime(2025, 12, 29)
@@ -2099,125 +2237,6 @@ class SOXLQuantTrader:
             # 같은 주 내이고 시작일이 다른 주에 있으면 모드 유지
             print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode}")
             new_mode = self.current_mode
-        
-        # 기존 포지션의 모드 검증 및 수정 (매수일 기준으로 재계산)
-        # QQQ 데이터로 주간 RSI 계산
-        weekly_df_for_positions = qqq_data.resample('W-FRI').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        }).dropna()
-        
-        if len(weekly_df_for_positions) >= 15:
-            # RSI 계산
-            delta = weekly_df_for_positions['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi_for_positions = 100 - (100 / (1 + rs))
-            
-            for pos in self.positions:
-                buy_date = pos.get('buy_date')
-                if isinstance(buy_date, pd.Timestamp):
-                    buy_date_dt = buy_date.to_pydatetime()
-                elif isinstance(buy_date, datetime):
-                    buy_date_dt = buy_date
-                else:
-                    continue
-                
-                # 포지션 키 생성 (회차_매수일)
-                pos_key = f"{pos['round']}_{buy_date_dt.strftime('%Y-%m-%d')}"
-                current_stored_mode = pos.get('mode')
-                
-                # 매수일이 속한 주의 금요일 계산
-                buy_date_weekday = buy_date_dt.weekday()
-                days_until_friday = (4 - buy_date_weekday) % 7
-                if days_until_friday == 0 and buy_date_weekday != 4:
-                    days_until_friday = 7
-                buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
-                
-                # 매수일의 1주전, 2주전 금요일 계산
-                one_week_ago_friday = buy_week_friday - timedelta(days=7)
-                two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
-                
-                # RSI 값 추출
-                one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
-                
-                one_week_ago_rsi = None
-                earlier_dates_1w = weekly_df_for_positions.index[weekly_df_for_positions.index <= one_week_ago_friday_dt]
-                if len(earlier_dates_1w) > 0:
-                    one_week_rsi_date = earlier_dates_1w[-1]
-                    one_week_rsi_idx = weekly_df_for_positions.index.get_loc(one_week_rsi_date)
-                    if one_week_rsi_idx < len(rsi_for_positions):
-                        one_week_ago_rsi = rsi_for_positions.iloc[one_week_rsi_idx]
-                        if pd.isna(one_week_ago_rsi):
-                            one_week_ago_rsi = None
-                
-                two_weeks_ago_rsi = None
-                earlier_dates_2w = weekly_df_for_positions.index[weekly_df_for_positions.index <= two_weeks_ago_friday_dt]
-                if len(earlier_dates_2w) > 0:
-                    two_weeks_rsi_date = earlier_dates_2w[-1]
-                    two_weeks_rsi_idx = weekly_df_for_positions.index.get_loc(two_weeks_rsi_date)
-                    if two_weeks_rsi_idx < len(rsi_for_positions):
-                        two_weeks_ago_rsi = rsi_for_positions.iloc[two_weeks_rsi_idx]
-                        if pd.isna(two_weeks_ago_rsi):
-                            two_weeks_ago_rsi = None
-                
-                # RSI 값으로 매수일의 모드 재계산
-                if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
-                    # 전주 모드를 재귀적으로 계산
-                    prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_for_positions, rsi_for_positions)
-                    
-                    if success:
-                        # 매수일의 모드 결정
-                        is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
-                        if is_matched:
-                            correct_mode = matched_mode
-                        else:
-                            correct_mode = prev_week_mode
-                        
-                        # 저장된 모드와 비교
-                        if current_stored_mode != correct_mode:
-                            print(f"⚠️ 포지션 모드 불일치 감지: {pos_key}")
-                            print(f"   매수일: {buy_date_dt.strftime('%Y-%m-%d')}, 저장된 모드: {current_stored_mode}, 올바른 모드: {correct_mode}")
-                            print(f"   RSI 값: 1주전={one_week_ago_rsi:.2f}, 2주전={two_weeks_ago_rsi:.2f}")
-                            print(f"🔧 포지션 모드 수정: {pos_key} = {current_stored_mode} → {correct_mode}")
-                            pos['mode'] = correct_mode
-                    else:
-                        # 전주 모드 계산 실패 시 백업 모드 사용
-                        if pos_key in position_mode_backup:
-                            original_mode = position_mode_backup[pos_key]
-                            if current_stored_mode != original_mode:
-                                print(f"🔧 포지션 모드 복원 (전주 모드 계산 실패): {pos_key} = {current_stored_mode} → {original_mode}")
-                                pos['mode'] = original_mode
-                else:
-                    # RSI 값을 가져올 수 없으면 백업 모드 사용
-                    if pos_key in position_mode_backup:
-                        original_mode = position_mode_backup[pos_key]
-                        if current_stored_mode != original_mode:
-                            print(f"🔧 포지션 모드 복원 (RSI 값 없음): {pos_key} = {current_stored_mode} → {original_mode}")
-                            pos['mode'] = original_mode
-        else:
-            # 주간 데이터가 부족하면 백업 모드 사용
-            for pos in self.positions:
-                buy_date = pos.get('buy_date')
-                if isinstance(buy_date, pd.Timestamp):
-                    buy_date_dt = buy_date.to_pydatetime()
-                elif isinstance(buy_date, datetime):
-                    buy_date_dt = buy_date
-                else:
-                    continue
-                
-                pos_key = f"{pos['round']}_{buy_date_dt.strftime('%Y-%m-%d')}"
-                if pos_key in position_mode_backup:
-                    original_mode = position_mode_backup[pos_key]
-                    current_stored_mode = pos.get('mode')
-                    if current_stored_mode != original_mode:
-                        print(f"🔧 포지션 모드 복원 (데이터 부족): {pos_key} = {current_stored_mode} → {original_mode}")
-                        pos['mode'] = original_mode
         
         today = self.get_today_date()
         
