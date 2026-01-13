@@ -1954,8 +1954,115 @@ class SOXLQuantTrader:
         if is_same_week and self.current_mode is not None and not is_monday:
             # 같은 주 내에서는 모드를 재계산하지 않음 (월요일에 정해진 모드는 그 주 내내 유지)
             # 단, 월요일이 아닌 경우에만 유지
-            print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode} (월요일에 정해진 모드는 그 주 내내 유지)")
-            new_mode = self.current_mode
+            # 하지만 모드가 잘못 설정되었을 수 있으므로 검증 필요
+            # RSI 값을 확인하여 모드가 올바른지 검증
+            try:
+                # 주간 데이터로 변환하여 RSI 계산
+                weekly_df_temp = qqq_data.resample('W-FRI').agg({
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last',
+                    'Volume': 'sum'
+                }).dropna()
+                
+                if len(weekly_df_temp) >= 15:
+                    # RSI 계산
+                    delta = weekly_df_temp['Close'].diff()
+                    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                    rs = gain / loss
+                    rsi = 100 - (100 / (1 + rs))
+                    
+                    # 1주전, 2주전 금요일 계산
+                    days_until_friday = (4 - today.weekday()) % 7
+                    if days_until_friday == 0 and today.weekday() != 4:
+                        days_until_friday = 7
+                    this_week_friday_temp = today + timedelta(days=days_until_friday)
+                    if today.weekday() == 4:
+                        latest_completed_friday = today
+                    else:
+                        latest_completed_friday = this_week_friday_temp - timedelta(days=7)
+                    
+                    one_week_ago_friday = latest_completed_friday
+                    two_weeks_ago_friday = latest_completed_friday - timedelta(days=7)
+                    
+                    # RSI 값 추출
+                    one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+                    two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                    
+                    one_week_ago_rsi = None
+                    earlier_dates_1w = weekly_df_temp.index[weekly_df_temp.index <= one_week_ago_friday_dt]
+                    if len(earlier_dates_1w) > 0:
+                        one_week_rsi_date = earlier_dates_1w[-1]
+                        one_week_rsi_idx = weekly_df_temp.index.get_loc(one_week_rsi_date)
+                        if one_week_rsi_idx < len(rsi):
+                            one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
+                            if pd.isna(one_week_ago_rsi):
+                                one_week_ago_rsi = None
+                    
+                    two_weeks_ago_rsi = None
+                    earlier_dates_2w = weekly_df_temp.index[weekly_df_temp.index <= two_weeks_ago_friday_dt]
+                    if len(earlier_dates_2w) > 0:
+                        two_weeks_rsi_date = earlier_dates_2w[-1]
+                        two_weeks_rsi_idx = weekly_df_temp.index.get_loc(two_weeks_rsi_date)
+                        if two_weeks_rsi_idx < len(rsi):
+                            two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
+                            if pd.isna(two_weeks_ago_rsi):
+                                two_weeks_ago_rsi = None
+                    
+                    # RSI 값으로 모드 검증
+                    if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
+                        is_matched, expected_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
+                        if is_matched:
+                            # 조건에 해당하는 모드가 있으면 그 모드를 사용
+                            if expected_mode != self.current_mode:
+                                print(f"⚠️ 모드 불일치 감지: 현재 모드={self.current_mode}, 예상 모드={expected_mode}")
+                                print(f"   RSI 값: 1주전={one_week_ago_rsi:.2f}, 2주전={two_weeks_ago_rsi:.2f}")
+                                print(f"🔄 모드 재계산 필요 (잘못된 모드 감지)")
+                                # 모드 재계산
+                                temp_current_mode = self.current_mode
+                                self.current_week_friday = None
+                                self.current_mode = None
+                                new_mode = self.update_mode(qqq_data)
+                                if new_mode is None:
+                                    return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
+                                print(f"✅ 모드 재계산 완료: {this_week_friday_date} 주차 모드 = {new_mode}")
+                            else:
+                                print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode} (검증 완료)")
+                                new_mode = self.current_mode
+                        else:
+                            # 조건에 해당하지 않으면 전주 모드 사용해야 함
+                            # 전주 모드를 계산하여 검증
+                            prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_temp, rsi)
+                            if success and prev_week_mode != self.current_mode:
+                                print(f"⚠️ 모드 불일치 감지: 현재 모드={self.current_mode}, 전주 모드={prev_week_mode}")
+                                print(f"   RSI 값: 1주전={one_week_ago_rsi:.2f}, 2주전={two_weeks_ago_rsi:.2f}")
+                                print(f"🔄 모드 재계산 필요 (전주 모드와 불일치)")
+                                # 모드 재계산
+                                temp_current_mode = self.current_mode
+                                self.current_week_friday = None
+                                self.current_mode = None
+                                new_mode = self.update_mode(qqq_data)
+                                if new_mode is None:
+                                    return {"error": "모드 판정 실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다."}
+                                print(f"✅ 모드 재계산 완료: {this_week_friday_date} 주차 모드 = {new_mode}")
+                            else:
+                                print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode} (검증 완료)")
+                                new_mode = self.current_mode
+                    else:
+                        # RSI 값을 가져올 수 없으면 모드 유지
+                        print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode} (RSI 검증 불가)")
+                        new_mode = self.current_mode
+                else:
+                    # 주간 데이터가 부족하면 모드 유지
+                    print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode} (데이터 부족)")
+                    new_mode = self.current_mode
+            except Exception as e:
+                # 검증 중 오류 발생 시 모드 유지
+                print(f"⚠️ 모드 검증 중 오류 발생: {e}, 모드 유지")
+                print(f"✅ 같은 주 내 모드 유지: {this_week_friday_date} 주차 모드 = {self.current_mode}")
+                new_mode = self.current_mode
         elif is_monday:
             # 월요일인 경우 항상 모드를 재계산 (이번 주 모드를 올바르게 설정)
             print(f"🔄 월요일 모드 재계산: {this_week_friday_date} 주차 (월요일이므로 항상 재계산)")
