@@ -5089,5 +5089,22 @@
     "total_weeks": 837,
     "description": "QQQ 주간 RSI 참조 데이터 (14주 Wilder's RSI)",
     "updated_by": "update_rsi_data.py"
+  },
+  "2026": {
+    "description": "2026년 주간 RSI 데이터",
+    "weeks": [
+      {
+        "start": "2025-12-29",
+        "end": "2026-01-02",
+        "week": 1,
+        "rsi": 55.11
+      },
+      {
+        "start": "2026-01-05",
+        "end": "2026-01-09",
+        "week": 2,
+        "rsi": 56.74
+      }
+    ]
   }
 }

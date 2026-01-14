@@ -1525,48 +1525,23 @@ class SOXLQuantTrader:
         장중에는 오늘 날짜 데이터를 제외하고 과거 확정된 데이터만 사용한다.
         Args:
             soxl_data (DataFrame): 최근 SOXL 일별 데이터 (Close 필수)
-        Returns:
-            dict: 디버깅 정보 (1월 12일 포지션 관련)
         """
-        debug_info = {
-            "jan12_position_found": False,
-            "jan12_position_details": None,
-            "jan12_sell_check": None,
-            "reconcile_data_range": None
-        }
-        
         if not self.positions or soxl_data is None or len(soxl_data) == 0:
-            return debug_info
+            return
 
         # 장중에는 오늘 날짜 데이터를 제외 (종가가 확정되지 않았으므로)
         today = self.get_today_date()
         today_date = today.date()
         
-        # 디버깅: 입력 데이터 확인
-        print(f"🔍 reconcile_positions_with_close_history 입력 데이터 확인:")
-        print(f"   - 오늘 날짜: {today_date.strftime('%Y-%m-%d')}")
-        print(f"   - 입력 soxl_data 날짜 범위: {soxl_data.index.min().strftime('%Y-%m-%d')} ~ {soxl_data.index.max().strftime('%Y-%m-%d')}")
-        print(f"   - 입력 soxl_data 데이터 수: {len(soxl_data)}개")
-        
         # 정규장이 아직 마감되지 않았고, 데이터에 오늘 날짜가 포함되어 있으면 제외
         if not self.is_regular_session_closed_now() and len(soxl_data) > 0:
             if soxl_data.index.max().date() == today_date:
                 soxl_data = soxl_data[soxl_data.index.date < today_date]
-                print(f"   - 장중이므로 오늘 날짜 제외 후: {soxl_data.index.min().strftime('%Y-%m-%d')} ~ {soxl_data.index.max().strftime('%Y-%m-%d')} ({len(soxl_data)}개)")
-        
-        debug_info["reconcile_data_range"] = {
-            "start": soxl_data.index.min().strftime('%Y-%m-%d') if len(soxl_data) > 0 else None,
-            "end": soxl_data.index.max().strftime('%Y-%m-%d') if len(soxl_data) > 0 else None,
-            "count": len(soxl_data)
-        }
-        
+
         sold_rounds = []
         # 리스트 복사본을 사용하여 반복 중 안전하게 제거
-        print(f"🔍 reconcile_positions_with_close_history: 보유 포지션 {len(self.positions)}개 확인")
         for position in list(self.positions):
             buy_date = position["buy_date"]
-            buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
-            print(f"   📦 {position['round']}회차 (매수일: {buy_date_str}) 확인 중...")
 
             # 매수일 이후(엄격하게 초과) 데이터만 확인
             # buy_date가 Timestamp인 경우와 datetime인 경우 모두 처리
@@ -1579,42 +1554,10 @@ class SOXLQuantTrader:
             
             future_data = soxl_data[soxl_data.index > buy_date_for_comparison]
             if future_data.empty:
-                print(f"      ⏭️ 매수일 이후 데이터 없음, 스킵")
                 continue
 
             position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
             target_price = position["buy_price"] * (1 + position_config["sell_threshold"] / 100)
-            print(f"      목표가: ${target_price:.2f} (매수가: ${position['buy_price']:.2f}, 모드: {position.get('mode', 'N/A')})")
-            
-            # 디버깅: future_data의 모든 날짜와 종가 출력 (1월12일 포지션인 경우)
-            if buy_date_str == "2025-01-12" or "2025-01-12" in buy_date_str:
-                debug_info["jan12_position_found"] = True
-                debug_info["jan12_position_details"] = {
-                    "round": position['round'],
-                    "buy_date": buy_date_str,
-                    "buy_price": position['buy_price'],
-                    "mode": position.get('mode', 'N/A'),
-                    "target_price": target_price,
-                    "shares": position['shares']
-                }
-                
-                print(f"      🔍 디버깅: future_data 날짜 범위: {future_data.index.min().strftime('%Y-%m-%d')} ~ {future_data.index.max().strftime('%Y-%m-%d')}")
-                print(f"      🔍 디버깅: future_data의 모든 날짜와 종가:")
-                
-                future_data_details = []
-                for idx, row in future_data.iterrows():
-                    date_str = idx.strftime('%Y-%m-%d')
-                    close_price = row['Close']
-                    reached = close_price >= target_price
-                    print(f"         {date_str}: 종가 ${close_price:.2f} (목표가 ${target_price:.2f} {'✅ 도달' if reached else '❌ 미도달'})")
-                    future_data_details.append({
-                        "date": date_str,
-                        "close": float(close_price),
-                        "target_price": float(target_price),
-                        "reached": bool(reached)
-                    })
-                
-                debug_info["jan12_position_details"]["future_data"] = future_data_details
 
             # 1. 목표가 도달한 경우 매도
             hit_rows = future_data[future_data["Close"] >= target_price]
@@ -1622,28 +1565,6 @@ class SOXLQuantTrader:
                 sell_row = hit_rows.iloc[0]
                 sell_date = sell_row.name
                 sell_close = sell_row["Close"]
-                
-                # 디버깅: 1월12일 포지션에 대한 상세 정보 출력
-                if buy_date_str == "2025-01-12" or "2025-01-12" in buy_date_str:
-                    print(f"⚠️ 1월12일 포지션 매도 처리 감지!")
-                    print(f"   - future_data 날짜 범위: {future_data.index.min().strftime('%Y-%m-%d')} ~ {future_data.index.max().strftime('%Y-%m-%d')}")
-                    print(f"   - 목표가 도달한 날짜들:")
-                    hit_dates = []
-                    for idx, row in hit_rows.iterrows():
-                        date_str = idx.strftime('%Y-%m-%d')
-                        print(f"      {date_str}: 종가 ${row['Close']:.2f} >= 목표가 ${target_price:.2f}")
-                        hit_dates.append({
-                            "date": date_str,
-                            "close": float(row['Close'])
-                        })
-                    
-                    debug_info["jan12_sell_check"] = {
-                        "sold": True,
-                        "reason": "목표가 도달",
-                        "sell_date": sell_date.strftime('%Y-%m-%d'),
-                        "sell_close": float(sell_close),
-                        "hit_dates": hit_dates
-                    }
 
                 proceeds = position["shares"] * sell_close
                 profit = proceeds - position["amount"]
@@ -1660,13 +1581,6 @@ class SOXLQuantTrader:
                 print(f"   - sell_date: {sell_date.strftime('%Y-%m-%d')} | 종가: ${sell_close:.2f}")
                 print(f"   - 실현손익: ${profit:,.0f} ({profit_rate:+.2f}%)")
                 continue  # 이미 매도 처리했으므로 다음 포지션으로
-            elif buy_date_str == "2025-01-12" or "2025-01-12" in buy_date_str:
-                # 목표가 도달하지 않은 경우에도 디버깅 정보 저장
-                debug_info["jan12_sell_check"] = {
-                    "sold": False,
-                    "reason": "목표가 미도달",
-                    "hit_rows_count": 0
-                }
 
             # 2. 손절예정일이 지난 경우 종가 기준으로 LOC 매도
             # 손절예정일 계산 (거래일 기준)
@@ -1685,16 +1599,6 @@ class SOXLQuantTrader:
                 sell_row = stop_loss_rows.iloc[0]
                 sell_date = sell_row.name
                 sell_close = sell_row["Close"]
-                
-                # 디버깅: 1월12일 포지션에 대한 상세 정보 출력
-                if buy_date_str == "2025-01-12" or "2025-01-12" in buy_date_str:
-                    print(f"⚠️ 1월12일 포지션 손절예정일 경과로 매도 처리 감지!")
-                    print(f"   - 매수일: {buy_date_str}")
-                    print(f"   - 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')}")
-                    print(f"   - future_data 날짜 범위: {future_data.index.min().strftime('%Y-%m-%d')} ~ {future_data.index.max().strftime('%Y-%m-%d')}")
-                    print(f"   - 손절예정일 이후 날짜들:")
-                    for idx, row in stop_loss_rows.iterrows():
-                        print(f"      {idx.strftime('%Y-%m-%d')}: 종가 ${row['Close']:.2f}")
 
                 proceeds = position["shares"] * sell_close
                 profit = proceeds - position["amount"]
@@ -1715,8 +1619,6 @@ class SOXLQuantTrader:
             sold_count = len(sold_rounds)
             self.current_round = max(1, self.current_round - sold_count)
             print(f"🔄 보정 후 current_round: {self.current_round} (총 {sold_count}개 회차 보정 매도)")
-        
-        return debug_info
 
     def check_sell_conditions(self, row: pd.Series, current_date: datetime, prev_close: float, return_debug_info: bool = False) -> List[Dict]:
         """
@@ -2547,8 +2449,7 @@ class SOXLQuantTrader:
             "sell_debug_info": sell_debug_info,  # 매도 조건 확인 디버깅 정보
             "reconcile_debug_info": {  # reconcile_positions_with_close_history 디버깅 정보
                 "positions_before": positions_before_reconcile,
-                "positions_after": positions_after_reconcile,
-                "jan12_debug": reconcile_debug_info_detail  # 1월 12일 포지션 상세 디버깅 정보
+                "positions_after": positions_after_reconcile
             },
             "portfolio": {
                 "positions_count": len(self.positions),
@@ -3356,18 +3257,6 @@ class SOXLQuantTrader:
                     
                     print(log_msg)
                     self.backtest_logs.append(log_msg)
-                    
-                    # 1월 12일 특별 디버깅
-                    if current_date.strftime('%Y-%m-%d') == '2025-01-12':
-                        print(f"⚠️ 1월 12일 특별 디버깅:")
-                        print(f"   - 매수 조건 충족 여부: {buy_price > daily_close}")
-                        print(f"   - can_buy_next_round(): {self.can_buy_next_round()}")
-                        print(f"   - 현재 포지션 수: {len(self.positions)}")
-                        if self.positions:
-                            print(f"   - 보유 포지션 목록:")
-                            for pos in self.positions:
-                                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
-                                print(f"      {pos['round']}회차: 매수일 {buy_date_str}, 모드 {pos.get('mode', 'N/A')}, 매수가 ${pos.get('buy_price', 0):.2f}")
                     
                     if buy_price > daily_close:
                         success_msg = f"✅ 매수 조건 충족! 매수 실행 시도..."
