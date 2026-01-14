@@ -1699,7 +1699,8 @@ class SOXLQuantTrader:
                 sell_positions.append({
                     "position": position,
                     "reason": "목표가 도달",
-                    "sell_price": daily_close  # 종가에 매도
+                    "sell_price": daily_close,  # 종가에 매도
+                    "will_sell": True  # 매도 조건 충족
                 })
             
             # 2. 손절예정일 경과 시 매도 (당일 종가에 LOC 매도)
@@ -1710,11 +1711,20 @@ class SOXLQuantTrader:
                 sell_positions.append({
                     "position": position,
                     "reason": f"손절예정일 경과 (보유기간: {hold_days}일)",
-                    "sell_price": row['Close']  # 종가에 LOC 매도
+                    "sell_price": row['Close'],  # 종가에 LOC 매도
+                    "will_sell": True  # 매도 조건 충족
                 })
             else:
-                # 매도 조건을 만족하지 않아도 디버깅 정보 출력
+                # 매도 조건을 만족하지 않아도 매도 추천 리스트에 포함 (보유 중 상태로 표시)
                 print(f"      ⏳ 매도 조건 미충족: 종가 ${daily_close:.2f} < 목표가 ${sell_price:.2f}, 손절예정일 미경과 ({current_date.strftime('%Y-%m-%d')} < {stop_loss_date.strftime('%Y-%m-%d')})")
+                position_debug["will_sell"] = False
+                position_debug["sell_reason"] = "보유 중"
+                sell_positions.append({
+                    "position": position,
+                    "reason": "보유 중 (목표가 미도달)",
+                    "sell_price": daily_close,  # 현재 종가 (참고용)
+                    "will_sell": False  # 매도 조건 미충족
+                })
             
             debug_info.append(position_debug)
         
@@ -3215,7 +3225,13 @@ class SOXLQuantTrader:
                 sold_positions = []  # 매도된 포지션들 (매수 행에 기록용)
                 
                 for sell_info in sell_recommendations:
-
+                    # will_sell이 True인 경우에만 실제 매도 실행
+                    will_sell = sell_info.get("will_sell", True)  # 기본값은 True (기존 호환성)
+                    
+                    if not will_sell:
+                        # 매도 조건 미충족 - 매도 추천 리스트에는 있지만 실제 매도는 하지 않음
+                        continue
+                    
                     position = sell_info["position"]
                     proceeds, sold_round = self.execute_sell(sell_info)
                     realized_pnl = proceeds - position["amount"]

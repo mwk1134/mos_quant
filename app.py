@@ -1042,9 +1042,20 @@ def show_daily_recommendation():
                     if debug_info['will_sell']:
                         st.success(f"**매도 사유**: {debug_info['sell_reason']}")
         
+        # 매도 추천 리스트 표시 (모든 보유 포지션 포함)
         if recommendation['sell_recommendations']:
-            st.success(f"✅ 매도 추천: {len(recommendation['sell_recommendations'])}건")
+            # 매도 조건 충족한 포지션과 미충족 포지션 분리
+            sell_recommended = [s for s in recommendation['sell_recommendations'] if s.get('will_sell', True)]
+            hold_positions = [s for s in recommendation['sell_recommendations'] if not s.get('will_sell', False)]
+            
+            if sell_recommended:
+                st.success(f"✅ 매도 추천: {len(sell_recommended)}건")
+            if hold_positions:
+                st.info(f"📋 보유 중: {len(hold_positions)}건")
+            
             for sell_info in recommendation['sell_recommendations']:
+                will_sell = sell_info.get('will_sell', True)  # 기본값은 True (기존 호환성)
+                
                 pos = sell_info['position']
                 buy_date = pos.get('buy_date')
                 if isinstance(buy_date, pd.Timestamp):
@@ -1071,12 +1082,25 @@ def show_daily_recommendation():
                 if buy_date_dt:
                     stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
                 
+                # 매도 목표가 계산
+                target_sell_price = buy_price * (1 + config['sell_threshold'] / 100)
+                current_price = recommendation['soxl_current_price']
+                price_diff = target_sell_price - current_price
+                price_diff_pct = (price_diff / current_price) * 100
+                
                 # 레이아웃: 좌측 주요 정보, 우측 매수 정보
                 col1, col2 = st.columns([3, 2])
                 with col1:
                     # 매도 수량을 정수로 명시적 변환 (소수점 처리)
                     sell_shares = int(pos['shares']) if isinstance(pos['shares'], (int, float)) else pos['shares']
-                    st.info(f"📦 {pos['round']}회차 매도: {sell_shares}주 @ ${sell_info['sell_price']:.2f}")
+                    
+                    if will_sell:
+                        # 매도 조건 충족 - 매도 추천
+                        st.info(f"📦 {pos['round']}회차 매도: {sell_shares}주 @ ${sell_info['sell_price']:.2f}")
+                    else:
+                        # 매도 조건 미충족 - 보유 중
+                        st.warning(f"📦 {pos['round']}회차 보유 중: {sell_shares}주 (목표가 ${target_sell_price:.2f}, 현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
                     mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
@@ -1088,106 +1112,10 @@ def show_daily_recommendation():
                 with col2:
                     st.caption(f"매수체결일: {buy_date_str}")
                     st.caption(f"매수가: {buy_price_text}")
-        else:
-            # 보유 포지션이 있으면 매도 목표가 안내
-            if st.session_state.trader.positions:
-                st.warning("📋 보유 포지션이 있습니다. 매도 목표가를 확인하세요:")
-                for pos in st.session_state.trader.positions:
-                    # 포지션에 저장된 모드 사용 (재계산하지 않음)
-                    pos_mode = pos.get('mode', 'SF')  # 기본값 SF
-                    config = st.session_state.trader.sf_config if pos_mode == "SF" else st.session_state.trader.ag_config
-                    target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
-                    current_price = recommendation['soxl_current_price']
-                    price_diff = target_sell_price - current_price
-                    price_diff_pct = (price_diff / current_price) * 100
-                    buy_date = pos.get('buy_date')
-                    if isinstance(buy_date, pd.Timestamp):
-                        buy_date_str = buy_date.strftime('%Y-%m-%d')
-                        buy_date_dt = buy_date.to_pydatetime() if hasattr(buy_date, 'to_pydatetime') else datetime.combine(buy_date.date(), datetime.min.time())
-                    elif isinstance(buy_date, datetime):
-                        buy_date_str = buy_date.strftime('%Y-%m-%d')
-                        buy_date_dt = buy_date
-                    elif hasattr(buy_date, "strftime"):
-                        buy_date_str = buy_date.strftime('%Y-%m-%d')
-                        buy_date_dt = buy_date
-                    else:
-                        buy_date_str = str(buy_date) if buy_date else "-"
-                        buy_date_dt = None
-                    
-                    # 포지션에 저장된 모드 사용 (재계산하지 않음)
-                    mode = pos.get('mode')
-                    
-                    # 모드가 없는 경우에만 재계산 (하지만 이는 정상적인 경우가 아님)
-                    if not mode:
-                        st.warning(f"⚠️ 포지션 {pos['round']}회차에 모드 정보가 없습니다. 매수일: {buy_date_str}")
-                        if buy_date_dt:
-                            try:
-                                # 매수일이 속한 주의 금요일 계산
-                                buy_date_weekday = buy_date_dt.weekday()
-                                days_until_friday = (4 - buy_date_weekday) % 7
-                                if days_until_friday == 0 and buy_date_weekday != 4:
-                                    days_until_friday = 7
-                                buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
-                                
-                                # 매수일의 1주전, 2주전 금요일 계산
-                                one_week_ago_friday = buy_week_friday - timedelta(days=7)
-                                two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
-                                
-                                # RSI 참조 데이터에서 해당 주차의 RSI 가져오기
-                                rsi_ref_data = st.session_state.trader.load_rsi_reference_data()
-                                prev_week_rsi = st.session_state.trader.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
-                                two_weeks_ago_rsi = st.session_state.trader.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
-                                
-                                if prev_week_rsi is not None and two_weeks_ago_rsi is not None:
-                                    # 매수일 기준으로 모드 결정 (전주 모드를 재귀적으로 계산)
-                                    prev_week_friday = one_week_ago_friday
-                                    prev_week_mode, success = st.session_state.trader._calculate_week_mode_recursive_with_reference(
-                                        prev_week_friday, rsi_ref_data, max_depth=20
-                                    )
-                                    if success:
-                                        mode = st.session_state.trader.determine_mode(prev_week_rsi, two_weeks_ago_rsi, prev_week_mode)
-                                    else:
-                                        # 전주 모드 계산 실패 시 기본값 사용
-                                        mode = st.session_state.trader.determine_mode(prev_week_rsi, two_weeks_ago_rsi, "SF")
-                            except Exception as e:
-                                # 모드 계산 실패 시 기본값 사용
-                                mode = 'SF'
-                        else:
-                            mode = 'SF'
-                    
-                    # 디버깅: 저장된 모드 확인 및 강제 수정
-                    stored_mode_debug = pos.get('mode', 'N/A')
-                    if stored_mode_debug != mode:
-                        st.error(f"❌ 모드 불일치 감지! 포지션 {pos['round']}회차: 저장된 모드={stored_mode_debug}, 재계산 모드={mode}")
-                        st.warning(f"⚠️ 저장된 모드를 사용합니다: {stored_mode_debug}")
-                        # 저장된 모드를 사용하도록 수정
-                        mode = stored_mode_debug
-                        # 포지션의 모드도 강제로 수정 (혹시 모를 경우를 대비)
-                        pos['mode'] = stored_mode_debug
-                    
-                    mode_name = "안전모드" if mode == "SF" else "공세모드"
-                    
-                    # 손절 예정일 계산
-                    stop_loss_date = ""
-                    if buy_date_dt:
-                        stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
-                    
-                    # 레이아웃: 좌측 주요 정보, 우측 매수 정보
-                    col1, col2 = st.columns([3, 2])
-                    with col1:
-                        st.info(f"📦 {pos['round']}회차: 목표가 ${target_sell_price:.2f} (현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%) - 보유: {pos['shares']}주")
-                        # 모드 색상 설정 (AG: 주황색, SF: 초록색)
-                        mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
-                        mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
-                        # 손절예정일 빨간색으로 표시 (날짜까지 포함)
-                        stop_loss_display = stop_loss_date if stop_loss_date else "-"
-                        stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
-                        st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
-                    with col2:
-                        st.caption(f"매수체결일: {buy_date_str}")
-                        st.caption(f"매수가: ${pos['buy_price']:.2f}")
-            else:
-                st.info("🟡 매도 추천 없음")
+        
+        # 매도 추천 리스트가 비어있고 보유 포지션도 없으면 안내
+        if not recommendation.get('sell_recommendations') and not st.session_state.trader.positions:
+            st.info("🟡 매도 추천 없음")
     
     # 포트폴리오 현황
     st.subheader("💼 포트폴리오 현황")
