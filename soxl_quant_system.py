@@ -1540,16 +1540,21 @@ class SOXLQuantTrader:
 
         sold_rounds = []
         # 리스트 복사본을 사용하여 반복 중 안전하게 제거
+        print(f"🔍 reconcile_positions_with_close_history: 보유 포지션 {len(self.positions)}개 확인")
         for position in list(self.positions):
             buy_date = position["buy_date"]
+            buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
+            print(f"   📦 {position['round']}회차 (매수일: {buy_date_str}) 확인 중...")
 
             # 매수일 이후(엄격하게 초과) 데이터만 확인
             future_data = soxl_data[soxl_data.index > buy_date]
             if future_data.empty:
+                print(f"      ⏭️ 매수일 이후 데이터 없음, 스킵")
                 continue
 
             position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
             target_price = position["buy_price"] * (1 + position_config["sell_threshold"] / 100)
+            print(f"      목표가: ${target_price:.2f} (매수가: ${position['buy_price']:.2f}, 모드: {position.get('mode', 'N/A')})")
 
             # 1. 목표가 도달한 경우 매도
             hit_rows = future_data[future_data["Close"] >= target_price]
@@ -1626,6 +1631,10 @@ class SOXLQuantTrader:
         
         # 디버깅: 보유 포지션 수 확인
         print(f"🔍 매도 조건 확인: 보유 포지션 {len(self.positions)}개")
+        # 모든 포지션 목록 출력 (디버깅용)
+        for idx, pos in enumerate(self.positions):
+            buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+            print(f"   포지션 {idx+1}: {pos['round']}회차, 매수일: {buy_date_str}, 모드: {pos.get('mode', 'N/A')}, 매수가: ${pos.get('buy_price', 0):.2f}")
         
         for position in self.positions:
             buy_date = position["buy_date"]
@@ -1655,7 +1664,8 @@ class SOXLQuantTrader:
             
             # 디버깅: 매도 조건 상세 정보
             daily_close = row['Close']
-            print(f"   📦 {position['round']}회차: 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (현재가 ${daily_close:.2f})")
+            buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
+            print(f"   📦 {position['round']}회차 (매수일: {buy_date_str}): 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (현재가 ${daily_close:.2f})")
             print(f"      보유기간: {hold_days}일 (최대: {position_config['max_hold_days']}일, 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')})")
             
             # 1. LOC 매도 조건: 종가가 매도목표가에 도달했을 때 (종가 >= 매도목표가)
@@ -1675,6 +1685,9 @@ class SOXLQuantTrader:
                     "reason": f"손절예정일 경과 (보유기간: {hold_days}일)",
                     "sell_price": row['Close']  # 종가에 LOC 매도
                 })
+            else:
+                # 매도 조건을 만족하지 않아도 디버깅 정보 출력
+                print(f"      ⏳ 매도 조건 미충족: 종가 ${daily_close:.2f} < 목표가 ${sell_price:.2f}, 손절예정일 미경과 ({current_date.strftime('%Y-%m-%d')} < {stop_loss_date.strftime('%Y-%m-%d')})")
         
         # 디버깅: 매도 추천 결과
         if sell_positions:
