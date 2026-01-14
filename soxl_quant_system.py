@@ -1617,17 +1617,19 @@ class SOXLQuantTrader:
             self.current_round = max(1, self.current_round - sold_count)
             print(f"🔄 보정 후 current_round: {self.current_round} (총 {sold_count}개 회차 보정 매도)")
 
-    def check_sell_conditions(self, row: pd.Series, current_date: datetime, prev_close: float) -> List[Dict]:
+    def check_sell_conditions(self, row: pd.Series, current_date: datetime, prev_close: float, return_debug_info: bool = False) -> List[Dict]:
         """
         매도 조건 확인
         Args:
             row: 당일 주가 데이터 (Open, High, Low, Close)
             current_date: 현재 날짜
             prev_close: 전일 종가
+            return_debug_info: 디버깅 정보 반환 여부
         Returns:
-            List[Dict]: 매도할 포지션 리스트
+            List[Dict]: 매도할 포지션 리스트 (return_debug_info=True일 경우 튜플로 (리스트, 디버깅정보) 반환)
         """
         sell_positions = []
+        debug_info = []  # 디버깅 정보 저장
         
         # 디버깅: 보유 포지션 수 확인
         print(f"🔍 매도 조건 확인: 보유 포지션 {len(self.positions)}개")
@@ -1668,9 +1670,29 @@ class SOXLQuantTrader:
             print(f"   📦 {position['round']}회차 (매수일: {buy_date_str}): 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (현재가 ${daily_close:.2f})")
             print(f"      보유기간: {hold_days}일 (최대: {position_config['max_hold_days']}일, 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')})")
             
+            # 디버깅 정보 수집
+            position_debug = {
+                "round": position['round'],
+                "buy_date": buy_date_str,
+                "mode": position.get('mode', 'N/A'),
+                "buy_price": position_buy_price,
+                "target_sell_price": sell_price,
+                "current_close": daily_close,
+                "hold_days": hold_days,
+                "max_hold_days": position_config['max_hold_days'],
+                "stop_loss_date": stop_loss_date.strftime('%Y-%m-%d'),
+                "current_date": current_date.strftime('%Y-%m-%d'),
+                "meets_target_price": daily_close >= sell_price,
+                "meets_stop_loss_date": current_date >= stop_loss_date,
+                "will_sell": False,
+                "sell_reason": None
+            }
+            
             # 1. LOC 매도 조건: 종가가 매도목표가에 도달했을 때 (종가 >= 매도목표가)
             if daily_close >= sell_price:
                 print(f"      ✅ 매도 조건 1: 목표가 도달 (${daily_close:.2f} >= ${sell_price:.2f})")
+                position_debug["will_sell"] = True
+                position_debug["sell_reason"] = "목표가 도달"
                 sell_positions.append({
                     "position": position,
                     "reason": "목표가 도달",
@@ -1680,6 +1702,8 @@ class SOXLQuantTrader:
             # 2. 손절예정일 경과 시 매도 (당일 종가에 LOC 매도)
             elif current_date >= stop_loss_date:
                 print(f"      ✅ 매도 조건 2: 손절예정일 경과 (현재: {current_date.strftime('%Y-%m-%d')} >= 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')})")
+                position_debug["will_sell"] = True
+                position_debug["sell_reason"] = f"손절예정일 경과 (보유기간: {hold_days}일)"
                 sell_positions.append({
                     "position": position,
                     "reason": f"손절예정일 경과 (보유기간: {hold_days}일)",
@@ -1688,6 +1712,8 @@ class SOXLQuantTrader:
             else:
                 # 매도 조건을 만족하지 않아도 디버깅 정보 출력
                 print(f"      ⏳ 매도 조건 미충족: 종가 ${daily_close:.2f} < 목표가 ${sell_price:.2f}, 손절예정일 미경과 ({current_date.strftime('%Y-%m-%d')} < {stop_loss_date.strftime('%Y-%m-%d')})")
+            
+            debug_info.append(position_debug)
         
         # 디버깅: 매도 추천 결과
         if sell_positions:
@@ -1695,6 +1721,8 @@ class SOXLQuantTrader:
         else:
             print("❌ 매도 추천 없음")
         
+        if return_debug_info:
+            return sell_positions, debug_info
         return sell_positions
     
 
@@ -2363,7 +2391,7 @@ class SOXLQuantTrader:
         # 오늘 기준으로 매도 조건 확인 (어제 종가 기준)
         # current_date는 오늘 날짜로 설정하여 손절예정일 체크가 올바르게 작동하도록 함
         today_datetime = datetime.combine(today_date, datetime.min.time())
-        sell_recommendations = self.check_sell_conditions(check_sell_row, today_datetime, prev_close)
+        sell_recommendations, sell_debug_info = self.check_sell_conditions(check_sell_row, today_datetime, prev_close, return_debug_info=True)
         
         # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round()
@@ -2387,6 +2415,7 @@ class SOXLQuantTrader:
             "next_buy_round": self.current_round if can_buy else None,
             "next_buy_amount": next_buy_amount,
             "sell_recommendations": sell_recommendations,
+            "sell_debug_info": sell_debug_info,  # 매도 조건 확인 디버깅 정보
             "portfolio": {
                 "positions_count": len(self.positions),
                 "total_invested": total_invested,

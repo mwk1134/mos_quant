@@ -811,6 +811,46 @@ def show_daily_recommendation():
     
     with col2:
         st.subheader("🔴 매도 추천")
+        
+        # 디버깅: 모든 포지션의 매도 조건 확인 정보 표시
+        if 'sell_debug_info' in recommendation and recommendation['sell_debug_info']:
+            with st.expander("🔍 매도 조건 확인 (디버깅)", expanded=False):
+                st.write(f"**보유 포지션 {len(recommendation['sell_debug_info'])}개 확인**")
+                for debug_info in recommendation['sell_debug_info']:
+                    mode_name = "안전모드" if debug_info['mode'] == 'SF' else "공세모드" if debug_info['mode'] == 'AG' else "N/A"
+                    mode_color = "#28A745" if debug_info['mode'] == 'SF' else "#FF8C00" if debug_info['mode'] == 'AG' else "#6c757d"
+                    
+                    # 매도 여부에 따른 아이콘
+                    sell_icon = "✅" if debug_info['will_sell'] else "⏳"
+                    sell_status = "매도 추천" if debug_info['will_sell'] else "보유 중"
+                    
+                    st.markdown(f"---")
+                    st.markdown(f"**{sell_icon} {debug_info['round']}회차** - {sell_status}")
+                    st.markdown(f"- **매수일**: {debug_info['buy_date']}")
+                    st.markdown(f"- **모드**: <span style='color: {mode_color}; font-weight: bold;'>{debug_info['mode']} ({mode_name})</span>", unsafe_allow_html=True)
+                    st.markdown(f"- **매수가**: ${debug_info['buy_price']:.2f}")
+                    st.markdown(f"- **매도목표가**: ${debug_info['target_sell_price']:.2f}")
+                    st.markdown(f"- **현재 종가**: ${debug_info['current_close']:.2f}")
+                    
+                    # 목표가 도달 여부
+                    if debug_info['meets_target_price']:
+                        st.success(f"✅ 목표가 도달: ${debug_info['current_close']:.2f} >= ${debug_info['target_sell_price']:.2f}")
+                    else:
+                        price_diff = debug_info['target_sell_price'] - debug_info['current_close']
+                        price_diff_pct = (price_diff / debug_info['current_close']) * 100
+                        st.info(f"⏳ 목표가 미도달: ${debug_info['current_close']:.2f} < ${debug_info['target_sell_price']:.2f} (차이: ${price_diff:.2f}, {price_diff_pct:+.2f}%)")
+                    
+                    # 손절예정일 확인
+                    if debug_info['meets_stop_loss_date']:
+                        st.error(f"⚠️ 손절예정일 경과: {debug_info['current_date']} >= {debug_info['stop_loss_date']}")
+                    else:
+                        st.info(f"📅 손절예정일: {debug_info['stop_loss_date']} (현재: {debug_info['current_date']})")
+                    
+                    st.markdown(f"- **보유기간**: {debug_info['hold_days']}일 / 최대 {debug_info['max_hold_days']}일")
+                    
+                    if debug_info['will_sell']:
+                        st.success(f"**매도 사유**: {debug_info['sell_reason']}")
+        
         if recommendation['sell_recommendations']:
             st.success(f"✅ 매도 추천: {len(recommendation['sell_recommendations'])}건")
             for sell_info in recommendation['sell_recommendations']:
