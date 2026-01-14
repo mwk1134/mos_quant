@@ -1042,20 +1042,11 @@ def show_daily_recommendation():
                     if debug_info['will_sell']:
                         st.success(f"**매도 사유**: {debug_info['sell_reason']}")
         
-        # 매도 추천 리스트 표시 (모든 보유 포지션 포함)
+        # 매도 추천 리스트 표시 (매도 조건 미충족/보유 중인 포지션 표시)
         if recommendation['sell_recommendations']:
-            # 매도 조건 충족한 포지션과 미충족 포지션 분리
-            sell_recommended = [s for s in recommendation['sell_recommendations'] if s.get('will_sell', True)]
-            hold_positions = [s for s in recommendation['sell_recommendations'] if not s.get('will_sell', False)]
-            
-            if sell_recommended:
-                st.success(f"✅ 매도 추천: {len(sell_recommended)}건")
-            if hold_positions:
-                st.info(f"📋 보유 중: {len(hold_positions)}건")
+            st.info(f"📋 매도 대기 포지션: {len(recommendation['sell_recommendations'])}건")
             
             for sell_info in recommendation['sell_recommendations']:
-                will_sell = sell_info.get('will_sell', True)  # 기본값은 True (기존 호환성)
-                
                 pos = sell_info['position']
                 buy_date = pos.get('buy_date')
                 if isinstance(buy_date, pd.Timestamp):
@@ -1094,12 +1085,8 @@ def show_daily_recommendation():
                     # 매도 수량을 정수로 명시적 변환 (소수점 처리)
                     sell_shares = int(pos['shares']) if isinstance(pos['shares'], (int, float)) else pos['shares']
                     
-                    if will_sell:
-                        # 매도 조건 충족 - 매도 추천
-                        st.info(f"📦 {pos['round']}회차 매도: {sell_shares}주 @ ${sell_info['sell_price']:.2f}")
-                    else:
-                        # 매도 조건 미충족 - 보유 중
-                        st.warning(f"📦 {pos['round']}회차 보유 중: {sell_shares}주 (목표가 ${target_sell_price:.2f}, 현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    # 보유 중 상태 표시 (목표가와 현재가 차이 포함)
+                    st.warning(f"📦 {pos['round']}회차 보유 중: {sell_shares}주 (목표가 ${target_sell_price:.2f}, 현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
                     
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
@@ -1108,7 +1095,7 @@ def show_daily_recommendation():
                     stop_loss_display = stop_loss_date if stop_loss_date else "-"
                     stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
                     st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
-                    st.caption(f"매도 사유: {sell_info['reason']}")
+                    st.caption(f"상태: {sell_info['reason']}")
                 with col2:
                     st.caption(f"매수체결일: {buy_date_str}")
                     st.caption(f"매수가: {buy_price_text}")

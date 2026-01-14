@@ -2432,7 +2432,11 @@ class SOXLQuantTrader:
         # 오늘 기준으로 매도 조건 확인 (어제 종가 기준)
         # current_date는 오늘 날짜로 설정하여 손절예정일 체크가 올바르게 작동하도록 함
         today_datetime = datetime.combine(today_date, datetime.min.time())
-        sell_recommendations, sell_debug_info = self.check_sell_conditions(check_sell_row, today_datetime, prev_close, return_debug_info=True)
+        all_sell_recommendations, sell_debug_info = self.check_sell_conditions(check_sell_row, today_datetime, prev_close, return_debug_info=True)
+        
+        # 매도 추천 리스트에는 매도 조건이 충족되지 않은 포지션만 포함 (사용자 요청)
+        # 실제 매도 조건이 충족된 것(will_sell=True)은 리스트에서 제외
+        sell_recommendations = [s for s in all_sell_recommendations if not s.get('will_sell', False)]
         
         # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round()
