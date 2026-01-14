@@ -2318,31 +2318,39 @@ class SOXLQuantTrader:
         
         latest_soxl = soxl_data.iloc[-1]
         current_price = latest_soxl['Close']
-        current_date = soxl_data.index[-1]
+        latest_data_date = soxl_data.index[-1]
 
         # 전일 종가 계산
         # - 데이터의 마지막 날짜가 오늘보다 이전(주말/휴장/장전)인 경우: 마지막 종가를 기준으로 매수가 계산
         # - 데이터의 마지막 날짜가 오늘(이미 오늘 종가가 존재)인 경우: 그 전날 종가를 기준으로 계산
-        last_data_date = current_date.date()
+        last_data_date = latest_data_date.date()
         today_date = today.date()  # 테스트 날짜 오버라이드 고려
         if last_data_date < today_date:
             # 최신 거래일 종가를 전일 종가로 간주
             prev_close = soxl_data.iloc[-1]['Close']
             prev_close_basis_date = soxl_data.index[-1].strftime("%Y-%m-%d")
             display_date = today_date.strftime("%Y-%m-%d")  # 장중/휴장일에도 화면 날짜는 오늘로 표시
+            # 매도 조건 확인은 어제(최신 거래일) 종가 기준으로 확인
+            check_sell_date = latest_data_date
+            check_sell_row = latest_soxl
         else:
             # 오늘 종가가 포함되어 있으므로 바로 전날 종가 사용
             prev_close = soxl_data.iloc[-2]['Close']
             prev_close_basis_date = soxl_data.index[-2].strftime("%Y-%m-%d")
-            display_date = current_date.strftime("%Y-%m-%d")
+            display_date = latest_data_date.strftime("%Y-%m-%d")
+            # 매도 조건 확인은 전날 종가 기준으로 확인
+            check_sell_date = soxl_data.index[-2]
+            check_sell_row = soxl_data.iloc[-2]
         
         # 6. 매수/매도 가격 계산
 
         buy_price, sell_price = self.calculate_buy_sell_prices(prev_close)
         
         # 7. 매도 조건 확인
-
-        sell_recommendations = self.check_sell_conditions(latest_soxl, current_date, prev_close)
+        # 오늘 기준으로 매도 조건 확인 (어제 종가 기준)
+        # current_date는 오늘 날짜로 설정하여 손절예정일 체크가 올바르게 작동하도록 함
+        today_datetime = datetime.combine(today_date, datetime.min.time())
+        sell_recommendations = self.check_sell_conditions(check_sell_row, today_datetime, prev_close)
         
         # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round()
