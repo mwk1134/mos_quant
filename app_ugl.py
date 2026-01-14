@@ -696,48 +696,6 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
-        # 디버깅: reconcile_positions_with_close_history 호출 전후 포지션 목록 확인
-        if 'reconcile_debug_info' in recommendation:
-            reconcile_debug = recommendation['reconcile_debug_info']
-            with st.expander("🔍 포지션 보정 전후 비교 (디버깅)", expanded=False):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.subheader(f"보정 전 ({len(reconcile_debug['positions_before'])}개)")
-                    if reconcile_debug['positions_before']:
-                        for pos in reconcile_debug['positions_before']:
-                            mode_color = "🟢" if pos['mode'] == "SF" else "🔴" if pos['mode'] == "AG" else "⚪"
-                            st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {pos['buy_date']}, 모드: {pos['mode']}, 매수가: ${pos['buy_price']:.2f}")
-                    else:
-                        st.info("포지션 없음")
-                with col2:
-                    st.subheader(f"보정 후 ({len(reconcile_debug['positions_after'])}개)")
-                    if reconcile_debug['positions_after']:
-                        for pos in reconcile_debug['positions_after']:
-                            mode_color = "🟢" if pos['mode'] == "SF" else "🔴" if pos['mode'] == "AG" else "⚪"
-                            st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {pos['buy_date']}, 모드: {pos['mode']}, 매수가: ${pos['buy_price']:.2f}")
-                    else:
-                        st.info("포지션 없음")
-                
-                # 사라진 포지션 확인
-                before_dates = {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_before']}
-                after_dates = {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_after']}
-                removed_positions = {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_before']} - {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_after']}
-                if removed_positions:
-                    st.warning(f"⚠️ 보정 과정에서 제거된 포지션: {', '.join(removed_positions)}")
-        
-        # 디버깅: 시뮬레이션 후 포지션 모드 확인
-        if st.session_state.trader.positions:
-            with st.expander("🔍 시뮬레이션 후 포지션 모드 확인 (디버깅)", expanded=True):
-                for pos in st.session_state.trader.positions:
-                    buy_date = pos.get('buy_date')
-                    if isinstance(buy_date, (datetime, pd.Timestamp)):
-                        buy_date_str = buy_date.strftime('%Y-%m-%d') if hasattr(buy_date, 'strftime') else str(buy_date)
-                    else:
-                        buy_date_str = str(buy_date)
-                    stored_mode = pos.get('mode', 'N/A')
-                    mode_color = "🟢" if stored_mode == "SF" else "🔴" if stored_mode == "AG" else "⚪"
-                    st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {buy_date_str}, 저장된 모드: **{stored_mode}**")
-        
         # 시뮬레이션 후 수정된 포지션 복원
         if 'position_edits' in st.session_state and st.session_state.position_edits:
             # 수정된 포지션 정보를 회차와 매수일로 매칭하여 복원
@@ -767,6 +725,35 @@ def show_daily_recommendation():
     if "error" in recommendation:
         st.error(f"추천 생성 실패: {recommendation['error']}")
         return
+    
+    # 디버깅: reconcile_positions_with_close_history 호출 전후 포지션 목록 확인
+    if 'reconcile_debug_info' in recommendation:
+        reconcile_debug = recommendation['reconcile_debug_info']
+        with st.expander("🔍 포지션 보정 전후 비교 (디버깅)", expanded=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader(f"보정 전 ({len(reconcile_debug['positions_before'])}개)")
+                if reconcile_debug['positions_before']:
+                    for pos in reconcile_debug['positions_before']:
+                        mode_color = "🟢" if pos['mode'] == "SF" else "🔴" if pos['mode'] == "AG" else "⚪"
+                        st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {pos['buy_date']}, 모드: {pos['mode']}, 매수가: ${pos['buy_price']:.2f}")
+                else:
+                    st.info("포지션 없음")
+            with col2:
+                st.subheader(f"보정 후 ({len(reconcile_debug['positions_after'])}개)")
+                if reconcile_debug['positions_after']:
+                    for pos in reconcile_debug['positions_after']:
+                        mode_color = "🟢" if pos['mode'] == "SF" else "🔴" if pos['mode'] == "AG" else "⚪"
+                        st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {pos['buy_date']}, 모드: {pos['mode']}, 매수가: ${pos['buy_price']:.2f}")
+                else:
+                    st.info("포지션 없음")
+            
+            # 사라진 포지션 확인
+            before_dates = {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_before']}
+            after_dates = {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_after']}
+            removed_positions = before_dates - after_dates
+            if removed_positions:
+                st.warning(f"⚠️ 보정 과정에서 제거된 포지션: {', '.join(removed_positions)}")
     
     # 기본 정보 - 모바일 최적화
     # 모바일에서는 2x2 그리드, 데스크톱에서는 1x4 그리드
