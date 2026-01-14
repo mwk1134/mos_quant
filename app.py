@@ -864,6 +864,58 @@ def show_daily_recommendation():
             removed_positions = before_dates - after_dates
             if removed_positions:
                 st.warning(f"⚠️ 보정 과정에서 제거된 포지션: {', '.join(removed_positions)}")
+            
+            # 1월 12일 포지션 상세 디버깅 정보 표시
+            if 'jan12_debug' in reconcile_debug and reconcile_debug['jan12_debug']:
+                jan12_debug = reconcile_debug['jan12_debug']
+                if jan12_debug.get('jan12_position_found'):
+                    st.subheader("🔍 1월 12일 포지션 상세 디버깅")
+                    
+                    details = jan12_debug.get('jan12_position_details')
+                    if details:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**포지션 정보:**")
+                            st.write(f"- 회차: {details.get('round')}회차")
+                            st.write(f"- 매수일: {details.get('buy_date')}")
+                            st.write(f"- 매수가: ${details.get('buy_price', 0):.2f}")
+                            st.write(f"- 모드: {details.get('mode', 'N/A')}")
+                            st.write(f"- 목표가: ${details.get('target_price', 0):.2f}")
+                            st.write(f"- 주식수: {details.get('shares', 0)}주")
+                        
+                        with col2:
+                            if jan12_debug.get('reconcile_data_range'):
+                                data_range = jan12_debug['reconcile_data_range']
+                                st.write(f"**데이터 범위:**")
+                                st.write(f"- 시작일: {data_range.get('start', 'N/A')}")
+                                st.write(f"- 종료일: {data_range.get('end', 'N/A')}")
+                                st.write(f"- 데이터 수: {data_range.get('count', 0)}개")
+                        
+                        # future_data 상세 정보
+                        if 'future_data' in details:
+                            st.write(f"**매수일 이후 종가 데이터:**")
+                            future_df = pd.DataFrame(details['future_data'])
+                            st.dataframe(future_df, use_container_width=True)
+                        
+                        # 매도 처리 정보
+                        sell_check = jan12_debug.get('jan12_sell_check')
+                        if sell_check:
+                            st.write(f"**매도 처리 결과:**")
+                            if sell_check.get('sold'):
+                                st.error(f"❌ 매도 처리됨!")
+                                st.write(f"- 사유: {sell_check.get('reason', 'N/A')}")
+                                st.write(f"- 매도일: {sell_check.get('sell_date', 'N/A')}")
+                                st.write(f"- 매도가: ${sell_check.get('sell_close', 0):.2f}")
+                                
+                                if 'hit_dates' in sell_check:
+                                    st.write(f"**목표가 도달한 날짜들:**")
+                                    for hit_date in sell_check['hit_dates']:
+                                        st.write(f"- {hit_date.get('date')}: 종가 ${hit_date.get('close', 0):.2f}")
+                            else:
+                                st.success(f"✅ 매도 처리 안됨 (정상)")
+                                st.write(f"- 사유: {sell_check.get('reason', 'N/A')}")
+                        else:
+                            st.info("매도 처리 정보 없음")
     
     # 데이터 경고 표시 (Close가 None인 날짜들)
     if hasattr(st.session_state.trader, '_data_warnings') and st.session_state.trader._data_warnings:
