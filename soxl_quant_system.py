@@ -323,6 +323,11 @@ class SOXLQuantTrader:
                         week_exists = False
                         for j, existing_week in enumerate(existing_data[current_year]['weeks']):
                             if existing_week['week'] == week_num:
+                                # 기존 데이터가 있고 rsi 값이 이미 설정되어 있으면 업데이트 건너뜀 (수동 입력 데이터 보호)
+                                if 'rsi' in existing_week and existing_week['rsi'] is not None:
+                                    week_exists = True
+                                    break
+                                
                                 # 기존 데이터 업데이트
                                 existing_data[current_year]['weeks'][j] = {
                                     "start": week_start.strftime('%Y-%m-%d'),
@@ -388,8 +393,11 @@ class SOXLQuantTrader:
         # 데이터 경고 저장 (Close가 None인 날짜들)
         self._data_warnings = []
         
-        # 데이터 경고 저장 (Close가 None인 날짜들)
-        self._data_warnings = []
+        # 세션 상태: 사용자 입력 시작일 (파일 저장 없음)
+        self.session_start_date: Optional[str] = None
+        
+        # 테스트용 오늘 날짜 오버라이드 (YYYY-MM-DD)
+        self.test_today_override: Optional[str] = None
 
         self.current_mode = None  # RSI 기준에 따라 동적으로 결정
         
@@ -1262,63 +1270,63 @@ class SOXLQuantTrader:
             else:  # 금요일이 아니면 지난주 금요일이 가장 최근 완료된 주차
                 latest_completed_friday = this_week_friday_calc - timedelta(days=7)
             
+            # RSI 참조 데이터 로드
+            rsi_ref_data = {}
+            try:
+                rsi_file_path = str(self._resolve_data_path("weekly_rsi_reference.json"))
+                if os.path.exists(rsi_file_path):
+                    with open(rsi_file_path, 'r', encoding='utf-8') as f:
+                        rsi_ref_data = json.load(f)
+            except Exception as e:
+                print(f"⚠️ RSI 참조 데이터 로드 실패: {e}")
+
             # 1주전과 2주전 금요일 계산
-            # 1주전 RSI = 지난주 금요일의 RSI (latest_completed_friday)
-            # 2주전 RSI = 지지난주 금요일의 RSI (latest_completed_friday - 7일)
             one_week_ago_friday = latest_completed_friday  # 지난주 금요일 (1주전)
             two_weeks_ago_friday = latest_completed_friday - timedelta(days=7)  # 지지난주 금요일 (2주전)
             
-            # RSI와 weekly_df의 인덱스(금요일 날짜)를 매칭하여 1주전, 2주전 RSI 찾기
-            one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-            two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+            # RSI 값 추출 (참조 데이터 우선 사용)
+            one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
+            two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
             
-            # 1주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
-            one_week_ago_rsi = None
-            earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
-            if len(earlier_dates_1w) > 0:
-                one_week_rsi_date = earlier_dates_1w[-1]
-                one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
-                if one_week_rsi_idx < len(rsi):
-                    one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
-                    if pd.isna(one_week_ago_rsi):
-                        one_week_ago_rsi = None
-            
-            # 2주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
-            two_weeks_ago_rsi = None
-            earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
-            if len(earlier_dates_2w) > 0:
-                two_weeks_rsi_date = earlier_dates_2w[-1]
-                two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
-                if two_weeks_rsi_idx < len(rsi):
-                    two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
-                    if pd.isna(two_weeks_ago_rsi):
-                        two_weeks_ago_rsi = None
+            # 참조 데이터에 없으면 실시간 계산 데이터 사용
+            if one_week_ago_rsi is None:
+                one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+                earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
+                if len(earlier_dates_1w) > 0:
+                    one_week_rsi_date = earlier_dates_1w[-1]
+                    one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
+                    if one_week_rsi_idx < len(rsi):
+                        one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
+
+            if two_weeks_ago_rsi is None:
+                two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
+                if len(earlier_dates_2w) > 0:
+                    two_weeks_rsi_date = earlier_dates_2w[-1]
+                    two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
+                    if two_weeks_rsi_idx < len(rsi):
+                        two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
             
             if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
                 print("⚠️ RSI 계산 실패, 현재 모드 유지")
                 return self.current_mode
             
-            # 전주 모드를 재귀적으로 계산 (case에 해당하는 모드가 나올 때까지)
-            prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df, rsi)
+            # 전주 모드를 재귀적으로 계산 (참조 데이터 버전 우선)
+            prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(one_week_ago_friday, rsi_ref_data)
+            if not success:
+                prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df, rsi)
             
             if not success:
                 print(f"❌ 모드판정실패: 전주 모드를 계산할 수 없어 현재 주차의 모드를 결정할 수 없습니다.")
-                print(f"   - 1주전 금요일: {one_week_ago_friday.strftime('%Y-%m-%d')}")
-                print(f"   - 2주전 금요일: {two_weeks_ago_friday.strftime('%Y-%m-%d')}")
-                print(f"   - 1주전 RSI: {one_week_ago_rsi:.2f if one_week_ago_rsi is not None else 'None'}")
-                print(f"   - 2주전 RSI: {two_weeks_ago_rsi:.2f if two_weeks_ago_rsi is not None else 'None'}")
                 return None
             
             # 현재 주차의 모드 결정
-            # 1주전, 2주전 RSI로 조건 확인
             is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
             
             if is_matched:
-                # 조건에 해당하는 모드
                 new_mode = matched_mode
                 print(f"✅ 현재 주차 모드: {new_mode} (조건에 해당)")
             else:
-                # 조건에 해당하지 않으면 전주 모드 사용
                 new_mode = prev_week_mode
                 print(f"✅ 현재 주차 모드: {new_mode} (전주 모드 유지 - 조건에 해당하지 않음)")
             
@@ -1865,6 +1873,16 @@ class SOXLQuantTrader:
             return {"error": "QQQ 데이터를 가져올 수 없습니다."}
 
         # 3. 기존 포지션의 모드 백업 및 재검증 (매수일 기준으로 재계산)
+        # RSI 참조 데이터 로드 (수동 입력값 포함)
+        rsi_ref_data = {}
+        try:
+            rsi_file_path = str(self._resolve_data_path("weekly_rsi_reference.json"))
+            if os.path.exists(rsi_file_path):
+                with open(rsi_file_path, 'r', encoding='utf-8') as f:
+                    rsi_ref_data = json.load(f)
+        except Exception as e:
+            print(f"⚠️ RSI 참조 데이터 로드 실패: {e}")
+
         # 시뮬레이션 후 포지션 모드를 백업하여 이후 모드 재계산 시 보존
         position_mode_backup = {}
         for pos in self.positions:
@@ -1925,34 +1943,37 @@ class SOXLQuantTrader:
                 one_week_ago_friday = buy_week_friday - timedelta(days=7)
                 two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
                 
-                # RSI 값 추출
-                one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                # RSI 값 추출 (참조 데이터 우선 사용)
+                one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
+                two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
                 
-                one_week_ago_rsi = None
-                earlier_dates_1w = weekly_df_for_positions.index[weekly_df_for_positions.index <= one_week_ago_friday_dt]
-                if len(earlier_dates_1w) > 0:
-                    one_week_rsi_date = earlier_dates_1w[-1]
-                    one_week_rsi_idx = weekly_df_for_positions.index.get_loc(one_week_rsi_date)
-                    if one_week_rsi_idx < len(rsi_for_positions):
-                        one_week_ago_rsi = rsi_for_positions.iloc[one_week_rsi_idx]
-                        if pd.isna(one_week_ago_rsi):
-                            one_week_ago_rsi = None
-                
-                two_weeks_ago_rsi = None
-                earlier_dates_2w = weekly_df_for_positions.index[weekly_df_for_positions.index <= two_weeks_ago_friday_dt]
-                if len(earlier_dates_2w) > 0:
-                    two_weeks_rsi_date = earlier_dates_2w[-1]
-                    two_weeks_rsi_idx = weekly_df_for_positions.index.get_loc(two_weeks_rsi_date)
-                    if two_weeks_rsi_idx < len(rsi_for_positions):
-                        two_weeks_ago_rsi = rsi_for_positions.iloc[two_weeks_rsi_idx]
-                        if pd.isna(two_weeks_ago_rsi):
-                            two_weeks_ago_rsi = None
+                # 참조 데이터에 없으면 실시간 계산 데이터 사용
+                if one_week_ago_rsi is None:
+                    one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+                    earlier_dates_1w = weekly_df_for_positions.index[weekly_df_for_positions.index <= one_week_ago_friday_dt]
+                    if len(earlier_dates_1w) > 0:
+                        one_week_rsi_date = earlier_dates_1w[-1]
+                        one_week_rsi_idx = weekly_df_for_positions.index.get_loc(one_week_rsi_date)
+                        if one_week_rsi_idx < len(rsi_for_positions):
+                            one_week_ago_rsi = rsi_for_positions.iloc[one_week_rsi_idx]
+
+                if two_weeks_ago_rsi is None:
+                    two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                    earlier_dates_2w = weekly_df_for_positions.index[weekly_df_for_positions.index <= two_weeks_ago_friday_dt]
+                    if len(earlier_dates_2w) > 0:
+                        two_weeks_rsi_date = earlier_dates_2w[-1]
+                        two_weeks_rsi_idx = weekly_df_for_positions.index.get_loc(two_weeks_rsi_date)
+                        if two_weeks_rsi_idx < len(rsi_for_positions):
+                            two_weeks_ago_rsi = rsi_for_positions.iloc[two_weeks_rsi_idx]
                 
                 # RSI 값으로 매수일의 모드 재계산
                 if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
-                    # 전주 모드를 재귀적으로 계산
-                    prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_for_positions, rsi_for_positions)
+                    # 전주 모드를 재귀적으로 계산 (참조 데이터 사용 버전 우선)
+                    prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(one_week_ago_friday, rsi_ref_data)
+                    
+                    if not success:
+                        # 참조 데이터 실패 시 실시간 계산 버전으로 시도
+                        prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_for_positions, rsi_for_positions)
                     
                     if success:
                         # 매수일의 모드 결정
@@ -2207,29 +2228,28 @@ class SOXLQuantTrader:
                     one_week_ago_friday = latest_completed_friday
                     two_weeks_ago_friday = latest_completed_friday - timedelta(days=7)
                     
-                    # RSI 값 추출
-                    one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                    two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                    # RSI 값 추출 (참조 데이터 우선 사용)
+                    one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
+                    two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
                     
-                    one_week_ago_rsi = None
-                    earlier_dates_1w = weekly_df_temp.index[weekly_df_temp.index <= one_week_ago_friday_dt]
-                    if len(earlier_dates_1w) > 0:
-                        one_week_rsi_date = earlier_dates_1w[-1]
-                        one_week_rsi_idx = weekly_df_temp.index.get_loc(one_week_rsi_date)
-                        if one_week_rsi_idx < len(rsi):
-                            one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
-                            if pd.isna(one_week_ago_rsi):
-                                one_week_ago_rsi = None
-                    
-                    two_weeks_ago_rsi = None
-                    earlier_dates_2w = weekly_df_temp.index[weekly_df_temp.index <= two_weeks_ago_friday_dt]
-                    if len(earlier_dates_2w) > 0:
-                        two_weeks_rsi_date = earlier_dates_2w[-1]
-                        two_weeks_rsi_idx = weekly_df_temp.index.get_loc(two_weeks_rsi_date)
-                        if two_weeks_rsi_idx < len(rsi):
-                            two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
-                            if pd.isna(two_weeks_ago_rsi):
-                                two_weeks_ago_rsi = None
+                    # 참조 데이터에 없으면 실시간 계산 데이터 사용
+                    if one_week_ago_rsi is None:
+                        one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+                        earlier_dates_1w = weekly_df_temp.index[weekly_df_temp.index <= one_week_ago_friday_dt]
+                        if len(earlier_dates_1w) > 0:
+                            one_week_rsi_date = earlier_dates_1w[-1]
+                            one_week_rsi_idx = weekly_df_temp.index.get_loc(one_week_rsi_date)
+                            if one_week_rsi_idx < len(rsi):
+                                one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
+
+                    if two_weeks_ago_rsi is None:
+                        two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                        earlier_dates_2w = weekly_df_temp.index[weekly_df_temp.index <= two_weeks_ago_friday_dt]
+                        if len(earlier_dates_2w) > 0:
+                            two_weeks_rsi_date = earlier_dates_2w[-1]
+                            two_weeks_rsi_idx = weekly_df_temp.index.get_loc(two_weeks_rsi_date)
+                            if two_weeks_rsi_idx < len(rsi):
+                                two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
                     
                     # RSI 값으로 모드 검증
                     if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
@@ -2253,8 +2273,12 @@ class SOXLQuantTrader:
                                 new_mode = self.current_mode
                         else:
                             # 조건에 해당하지 않으면 전주 모드 사용해야 함
-                            # 전주 모드를 계산하여 검증
-                            prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_temp, rsi)
+                            # 전주 모드를 계산하여 검증 (참조 데이터 우선)
+                            prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(one_week_ago_friday, rsi_ref_data)
+                            if not success:
+                                # 참조 데이터 실패 시 실시간 계산 버전으로 시도
+                                prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_temp, rsi)
+                            
                             if success and prev_week_mode != self.current_mode:
                                 print(f"⚠️ 모드 불일치 감지: 현재 모드={self.current_mode}, 전주 모드={prev_week_mode}")
                                 print(f"   RSI 값: 1주전={one_week_ago_rsi:.2f}, 2주전={two_weeks_ago_rsi:.2f}")
