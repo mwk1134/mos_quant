@@ -1364,7 +1364,7 @@ class SOXLQuantTrader:
     
     def calculate_position_size(self, round_num: int) -> float:
         """
-        회차별 매수 금액 계산
+        회차별 매수 금액 계산 (수익금 제외, 순수 투자 원금 기준)
         Args:
             round_num: 매수 회차 (1부터 시작)
         Returns:
@@ -1374,8 +1374,15 @@ class SOXLQuantTrader:
         
         if round_num <= len(config["split_ratios"]):
             ratio = config["split_ratios"][round_num - 1]
-            # 투자원금 사용 (10거래일마다 총자산으로 업데이트됨)
-            amount = self.current_investment_capital * ratio
+            
+            # 수익금을 제외한 순수 투자 원금 계산 (초기자본 + 시드증액 합계)
+            pure_principal = self.initial_capital
+            for seed in self.seed_increases:
+                # 현재 시뮬레이션 날짜보다 이전인 증액분만 합산
+                # (backtest_loop 내에서 호출될 때는 이미 processed_seed_dates에 포함되어 있음)
+                pure_principal += seed["amount"]
+                
+            amount = pure_principal * ratio
             return amount
         else:
             return 0.0
@@ -1995,21 +2002,26 @@ class SOXLQuantTrader:
                             old_config = self.sf_config if old_mode == "SF" else self.ag_config
                             new_config = self.sf_config if correct_mode == "SF" else self.ag_config
                             
-                            # 매수일 시점의 투자원금 추정 (기존 금액과 split_ratios로 역산)
+                            # 매수일 시점의 투자원금 추정 (수익금 제외 순수 원금 기준)
                             old_round = pos['round']
-                            if old_round <= len(old_config["split_ratios"]):
-                                old_ratio = old_config["split_ratios"][old_round - 1]
-                                if old_ratio > 0:
-                                    estimated_investment_capital = pos['amount'] / old_ratio
-                                    
-                                    # 새로운 모드의 split_ratios로 재계산
-                                    if old_round <= len(new_config["split_ratios"]):
-                                        new_ratio = new_config["split_ratios"][old_round - 1]
-                                        new_target_amount = estimated_investment_capital * new_ratio
-                                        
-                                        # 수량과 금액 재계산
-                                        buy_price = pos['buy_price']
-                                        new_shares = int(new_target_amount / buy_price)
+                            
+                            # 해당 매수일 시점까지의 순수 원금 합계 계산
+                            pure_principal_at_buy_date = self.initial_capital
+                            for seed in self.seed_increases:
+                                seed_date = datetime.strptime(seed["date"], "%Y-%m-%d").date()
+                                if seed_date <= buy_date_dt.date():
+                                    pure_principal_at_buy_date += seed["amount"]
+                            
+                            estimated_investment_capital = pure_principal_at_buy_date
+                            
+                            # 새로운 모드의 split_ratios로 재계산
+                            if old_round <= len(new_config["split_ratios"]):
+                                new_ratio = new_config["split_ratios"][old_round - 1]
+                                new_target_amount = estimated_investment_capital * new_ratio
+                                
+                                # 수량과 금액 재계산
+                                buy_price = pos['buy_price']
+                                new_shares = int(new_target_amount / buy_price)
                                         if new_shares > 0:
                                             new_amount = new_shares * buy_price
                                             
