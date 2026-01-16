@@ -243,7 +243,9 @@ if 'jeh2_preset' not in st.session_state:
     st.session_state.jeh2_preset = {
         'initial_capital': 2704.0,
         'session_start_date': "2025-12-22",
-        'seed_increases': [],
+        'seed_increases': [
+            {"date": "2026-01-15", "amount": 678.0}
+        ],
         'position_edits': {}  # 포지션 수정 정보 저장
     }
 
@@ -443,7 +445,7 @@ def show_mobile_settings():
             }
             st.success("✅ JSD 프리셋이 저장되었습니다!")
     with start_col8:
-        if st.button("JEH2", help="초기설정: 2704달러, 시작일 2025/12/22, 시드증액 없음"):
+        if st.button("JEH2", help="초기설정: 2704달러, 시작일 2025/12/22, 2026/01/15 +678"):
             # JEH2 프리셋 불러오기
             jeh2 = st.session_state.jeh2_preset
             st.session_state.initial_capital = jeh2['initial_capital']
