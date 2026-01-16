@@ -233,7 +233,10 @@ if 'jeh_preset' not in st.session_state:
     st.session_state.jeh_preset = {
         'initial_capital': 2793.0,
         'session_start_date': "2025-10-30",
-        'seed_increases': [{"date": "2025-12-22", "amount": 13499.0}],
+        'seed_increases': [
+            {"date": "2025-12-22", "amount": 13499.0},
+            {"date": "2026-01-16", "amount": 2035.0}
+        ],
         'position_edits': {}  # 포지션 수정 정보 저장
     }
 if 'jeh2_preset' not in st.session_state:
@@ -384,7 +387,7 @@ def show_mobile_settings():
             }
             st.success("✅ KMW 프리셋이 저장되었습니다!")
     with start_col4:
-        if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 2025/12/22 +13,499"):
+        if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 2025/12/22 +13,499, 2026/01/16 +2,035"):
             # JEH 프리셋 불러오기
             jeh = st.session_state.jeh_preset
             st.session_state.initial_capital = jeh['initial_capital']
