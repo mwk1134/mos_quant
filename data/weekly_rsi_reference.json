@@ -652,12 +652,33 @@
         "start": "2026-01-12",
         "end": "2026-01-16",
         "week": 3,
-        "rsi": 59.35
+        "rsi": 59.58
+      },
+      {
+        "start": "2026-01-19",
+        "end": "2026-01-23",
+        "week": 4,
+        "rsi": 56.15
+      },
+      {
+        "start": "2026-01-26",
+        "end": "2026-01-30",
+        "week": 5,
+        "rsi": 51.7
+      },
+      {
+        "start": "2026-02-02",
+        "end": "2026-02-06",
+        "week": 6,
+        "rsi": 39.56
       }
     ]
   },
   "metadata": {
-    "last_updated": "2026-01-14",
-    "source": "complete_recovery_with_manual_fix"
+    "last_updated": "2026-02-06",
+    "total_years": 17,
+    "total_weeks": 844,
+    "description": "QQQ 주간 RSI 참조 데이터 (14주 Wilder's RSI)",
+    "updated_by": "update_rsi_data.py"
   }
 }
