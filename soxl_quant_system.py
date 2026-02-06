@@ -279,9 +279,9 @@ class SOXLQuantTrader:
             today = datetime.now()
             current_year = today.strftime('%Y')
             
-            # QQQ 데이터 가져오기 (최근 1년)
-            print("[INFO] QQQ 데이터 가져오는 중...")
-            qqq_data = self.get_stock_data("QQQ", "1y")
+            # QQQ 데이터 가져오기 (5년 - 정확한 RSI 계산을 위해 충분한 기간)
+            print("[INFO] QQQ 데이터 가져오는 중 (5y)...")
+            qqq_data = self.get_stock_data("QQQ", "5y")
             if qqq_data is None:
                 print("[ERROR] QQQ 데이터를 가져올 수 없습니다.")
                 return False
@@ -920,6 +920,65 @@ class SOXLQuantTrader:
             return None
 
 
+    def calculate_weekly_rsi_for_dates(self, target_fridays: list, window: int = 14) -> dict:
+        """
+        특정 금요일 날짜들에 대한 정확한 주간 RSI를 실시간 계산 (5년 데이터 기반)
+        참조 데이터에 없을 때 폴백으로 사용
+        Args:
+            target_fridays: RSI를 계산할 금요일 날짜 리스트 (datetime)
+            window: RSI 계산 기간 (기본값: 14)
+        Returns:
+            dict: {날짜문자열: RSI값} 딕셔너리
+        """
+        try:
+            print(f"📊 RSI 실시간 계산 시작 (5y 데이터 기반, 대상: {len(target_fridays)}개 주차)")
+            
+            # 5년치 QQQ 데이터 가져오기 (정확한 RSI 계산을 위해 충분한 기간)
+            qqq_long = self.get_stock_data("QQQ", "5y")
+            if qqq_long is None:
+                print("❌ QQQ 5년 데이터를 가져올 수 없습니다.")
+                return {}
+            
+            # 주간 데이터로 변환 (금요일 기준)
+            weekly_df = qqq_long.resample('W-FRI').agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            }).dropna()
+            
+            if len(weekly_df) < window + 1:
+                print(f"❌ 주간 데이터 부족 (필요: {window+1}주, 현재: {len(weekly_df)}주)")
+                return {}
+            
+            # RSI 계산
+            delta = weekly_df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
+            
+            # 대상 금요일 날짜들의 RSI 추출
+            result = {}
+            for friday in target_fridays:
+                friday_dt = pd.Timestamp(friday.date()) if isinstance(friday, datetime) else pd.Timestamp(friday)
+                # 해당 금요일 이전 또는 같은 날짜의 가장 가까운 주간 데이터 찾기
+                earlier_dates = weekly_df.index[weekly_df.index <= friday_dt]
+                if len(earlier_dates) > 0:
+                    matched_date = earlier_dates[-1]
+                    matched_idx = weekly_df.index.get_loc(matched_date)
+                    if matched_idx < len(rsi) and not pd.isna(rsi.iloc[matched_idx]):
+                        rsi_value = round(rsi.iloc[matched_idx], 2)
+                        result[friday_dt.strftime('%Y-%m-%d')] = rsi_value
+                        print(f"   ✅ {friday_dt.strftime('%Y-%m-%d')} → RSI: {rsi_value}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"❌ RSI 실시간 계산 오류: {e}")
+            return {}
+
     def calculate_weekly_rsi(self, df: pd.DataFrame, window: int = 14) -> float:
         """
 
@@ -1300,24 +1359,24 @@ class SOXLQuantTrader:
             one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
             two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
             
-            # 참조 데이터에 없으면 실시간 계산 데이터 사용
-            if one_week_ago_rsi is None:
-                one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
-                if len(earlier_dates_1w) > 0:
-                    one_week_rsi_date = earlier_dates_1w[-1]
-                    one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
-                    if one_week_rsi_idx < len(rsi):
-                        one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
-
-            if two_weeks_ago_rsi is None:
-                two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
-                earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
-                if len(earlier_dates_2w) > 0:
-                    two_weeks_rsi_date = earlier_dates_2w[-1]
-                    two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
-                    if two_weeks_rsi_idx < len(rsi):
-                        two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
+            # 참조 데이터에 없으면 5년치 데이터로 정확한 RSI 실시간 계산
+            if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
+                print(f"⚠️ [update_mode] RSI 참조 데이터 부재 → 5년 데이터 기반 실시간 계산 진행")
+                target_fridays = []
+                if one_week_ago_rsi is None:
+                    target_fridays.append(one_week_ago_friday)
+                if two_weeks_ago_rsi is None:
+                    target_fridays.append(two_weeks_ago_friday)
+                
+                realtime_rsi = self.calculate_weekly_rsi_for_dates(target_fridays)
+                
+                if one_week_ago_rsi is None:
+                    one_week_key = one_week_ago_friday.strftime('%Y-%m-%d') if isinstance(one_week_ago_friday, datetime) else pd.Timestamp(one_week_ago_friday).strftime('%Y-%m-%d')
+                    one_week_ago_rsi = realtime_rsi.get(one_week_key)
+                
+                if two_weeks_ago_rsi is None:
+                    two_weeks_key = two_weeks_ago_friday.strftime('%Y-%m-%d') if isinstance(two_weeks_ago_friday, datetime) else pd.Timestamp(two_weeks_ago_friday).strftime('%Y-%m-%d')
+                    two_weeks_ago_rsi = realtime_rsi.get(two_weeks_key)
             
             if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
                 print("⚠️ RSI 계산 실패, 현재 모드 유지")
@@ -2405,51 +2464,24 @@ class SOXLQuantTrader:
         one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
         two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
         
-        # 참조 데이터에 없으면 실시간 계산 데이터 사용
+        # 참조 데이터에 없으면 5년치 데이터로 정확한 RSI 실시간 계산
         if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
-            # 실시간 QQQ 데이터로 주간 RSI 계산
-            weekly_df = qqq_data.resample('W-FRI').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
+            print(f"⚠️ RSI 참조 데이터 부재 → 5년 데이터 기반 실시간 계산 진행")
+            target_fridays = []
+            if one_week_ago_rsi is None:
+                target_fridays.append(one_week_ago_friday)
+            if two_weeks_ago_rsi is None:
+                target_fridays.append(two_weeks_ago_friday)
             
-            if len(weekly_df) >= 15:
-                # 제공된 함수 방식으로 RSI 계산
-                delta = weekly_df['Close'].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
-                rsi = 100 - (100 / (1 + rs))
-                
-                # RSI와 weekly_df의 인덱스(금요일 날짜)를 매칭하여 1주전, 2주전 RSI 찾기
-                # weekly_df의 인덱스는 DatetimeIndex (금요일 날짜)
-                one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
-                
-                # 1주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
-                if one_week_ago_rsi is None:
-                    earlier_dates_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
-                    if len(earlier_dates_1w) > 0:
-                        one_week_rsi_date = earlier_dates_1w[-1]
-                        one_week_rsi_idx = weekly_df.index.get_loc(one_week_rsi_date)
-                        if one_week_rsi_idx < len(rsi):
-                            one_week_ago_rsi = rsi.iloc[one_week_rsi_idx]
-                            if pd.isna(one_week_ago_rsi):
-                                one_week_ago_rsi = None
-                
-                # 2주전 RSI 찾기 (해당 금요일 이전 또는 같은 날짜)
-                if two_weeks_ago_rsi is None:
-                    earlier_dates_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
-                    if len(earlier_dates_2w) > 0:
-                        two_weeks_rsi_date = earlier_dates_2w[-1]
-                        two_weeks_rsi_idx = weekly_df.index.get_loc(two_weeks_rsi_date)
-                        if two_weeks_rsi_idx < len(rsi):
-                            two_weeks_ago_rsi = rsi.iloc[two_weeks_rsi_idx]
-                            if pd.isna(two_weeks_ago_rsi):
-                                two_weeks_ago_rsi = None
+            realtime_rsi = self.calculate_weekly_rsi_for_dates(target_fridays)
+            
+            if one_week_ago_rsi is None:
+                one_week_key = one_week_ago_friday.strftime('%Y-%m-%d') if isinstance(one_week_ago_friday, datetime) else pd.Timestamp(one_week_ago_friday).strftime('%Y-%m-%d')
+                one_week_ago_rsi = realtime_rsi.get(one_week_key)
+            
+            if two_weeks_ago_rsi is None:
+                two_weeks_key = two_weeks_ago_friday.strftime('%Y-%m-%d') if isinstance(two_weeks_ago_friday, datetime) else pd.Timestamp(two_weeks_ago_friday).strftime('%Y-%m-%d')
+                two_weeks_ago_rsi = realtime_rsi.get(two_weeks_key)
             
         if one_week_ago_rsi is None:
             return {"error": "QQQ 주간 RSI를 계산할 수 없습니다."}
