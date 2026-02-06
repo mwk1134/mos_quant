@@ -1264,9 +1264,18 @@ class SOXLQuantTrader:
             if days_until_friday == 0 and today.weekday() != 4:  # 금요일이 아닌데 계산이 0이면 다음 주 금요일
                 days_until_friday = 7
             this_week_friday_calc = today + timedelta(days=days_until_friday)
-            # 가장 최근 완료된 주차는 지난주 금요일 (오늘이 금요일이 아니면 이번 주 금요일에서 7일 전)
-            if today.weekday() == 4:  # 오늘이 금요일이면 오늘이 가장 최근 주차
-                latest_completed_friday = today
+            # 가장 최근 완료된 주차는 지난주 금요일
+            # 금요일이면 장 종료 후에만 모드가 결정되므로, 장이 아직 종료되지 않았으면 지난주 금요일 사용
+            if today.weekday() == 4:  # 오늘이 금요일이면
+                # 금요일 장 종료 후에만 모드 결정 (16:00 ET 이후)
+                if self.is_regular_session_closed_now():
+                    # 장이 종료되었으면 오늘이 가장 최근 완료된 주차
+                    latest_completed_friday = today
+                    print(f"✅ 금요일 장 종료 확인: {today.strftime('%Y-%m-%d')} 장 종료 후 모드 결정 가능")
+                else:
+                    # 장이 아직 종료되지 않았으면 지난주 금요일 사용 (이전 주차 모드 유지)
+                    latest_completed_friday = this_week_friday_calc - timedelta(days=7)
+                    print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 장 종료 전이므로 이전 주차 모드 유지")
             else:  # 금요일이 아니면 지난주 금요일이 가장 최근 완료된 주차
                 latest_completed_friday = this_week_friday_calc - timedelta(days=7)
             
@@ -2220,8 +2229,15 @@ class SOXLQuantTrader:
                     if days_until_friday == 0 and today.weekday() != 4:
                         days_until_friday = 7
                     this_week_friday_temp = today + timedelta(days=days_until_friday)
+                    # 금요일이면 장 종료 후에만 모드 결정
                     if today.weekday() == 4:
-                        latest_completed_friday = today
+                        # 금요일 장 종료 후에만 모드 결정 (16:00 ET 이후)
+                        if self.is_regular_session_closed_now():
+                            # 장이 종료되었으면 오늘이 가장 최근 완료된 주차
+                            latest_completed_friday = today
+                        else:
+                            # 장이 아직 종료되지 않았으면 지난주 금요일 사용 (이전 주차 모드 유지)
+                            latest_completed_friday = this_week_friday_temp - timedelta(days=7)
                     else:
                         latest_completed_friday = this_week_friday_temp - timedelta(days=7)
                     
