@@ -352,126 +352,51 @@ def show_mobile_settings():
     # session_state에 값이 있으면 사용, 없으면 기본값
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
-    # 날짜 입력 + KMW/JEH/JSD/JEH2 프리셋 버튼
-    start_col1, start_col2, start_col3, start_col4, start_col5, start_col6, start_col7, start_col8, start_col9 = st.columns([3, 1, 1, 1, 1, 1, 1, 1, 1])
-    with start_col1:
-        session_start_date = st.date_input(
-            "📅 투자 시작일",
-            value=default_start_date,
-            max_value=datetime.now()
-        )
-    with start_col2:
-        if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000"):
-            # KMW 프리셋 불러오기
-            kmw = st.session_state.kmw_preset
-            st.session_state.initial_capital = kmw['initial_capital']
-            st.session_state.session_start_date = kmw['session_start_date']
-            st.session_state.seed_increases = kmw['seed_increases'].copy()
-            
-            # 저장된 포지션 수정 정보 불러오기
-            if 'position_edits' in kmw and kmw['position_edits']:
-                st.session_state.position_edits = kmw['position_edits'].copy()
-            else:
-                st.session_state.position_edits = {}
-            
-            # 트레이더 재초기화 후 즉시 적용
-            st.session_state.trader = None
-            st.success("✅ KMW 프리셋이 적용되었습니다.")
-            st.rerun()
-    with start_col3:
-        if st.button("KMW 저장", help="현재 설정과 수정된 포지션 정보를 KMW 프리셋에 저장"):
-            # 현재 설정을 KMW 프리셋에 저장
+    # 날짜 입력
+    session_start_date = st.date_input(
+        "📅 투자 시작일",
+        value=default_start_date,
+        max_value=datetime.now()
+    )
+    
+    # 프리셋 저장 버튼 (가로 1줄, 4열)
+    sv_col1, sv_col2, sv_col3, sv_col4 = st.columns(4)
+    with sv_col1:
+        if st.button("💾 KMW", help="현재 설정을 KMW 프리셋에 저장", use_container_width=True):
             st.session_state.kmw_preset = {
                 'initial_capital': st.session_state.initial_capital,
                 'session_start_date': st.session_state.session_start_date,
                 'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
-            st.success("✅ KMW 프리셋이 저장되었습니다!")
-    with start_col4:
-        if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 2025/12/22 +13,499, 2026/01/15 +2,035"):
-            # JEH 프리셋 불러오기
-            jeh = st.session_state.jeh_preset
-            st.session_state.initial_capital = jeh['initial_capital']
-            st.session_state.session_start_date = jeh['session_start_date']
-            st.session_state.seed_increases = jeh['seed_increases'].copy()
-            
-            # 저장된 포지션 수정 정보 불러오기
-            if 'position_edits' in jeh and jeh['position_edits']:
-                st.session_state.position_edits = jeh['position_edits'].copy()
-            else:
-                st.session_state.position_edits = {}
-            
-            # 트레이더 재초기화 후 즉시 적용
-            st.session_state.trader = None
-            st.success("✅ JEH 프리셋이 적용되었습니다.")
-            st.rerun()
-    with start_col5:
-        if st.button("JEH 저장", help="현재 설정과 수정된 포지션 정보를 JEH 프리셋에 저장"):
-            # 현재 설정을 JEH 프리셋에 저장
+            st.success("✅ KMW 저장!")
+    with sv_col2:
+        if st.button("💾 JEH", help="현재 설정을 JEH 프리셋에 저장", use_container_width=True):
             st.session_state.jeh_preset = {
                 'initial_capital': st.session_state.initial_capital,
                 'session_start_date': st.session_state.session_start_date,
                 'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
-            st.success("✅ JEH 프리셋이 저장되었습니다!")
-    with start_col6:
-        if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음"):
-            # JSD 프리셋 불러오기
-            jsd = st.session_state.jsd_preset
-            st.session_state.initial_capital = jsd['initial_capital']
-            st.session_state.session_start_date = jsd['session_start_date']
-            st.session_state.seed_increases = jsd['seed_increases'].copy()
-            
-            # 저장된 포지션 수정 정보 불러오기
-            if 'position_edits' in jsd and jsd['position_edits']:
-                st.session_state.position_edits = jsd['position_edits'].copy()
-            else:
-                st.session_state.position_edits = {}
-            
-            # 트레이더 재초기화 후 즉시 적용
-            st.session_state.trader = None
-            st.success("✅ JSD 프리셋이 적용되었습니다.")
-            st.rerun()
-    with start_col7:
-        if st.button("JSD 저장", help="현재 설정과 수정된 포지션 정보를 JSD 프리셋에 저장"):
-            # 현재 설정을 JSD 프리셋에 저장
+            st.success("✅ JEH 저장!")
+    with sv_col3:
+        if st.button("💾 JSD", help="현재 설정을 JSD 프리셋에 저장", use_container_width=True):
             st.session_state.jsd_preset = {
                 'initial_capital': st.session_state.initial_capital,
                 'session_start_date': st.session_state.session_start_date,
                 'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
-            st.success("✅ JSD 프리셋이 저장되었습니다!")
-    with start_col8:
-        if st.button("JEH2", help="초기설정: 2704달러, 시작일 2025/12/22, 2026/01/15 +678"):
-            # JEH2 프리셋 불러오기
-            jeh2 = st.session_state.jeh2_preset
-            st.session_state.initial_capital = jeh2['initial_capital']
-            st.session_state.session_start_date = jeh2['session_start_date']
-            st.session_state.seed_increases = jeh2['seed_increases'].copy()
-            
-            # 저장된 포지션 수정 정보 불러오기
-            if 'position_edits' in jeh2 and jeh2['position_edits']:
-                st.session_state.position_edits = jeh2['position_edits'].copy()
-            else:
-                st.session_state.position_edits = {}
-            
-            # 트레이더 재초기화 후 즉시 적용
-            st.session_state.trader = None
-            st.success("✅ JEH2 프리셋이 적용되었습니다.")
-            st.rerun()
-    with start_col9:
-        if st.button("JEH2 저장", help="현재 설정과 수정된 포지션 정보를 JEH2 프리셋에 저장"):
-            # 현재 설정을 JEH2 프리셋에 저장
+            st.success("✅ JSD 저장!")
+    with sv_col4:
+        if st.button("💾 JEH2", help="현재 설정을 JEH2 프리셋에 저장", use_container_width=True):
             st.session_state.jeh2_preset = {
                 'initial_capital': st.session_state.initial_capital,
                 'session_start_date': st.session_state.session_start_date,
                 'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
                 'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
             }
-            st.success("✅ JEH2 프리셋이 저장되었습니다!")
+            st.success("✅ JEH2 저장!")
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
