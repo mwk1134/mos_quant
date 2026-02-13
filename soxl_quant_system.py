@@ -3301,6 +3301,11 @@ class SOXLQuantTrader:
                             print(f"      {pos['round']}회차: 매수일 {buy_date_str}, 모드 {pos.get('mode', 'N/A')}, 매수가 ${pos.get('buy_price', 0):.2f}, 목표가 ${target_price:.2f}")
                             print(f"         당일 종가: ${row['Close']:.2f}, 매도 조건: {row['Close']:.2f} >= {target_price:.2f} = {row['Close'] >= target_price}")
                 
+                # ── 매수 회차를 매도 처리 전에 미리 결정 (보유 포지션 수 + 1) ──
+                # LOC 주문 특성상 매수/매도가 동시에 장 마감 시 체결되므로,
+                # 매수 회차는 매도 전 보유 포지션 수 기준으로 결정해야 함
+                buy_round_for_today = len(self.positions) + 1
+                
                 sell_recommendations = self.check_sell_conditions(row, current_date, prev_close)
                 
                 # 1월 13일 특별 디버깅 (매도 조건 확인 후)
@@ -3348,12 +3353,13 @@ class SOXLQuantTrader:
                         "realized_pnl": realized_pnl
                     })
                 
-                # 매도 후 즉시 회차 동기화 (매수 조건 확인 전 수행)
+                # 매도 후 current_round를 매도 전 미리 결정한 값으로 설정
+                # (매수와 매도는 LOC로 동시에 체결되므로, 매도 전 보유 수 기준)
                 if sold_rounds:
-                    self.current_round = len(self.positions) + 1
-                    print(f"🔄 매도 발생 후 회차 동기화: {len(self.positions)}개 보유 중 → 다음 회차: {self.current_round}")
+                    self.current_round = buy_round_for_today
+                    print(f"🔄 매도 발생: {len(sold_rounds)}건 매도 → 매수 회차는 매도 전 기준 유지: {self.current_round}회차")
                 
-                # 매수 조건 확인 및 실행 (매도와 관계없이 순차적으로 회차 증가)
+                # 매수 조건 확인 및 실행
                 buy_executed = False
                 buy_price_executed = 0
                 buy_quantity = 0
@@ -3436,13 +3442,11 @@ class SOXLQuantTrader:
                     print(nobuy_msg)
                     self.backtest_logs.append(nobuy_msg)
                 
-                # 매도된 회차를 다음날 current_round 계산에 반영
+                # 일일 처리 완료 후 다음 날을 위한 current_round 재계산
+                # (매수/매도 모두 완료된 후의 보유 포지션 수 기준)
+                self.current_round = len(self.positions) + 1
                 if sold_rounds:
-                    sold_count = len(sold_rounds)
-                    print(f"🔄 매도 완료: {sold_count}개 회차 매도 → current_round 재계산")
-                    # 보유 중인 회차 수 + 1 = 다음 매수 회차
-                    self.current_round = len(self.positions) + 1
-                    print(f"   현재 보유 포지션: {len(self.positions)}개 → 다음 매수 회차: {self.current_round}")
+                    print(f"🔄 일일 처리 완료 (매도 {len(sold_rounds)}건): 보유 {len(self.positions)}개 → 다음 날 매수 회차: {self.current_round}")
                 
                 # 현재 보유 주식수와 평가손익 계산
                 total_shares = sum([pos["shares"] for pos in self.positions])
