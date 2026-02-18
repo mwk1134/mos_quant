@@ -917,7 +917,7 @@ def show_daily_recommendation():
             st.success(f"✅ 매수 추천: {recommendation['next_buy_round']}회차")
             st.info(f"💰 매수가: ${recommendation['buy_price']:.2f} (LOC 주문)")
             st.info(f"💵 매수금액: ${recommendation['next_buy_amount']:,.0f}")
-            shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
+            shares = round(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
             
             # 예수금 부족 시 안내

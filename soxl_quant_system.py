@@ -1540,8 +1540,8 @@ class SOXLQuantTrader:
         # 1회시드 금액 계산
         target_amount = self.calculate_position_size(self.current_round)
         
-        # 목표가 기준으로 매수할 수량 계산
-        target_shares = int(target_amount / target_price)  # 목표가 기준 수량
+        # 목표가 기준으로 매수할 수량 계산 (round: 반올림으로 실제 체결 수량과 일치율 향상)
+        target_shares = round(target_amount / target_price)  # 목표가 기준 수량
         
         if target_shares <= 0:
             return False
@@ -1551,7 +1551,7 @@ class SOXLQuantTrader:
         
         # 예수금이 부족한 경우 예수금으로 매수 가능한 수량 재계산
         if actual_amount > self.available_cash:
-            max_shares = int(self.available_cash / actual_price)
+            max_shares = int(self.available_cash / actual_price)  # 예수금 부족 시에는 int(내림)으로 안전하게
             if max_shares <= 0:
                 return False
             actual_shares = max_shares
