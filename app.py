@@ -1032,8 +1032,12 @@ def show_daily_recommendation():
                     # 매도 수량을 정수로 명시적 변환 (소수점 처리)
                     sell_shares = int(pos['shares']) if isinstance(pos['shares'], (int, float)) else pos['shares']
                     
-                    # 보유 중 상태 표시 (목표가와 현재가 차이 포함)
-                    st.warning(f"📦 {pos['round']}회차 보유 중: {sell_shares}주 (목표가 ${target_sell_price:.2f}, 현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    # 해당 회차의 비중(%) 가져오기
+                    pos_split_ratios = config.get("split_ratios", [])
+                    pos_ratio_pct = pos_split_ratios[pos['round'] - 1] * 100 if pos['round'] <= len(pos_split_ratios) else 0
+                    
+                    # 보유 중 상태 표시 (비중%, 목표가와 현재가 차이 포함)
+                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%) 보유 중: {sell_shares}주 (목표가 ${target_sell_price:.2f}, 현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
                     
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
