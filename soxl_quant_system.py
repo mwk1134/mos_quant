@@ -3059,17 +3059,7 @@ class SOXLQuantTrader:
                     print(f"   현재 총자산: ${current_total_assets:,.0f} + 시드증액: ${total_seed_increase:,.0f} = ${new_investment_capital:,.0f}")
                     print(f"   투자원금 갱신: ${old_capital:,.0f} → ${new_investment_capital:,.0f}")
                 
-                # 10거래일마다 투자원금 업데이트 (10, 20, 30, ... 거래일째)
-                if self.trading_days_count % 10 == 0 and self.trading_days_count > 0:
-                    # 현재 총자산 계산 (현금 + 보유주식 평가금액)
-                    total_shares = sum([pos["shares"] for pos in self.positions])
-                    total_assets = self.available_cash + (total_shares * current_price)
-                    
-                    # 투자원금 업데이트
-                    old_capital = self.current_investment_capital
-                    self.current_investment_capital = total_assets
-                    
-                    print(f"💰 투자원금 업데이트: {self.trading_days_count}거래일째 - ${old_capital:,.0f} → ${total_assets:,.0f}")
+                # 10거래일마다 투자원금 업데이트는 매매 처리 후로 이동 (아래 참조)
             
             # 현재 날짜가 속하는 주차의 금요일 계산
             days_until_friday = (4 - current_date.weekday()) % 7  # 금요일(4)까지의 일수
@@ -3447,6 +3437,20 @@ class SOXLQuantTrader:
                 self.current_round = len(self.positions) + 1
                 if sold_rounds:
                     print(f"🔄 일일 처리 완료 (매도 {len(sold_rounds)}건): 보유 {len(self.positions)}개 → 다음 날 매수 회차: {self.current_round}")
+                
+                # 10거래일마다 투자원금 업데이트 (매매 처리 완료 후 실행)
+                # 매수추천 시점의 투자원금과 백테스트 실제 매수 시 투자원금이 동일하도록
+                # 매매 후에 갱신하여, 다음 거래일부터 적용되게 함
+                if self.is_trading_day(current_date) and self.trading_days_count % 10 == 0 and self.trading_days_count > 0:
+                    # 현재 총자산 계산 (현금 + 보유주식 평가금액)
+                    total_shares_for_update = sum([pos["shares"] for pos in self.positions])
+                    total_assets_for_update = self.available_cash + (total_shares_for_update * current_price)
+                    
+                    # 투자원금 업데이트
+                    old_capital = self.current_investment_capital
+                    self.current_investment_capital = total_assets_for_update
+                    
+                    print(f"💰 투자원금 업데이트: {self.trading_days_count}거래일째 - ${old_capital:,.0f} → ${total_assets_for_update:,.0f}")
                 
                 # 현재 보유 주식수와 평가손익 계산
                 total_shares = sum([pos["shares"] for pos in self.positions])
