@@ -1,6 +1,6 @@
-{
+﻿{
   "2024": {
-    "description": "2024년 주간 RSI 데이터",
+    "description": "2024??二쇨컙 RSI ?곗씠??,
     "weeks": [
       {
         "start": "2024-01-01",
@@ -317,7 +317,7 @@
     ]
   },
   "2025": {
-    "description": "2025년 주간 RSI 데이터",
+    "description": "2025??二쇨컙 RSI ?곗씠??,
     "weeks": [
       {
         "start": "2024-12-30",
@@ -634,7 +634,7 @@
     ]
   },
   "2026": {
-    "description": "2026년 주간 RSI 데이터",
+    "description": "2026??二쇨컙 RSI ?곗씠??,
     "weeks": [
       {
         "start": "2025-12-29",
@@ -676,7 +676,7 @@
         "start": "2026-02-09",
         "end": "2026-02-13",
         "week": 7,
-        "rsi": 48.97
+        "rsi": 46.97
       },
       {
         "start": "2026-02-16",
@@ -714,6 +714,6 @@
     "last_updated": "2026-02-18",
     "total_years": 3,
     "total_weeks": 116,
-    "description": "QQQ 주간 RSI 참조 데이터 (14주 Wilder's RSI)"
+    "description": "QQQ 二쇨컙 RSI 李몄“ ?곗씠??(14二?Wilder's RSI)"
   }
 }
