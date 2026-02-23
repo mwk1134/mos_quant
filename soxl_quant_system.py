@@ -959,10 +959,10 @@ class SOXLQuantTrader:
                 print(f"❌ 주간 데이터 부족 (필요: {window+1}주, 현재: {len(weekly_df)}주)")
                 return {}
             
-            # RSI 계산
+            # Wilder's RSI 계산 (지수이동평균 방식)
             delta = weekly_df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/window, min_periods=window).mean()
+            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/window, min_periods=window).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             
@@ -1019,10 +1019,10 @@ class SOXLQuantTrader:
                 return None
             
 
-            # 제공된 함수 방식으로 RSI 계산
+            # Wilder's RSI 계산 (지수이동평균 방식)
             delta = weekly_df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+            gain = (delta.where(delta > 0, 0)).ewm(alpha=1/window, min_periods=window).mean()
+            loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/window, min_periods=window).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
             
