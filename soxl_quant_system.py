@@ -307,6 +307,12 @@ class SOXLQuantTrader:
             # 최근 12주 RSI 계산 및 업데이트
             recent_weeks = weekly_data.tail(12)  # 최근 12주
             
+            # 완료된 주차만 필터링: 금요일(주 마감일)이 오늘 이전인 주차만 계산
+            # 불완전한 주(금요일이 아직 지나지 않은 주)는 제외하여 모든 거래일 데이터 기반의 정확한 RSI만 저장
+            today_ts = pd.Timestamp(today.date())
+            recent_weeks = recent_weeks[recent_weeks.index <= today_ts]
+            print(f"[INFO] 완료된 주차 필터링: {len(recent_weeks)}주 (오늘 {today.strftime('%Y-%m-%d')} 이전 금요일까지)")
+            
             for i, (week_end, week_row) in enumerate(recent_weeks.iterrows()):
                 # 해당 주의 시작일 계산 (월요일)
                 week_start = week_end - timedelta(days=4)  # 금요일에서 4일 전 = 월요일
@@ -323,12 +329,7 @@ class SOXLQuantTrader:
                         week_exists = False
                         for j, existing_week in enumerate(existing_data[current_year]['weeks']):
                             if existing_week['week'] == week_num:
-                                # 기존 데이터가 있고 rsi 값이 이미 설정되어 있으면 업데이트 건너뜀 (수동 입력 데이터 보호)
-                                if 'rsi' in existing_week and existing_week['rsi'] is not None:
-                                    week_exists = True
-                                    break
-                                
-                                # 기존 데이터 업데이트
+                                # 완료된 주차이므로 항상 정확한 RSI로 갱신
                                 existing_data[current_year]['weeks'][j] = {
                                     "start": week_start.strftime('%Y-%m-%d'),
                                     "end": week_end.strftime('%Y-%m-%d'),
