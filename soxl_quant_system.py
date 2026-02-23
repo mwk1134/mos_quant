@@ -213,15 +213,21 @@ class SOXLQuantTrader:
                     last_update_date = datetime.strptime(last_updated, '%Y-%m-%d')
                     print(f"📅 RSI 참조 데이터 마지막 업데이트: {last_updated}")
                     
-                    # 마지막 업데이트가 오늘로부터 1주일 이내이고 최신 RSI도 있으면 업데이트 불필요
-                    if (today - last_update_date).days <= 7 and not latest_rsi_missing:
-                        print("[SUCCESS] RSI 참조 데이터가 최신 상태입니다.")
+                    # 마지막 업데이트 이후 새로운 금요일(완료된 주차)이 지났는지 확인
+                    # 새로운 금요일이 지났으면 해당 주차의 RSI를 계산해야 하므로 업데이트 필요
+                    days_since_friday = (today.weekday() - 4) % 7
+                    if days_since_friday == 0 and today.weekday() != 4:
+                        days_since_friday = 7
+                    latest_passed_friday = today - timedelta(days=days_since_friday)
+                    
+                    if last_update_date >= latest_passed_friday and not latest_rsi_missing:
+                        print(f"[SUCCESS] RSI 참조 데이터가 최신 상태입니다. (마지막 완료 금요일: {latest_passed_friday.strftime('%Y-%m-%d')})")
                         return True
                     
                     if latest_rsi_missing:
                         print(f"⚠️ 최신 주간 RSI 값이 비어있어 업데이트가 필요합니다.")
                     else:
-                        print(f"⚠️ RSI 참조 데이터가 {(today - last_update_date).days}일 전 데이터입니다. 업데이트가 필요합니다.")
+                        print(f"⚠️ 마지막 업데이트({last_updated}) 이후 새로운 완료 주차({latest_passed_friday.strftime('%Y-%m-%d')})가 있어 업데이트가 필요합니다.")
                 else:
                     print("⚠️ RSI 참조 데이터 메타데이터가 없습니다.")
                     latest_rsi_missing = True
