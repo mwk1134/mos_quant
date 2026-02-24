@@ -2,8 +2,6 @@ import os
 from datetime import datetime, timedelta
 
 import pandas as pd
-import requests
-
 from soxl_quant_system import SOXLQuantTrader
 
 
@@ -11,7 +9,13 @@ class SHNYQuantTrader(SOXLQuantTrader):
     """SHNY 전용 트레이더 (SHNY 티커 사용)"""
 
     STOCK_SPLITS = [
-        {"date": "2026-02-24", "ratio": 10},  # 10:1 분할
+        {
+            "date": "2026-02-24",
+            "ratio": 10,
+            # 분할 직전 종가 참고값 — 미조정 데이터 감지용
+            # 실제 종가의 ±50% 이내면 "미조정"으로 판단
+            "pre_split_ref_close": 206.0,
+        },
     ]
     
     def __init__(self, initial_capital: float = 40000, sf_config=None, ag_config=None):
@@ -25,43 +29,15 @@ class SHNYQuantTrader(SOXLQuantTrader):
         super().__init__(initial_capital, sf_config, ag_config)
         self.ticker = "SHNY"  # SHNY 티커 설정
         self._original_get_stock_data = super().get_stock_data  # 원본 메서드 저장
-        self._rt_price_cache = {}
-
-    def _get_realtime_price(self):
-        """분할 감지용 실시간 시세 조회 (5분 캐시)"""
-        cached = self._rt_price_cache.get(self.ticker)
-        if cached:
-            price, ts = cached
-            if (datetime.now() - ts).total_seconds() < 300:
-                return price
-
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{self.ticker}"
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
-            resp = requests.get(
-                url, headers=headers, params={"range": "5d", "interval": "1d"}, timeout=10
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                meta = data["chart"]["result"][0].get("meta", {})
-                price = meta.get("regularMarketPrice")
-                if price and price > 0:
-                    self._rt_price_cache[self.ticker] = (price, datetime.now())
-                    print(f"📡 SHNY 실시간 시세 조회: ${price:.2f}")
-                    return price
-        except Exception as e:
-            print(f"⚠️ 실시간 시세 조회 실패: {e}")
-        return None
 
     def _adjust_for_splits(self, df):
         """
         주식분할에 따른 과거 가격 데이터 조정.
         Yahoo Finance API가 아직 분할을 반영하지 않은 경우에만 자동 적용.
 
-        Case 1: 분할일 전후 데이터가 모두 있으면 가격 불연속 감지
-        Case 2: 장 개시 전이라 post-split 데이터가 없으면 실시간 시세로 비교
+        감지 방법 (우선순위):
+          1) 분할 전후 데이터가 모두 있으면 → 가격 불연속(~10x 차이) 감지
+          2) post-split 데이터 없으면 → pre_split_ref_close 참고값으로 비교
         """
         if df is None or len(df) < 2:
             return df
@@ -86,20 +62,23 @@ class SHNYQuantTrader(SOXLQuantTrader):
             needs_adjustment = False
 
             if len(post_split) > 0:
+                # Case 1: 분할 전후 데이터 모두 존재 → 가격 갭으로 판단
                 first_post_close = post_split.iloc[0]["Close"]
                 if first_post_close > 0 and last_pre_close / first_post_close > ratio * 0.5:
                     needs_adjustment = True
             else:
-                # 장 개시 전: 실시간 시세(regularMarketPrice)로 비교
-                rt_price = self._get_realtime_price()
-                if rt_price and rt_price > 0:
-                    if last_pre_close / rt_price > ratio * 0.5:
+                # Case 2: post-split 데이터 없음 (장 개시 전)
+                ref_close = split.get("pre_split_ref_close", 0)
+                if ref_close > 0:
+                    # 실제 종가가 참고값의 50% 이상이면 미조정 데이터
+                    # (Yahoo 조정 완료 시 종가는 ref/10 ≈ $20 수준 → 50% 기준 미달)
+                    if last_pre_close > ref_close * 0.5:
                         needs_adjustment = True
-                else:
-                    # 실시간 시세 조회 실패 시 가격 크기 휴리스틱
-                    # 조정 후 가격이 $0.50 이상이면 미조정 데이터로 판단
-                    if last_pre_close / ratio > 0.50:
-                        needs_adjustment = True
+                    else:
+                        print(
+                            f"✅ SHNY 분할 조정 불필요 (Yahoo 이미 조정 완료, "
+                            f"종가: ${last_pre_close:.2f})"
+                        )
 
             if needs_adjustment:
                 print(
