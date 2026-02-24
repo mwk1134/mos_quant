@@ -1,11 +1,17 @@
 import os
 from datetime import datetime, timedelta
 
+import pandas as pd
+
 from soxl_quant_system import SOXLQuantTrader
 
 
 class SHNYQuantTrader(SOXLQuantTrader):
     """SHNY 전용 트레이더 (SHNY 티커 사용)"""
+
+    STOCK_SPLITS = [
+        {"date": "2026-02-24", "ratio": 10},  # 10:1 분할
+    ]
     
     def __init__(self, initial_capital: float = 40000, sf_config=None, ag_config=None):
         """
@@ -19,16 +25,67 @@ class SHNYQuantTrader(SOXLQuantTrader):
         self.ticker = "SHNY"  # SHNY 티커 설정
         self._original_get_stock_data = super().get_stock_data  # 원본 메서드 저장
     
+    def _adjust_for_splits(self, df):
+        """
+        주식분할에 따른 과거 가격 데이터 조정.
+        Yahoo Finance API가 아직 분할을 반영하지 않은 경우에만 자동 적용.
+        """
+        if df is None or len(df) < 2:
+            return df
+
+        for split in self.STOCK_SPLITS:
+            split_date = pd.Timestamp(split["date"])
+            ratio = split["ratio"]
+
+            pre_mask = df.index < split_date
+            post_mask = df.index >= split_date
+
+            pre_split = df.loc[pre_mask]
+            post_split = df.loc[post_mask]
+
+            if len(pre_split) == 0 or len(post_split) == 0:
+                continue
+
+            last_pre_close = pre_split.iloc[-1]["Close"]
+            first_post_close = post_split.iloc[0]["Close"]
+
+            if first_post_close <= 0:
+                continue
+
+            price_ratio = last_pre_close / first_post_close
+
+            # 분할 비율의 절반 이상 차이가 나면 Yahoo가 아직 미조정 → 수동 보정
+            if price_ratio > ratio * 0.5:
+                print(
+                    f"🔄 SHNY {ratio}:1 주식분할 조정 적용 "
+                    f"(분할일: {split['date']}, 전일종가: ${last_pre_close:.2f} → "
+                    f"조정후: ${last_pre_close / ratio:.2f})"
+                )
+                df = df.copy()
+                for col in ["Open", "High", "Low", "Close"]:
+                    if col in df.columns:
+                        df.loc[pre_mask, col] = df.loc[pre_mask, col] / ratio
+                if "Volume" in df.columns:
+                    df.loc[pre_mask, "Volume"] = df.loc[pre_mask, "Volume"] * ratio
+
+        return df
+
     def get_stock_data(self, symbol: str, period: str = "1mo"):
         """
-        주식 데이터 가져오기 (SOXL 요청을 SHNY로 리다이렉트)
+        주식 데이터 가져오기 (SOXL 요청을 SHNY로 리다이렉트 + 분할 조정)
         """
         # SOXL 요청을 SHNY로 변경
         if symbol == "SOXL":
             symbol = self.ticker
         
         # 원본 메서드 호출
-        return self._original_get_stock_data(symbol, period)
+        data = self._original_get_stock_data(symbol, period)
+
+        # SHNY 데이터에 대해 주식분할 조정 적용
+        if data is not None and symbol == self.ticker:
+            data = self._adjust_for_splits(data)
+
+        return data
 
 
 def main():
