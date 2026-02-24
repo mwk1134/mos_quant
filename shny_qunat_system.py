@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta
 
 import pandas as pd
+import requests
 
 from soxl_quant_system import SOXLQuantTrader
 
@@ -24,41 +25,86 @@ class SHNYQuantTrader(SOXLQuantTrader):
         super().__init__(initial_capital, sf_config, ag_config)
         self.ticker = "SHNY"  # SHNY 티커 설정
         self._original_get_stock_data = super().get_stock_data  # 원본 메서드 저장
-    
+        self._rt_price_cache = {}
+
+    def _get_realtime_price(self):
+        """분할 감지용 실시간 시세 조회 (5분 캐시)"""
+        cached = self._rt_price_cache.get(self.ticker)
+        if cached:
+            price, ts = cached
+            if (datetime.now() - ts).total_seconds() < 300:
+                return price
+
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{self.ticker}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            resp = requests.get(
+                url, headers=headers, params={"range": "5d", "interval": "1d"}, timeout=10
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                meta = data["chart"]["result"][0].get("meta", {})
+                price = meta.get("regularMarketPrice")
+                if price and price > 0:
+                    self._rt_price_cache[self.ticker] = (price, datetime.now())
+                    print(f"📡 SHNY 실시간 시세 조회: ${price:.2f}")
+                    return price
+        except Exception as e:
+            print(f"⚠️ 실시간 시세 조회 실패: {e}")
+        return None
+
     def _adjust_for_splits(self, df):
         """
         주식분할에 따른 과거 가격 데이터 조정.
         Yahoo Finance API가 아직 분할을 반영하지 않은 경우에만 자동 적용.
+
+        Case 1: 분할일 전후 데이터가 모두 있으면 가격 불연속 감지
+        Case 2: 장 개시 전이라 post-split 데이터가 없으면 실시간 시세로 비교
         """
         if df is None or len(df) < 2:
             return df
+
+        today = pd.Timestamp(datetime.now().strftime("%Y-%m-%d"))
 
         for split in self.STOCK_SPLITS:
             split_date = pd.Timestamp(split["date"])
             ratio = split["ratio"]
 
+            if today < split_date:
+                continue
+
             pre_mask = df.index < split_date
-            post_mask = df.index >= split_date
-
             pre_split = df.loc[pre_mask]
-            post_split = df.loc[post_mask]
+            post_split = df.loc[~pre_mask]
 
-            if len(pre_split) == 0 or len(post_split) == 0:
+            if len(pre_split) == 0:
                 continue
 
             last_pre_close = pre_split.iloc[-1]["Close"]
-            first_post_close = post_split.iloc[0]["Close"]
+            needs_adjustment = False
 
-            if first_post_close <= 0:
-                continue
+            if len(post_split) > 0:
+                first_post_close = post_split.iloc[0]["Close"]
+                if first_post_close > 0 and last_pre_close / first_post_close > ratio * 0.5:
+                    needs_adjustment = True
+            else:
+                # 장 개시 전: 실시간 시세(regularMarketPrice)로 비교
+                rt_price = self._get_realtime_price()
+                if rt_price and rt_price > 0:
+                    if last_pre_close / rt_price > ratio * 0.5:
+                        needs_adjustment = True
+                else:
+                    # 실시간 시세 조회 실패 시 가격 크기 휴리스틱
+                    # 조정 후 가격이 $0.50 이상이면 미조정 데이터로 판단
+                    if last_pre_close / ratio > 0.50:
+                        needs_adjustment = True
 
-            price_ratio = last_pre_close / first_post_close
-
-            # 분할 비율의 절반 이상 차이가 나면 Yahoo가 아직 미조정 → 수동 보정
-            if price_ratio > ratio * 0.5:
+            if needs_adjustment:
                 print(
                     f"🔄 SHNY {ratio}:1 주식분할 조정 적용 "
-                    f"(분할일: {split['date']}, 전일종가: ${last_pre_close:.2f} → "
+                    f"(분할일: {split['date']}, 최종종가: ${last_pre_close:.2f} → "
                     f"조정후: ${last_pre_close / ratio:.2f})"
                 )
                 df = df.copy()
