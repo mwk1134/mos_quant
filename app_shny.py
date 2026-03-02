@@ -335,7 +335,7 @@ def show_mobile_settings():
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
     # 날짜 입력 + 오늘 버튼 + KMW/JEH/JSD 프리셋 버튼
-    start_col1, start_col2, start_col3, start_col4, start_col5, start_col6, start_col7, start_col8 = st.columns([3, 1, 1, 1, 1, 1, 1, 1])
+    start_col1, start_col2, start_col3, start_col4, start_col5 = st.columns([3, 1, 1, 1, 1])
     with start_col1:
         session_start_date = st.date_input(
             "📅 투자 시작일",
@@ -350,115 +350,43 @@ def show_mobile_settings():
             st.rerun()
     with start_col3:
         if st.button("KMW", help="초기설정: 6812달러, 시작일 2025/12/09, 시드증액 없음"):
-            # KMW 프리셋 불러오기
             kmw = st.session_state.kmw_preset
             st.session_state.initial_capital = kmw['initial_capital']
             st.session_state.session_start_date = kmw['session_start_date']
             st.session_state.seed_increases = kmw['seed_increases'].copy()
-            
-            # 저장된 포지션 수정 정보 불러오기
             if 'position_edits' in kmw and kmw['position_edits']:
                 st.session_state.position_edits = kmw['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
-            
-            # 트레이더 재초기화 후 즉시 적용
             st.session_state.trader = None
             st.success("✅ KMW 프리셋이 적용되었습니다.")
             st.rerun()
     with start_col4:
-        if st.button("KMW 저장", help="현재 설정과 수정된 포지션 정보를 KMW 프리셋에 저장"):
-            # 현재 설정을 KMW 프리셋에 저장
-            st.session_state.kmw_preset = {
-                'initial_capital': st.session_state.initial_capital,
-                'session_start_date': st.session_state.session_start_date,
-                'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
-                'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
-            }
-            # 영구 저장
-            presets_data = {
-                'kmw_preset': st.session_state.kmw_preset,
-                'jeh_preset': st.session_state.jeh_preset,
-                'jsd_preset': st.session_state.jsd_preset
-            }
-            if save_presets(presets_data):
-                st.success("✅ KMW 프리셋이 저장되었습니다!")
-            else:
-                st.error("❌ 프리셋 저장에 실패했습니다.")
-    with start_col5:
         if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 시드증액 없음"):
-            # JEH 프리셋 불러오기
             jeh = st.session_state.jeh_preset
             st.session_state.initial_capital = jeh['initial_capital']
             st.session_state.session_start_date = jeh['session_start_date']
             st.session_state.seed_increases = jeh['seed_increases'].copy()
-            
-            # 저장된 포지션 수정 정보 불러오기
             if 'position_edits' in jeh and jeh['position_edits']:
                 st.session_state.position_edits = jeh['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
-            
-            # 트레이더 재초기화 후 즉시 적용
             st.session_state.trader = None
             st.success("✅ JEH 프리셋이 적용되었습니다.")
             st.rerun()
-    with start_col6:
-        if st.button("JEH 저장", help="현재 설정과 수정된 포지션 정보를 JEH 프리셋에 저장"):
-            # 현재 설정을 JEH 프리셋에 저장
-            st.session_state.jeh_preset = {
-                'initial_capital': st.session_state.initial_capital,
-                'session_start_date': st.session_state.session_start_date,
-                'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
-                'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
-            }
-            # 영구 저장
-            presets_data = {
-                'kmw_preset': st.session_state.kmw_preset,
-                'jeh_preset': st.session_state.jeh_preset,
-                'jsd_preset': st.session_state.jsd_preset
-            }
-            if save_presets(presets_data):
-                st.success("✅ JEH 프리셋이 저장되었습니다!")
-            else:
-                st.error("❌ 프리셋 저장에 실패했습니다.")
-    with start_col7:
+    with start_col5:
         if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음"):
-            # JSD 프리셋 불러오기
             jsd = st.session_state.jsd_preset
             st.session_state.initial_capital = jsd['initial_capital']
             st.session_state.session_start_date = jsd['session_start_date']
             st.session_state.seed_increases = jsd['seed_increases'].copy()
-            
-            # 저장된 포지션 수정 정보 불러오기
             if 'position_edits' in jsd and jsd['position_edits']:
                 st.session_state.position_edits = jsd['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
-            
-            # 트레이더 재초기화 후 즉시 적용
             st.session_state.trader = None
             st.success("✅ JSD 프리셋이 적용되었습니다.")
             st.rerun()
-    with start_col8:
-        if st.button("JSD 저장", help="현재 설정과 수정된 포지션 정보를 JSD 프리셋에 저장"):
-            # 현재 설정을 JSD 프리셋에 저장
-            st.session_state.jsd_preset = {
-                'initial_capital': st.session_state.initial_capital,
-                'session_start_date': st.session_state.session_start_date,
-                'seed_increases': st.session_state.seed_increases.copy() if st.session_state.seed_increases else [],
-                'position_edits': st.session_state.position_edits.copy() if 'position_edits' in st.session_state else {}
-            }
-            # 영구 저장
-            presets_data = {
-                'kmw_preset': st.session_state.kmw_preset,
-                'jeh_preset': st.session_state.jeh_preset,
-                'jsd_preset': st.session_state.jsd_preset
-            }
-            if save_presets(presets_data):
-                st.success("✅ JSD 프리셋이 저장되었습니다!")
-            else:
-                st.error("❌ 프리셋 저장에 실패했습니다.")
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
@@ -816,8 +744,16 @@ def show_daily_recommendation():
         st.error(f"추천 생성 실패: {recommendation['error']}")
         return
     
+    # 데이터 기준 상태 표시
+    data_last = recommendation.get('data_last_date', '')
+    basis_date = recommendation.get('basis_date', '')
+    market_closed = recommendation.get('market_closed', True)
+    market_status = "장 마감" if market_closed else "장중"
+    market_icon = "🔴" if not market_closed else "🟢"
+    status_text = f"{market_icon} 미국시장: **{market_status}** · 확정종가: **{data_last}**까지 반영 · 매수/매도 추천: **{basis_date} 종가** 기준"
+    st.info(status_text)
+
     # 기본 정보 - 모바일 최적화
-    # 모바일에서는 2x2 그리드, 데스크톱에서는 1x4 그리드
     col1, col2 = st.columns(2)
     
     with col1:
@@ -840,14 +776,6 @@ def show_daily_recommendation():
     
     # 매매 추천
     st.subheader("📋 오늘의 매매 추천")
-    # 기준 종가 날짜 안내(장중/휴장 시 전 거래일 기준 표시)
-    if 'basis_date' in recommendation:
-        basis_date = recommendation['basis_date']
-        display_date = recommendation.get('date')
-        if display_date and basis_date and display_date != basis_date:
-            st.caption(f"오늘({display_date}) 기준 • 가격 계산은 전 거래일 종가({basis_date}) 기준")
-        elif basis_date:
-            st.caption(f"가격 계산 기준: {basis_date} 종가")
     
     col1, col2 = st.columns(2)
     
@@ -864,8 +792,8 @@ def show_daily_recommendation():
             split_ratios = current_config.get("split_ratios", [])
             buy_ratio_pct = split_ratios[buy_round - 1] * 100 if buy_round <= len(split_ratios) else 0
             st.success(f"✅ 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
-            st.info(f"💰 매수가: ${recommendation['buy_price']:.2f} (LOC 주문)")
-            st.info(f"💵 매수금액: ${recommendation['next_buy_amount']:,.0f}")
+            st.info(f"💰 매수가: \\${recommendation['buy_price']:.2f} (LOC 주문)")
+            st.info(f"💵 매수금액: \\${recommendation['next_buy_amount']:,.0f}")
             shares = round(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
             
@@ -873,8 +801,8 @@ def show_daily_recommendation():
             if available_cash < recommendation['next_buy_amount']:
                 possible_shares = int(available_cash / recommendation['buy_price'])
                 possible_amount = possible_shares * recommendation['buy_price']
-                st.warning(f"⚠️ 예수금 부족: 목표 금액 ${recommendation['next_buy_amount']:,.0f} 대비 예수금 ${available_cash:,.0f} 부족")
-                st.info(f"💡 가능한 매수: {possible_shares}주 (약 ${possible_amount:,.0f})")
+                st.warning(f"⚠️ 예수금 부족: 목표 금액 \\${recommendation['next_buy_amount']:,.0f} 대비 예수금 \\${available_cash:,.0f} 부족")
+                st.info(f"💡 가능한 매수: {possible_shares}주 (약 \\${possible_amount:,.0f})")
             
             # 장중 주문 가이드(현재가가 존재하는 경우 간단 안내)
             current_price = recommendation.get('soxl_current_price')
@@ -889,7 +817,7 @@ def show_daily_recommendation():
             else:
                 st.warning("🔴 매수 불가: 시드 부족")
                 if available_cash > 0:
-                    st.info(f"💡 잔여 예수금: ${available_cash:,.0f} (목표 금액 ${recommendation['next_buy_amount']:,.0f} 미만)")
+                    st.info(f"💡 잔여 예수금: \\${available_cash:,.0f} (목표 금액 \\${recommendation['next_buy_amount']:,.0f} 미만)")
     
     with col2:
         st.subheader("🔴 매도 추천")
@@ -914,7 +842,7 @@ def show_daily_recommendation():
                     buy_date_dt = None
                 
                 buy_price = pos.get('buy_price')
-                buy_price_text = f"${buy_price:.2f}" if isinstance(buy_price, (int, float)) else "-"
+                buy_price_text = f"\\${buy_price:.2f}" if isinstance(buy_price, (int, float)) else "-"
                 mode = pos.get('mode', 'SF')
                 mode_name = "안전모드" if mode == "SF" else "공세모드"
                 
@@ -941,7 +869,7 @@ def show_daily_recommendation():
                     pos_ratio_pct = pos_split_ratios[pos['round'] - 1] * 100 if pos['round'] <= len(pos_split_ratios) else 0
                     
                     # 보유 중 상태 표시 (비중%, 목표가와 현재가 차이 포함)
-                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%) 보유 중: {sell_shares}주 (목표가 ${target_sell_price:.2f}, 현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%) 보유 중: {sell_shares}주 (목표가 \\${target_sell_price:.2f}, 현재 \\${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
                     
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
