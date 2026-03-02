@@ -2552,9 +2552,12 @@ class SOXLQuantTrader:
         total_invested = sum([pos["amount"] for pos in self.positions])
         unrealized_pnl = total_position_value - total_invested
         
+        market_closed = self.is_regular_session_closed_now()
         recommendation = {
             "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
             "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜
+            "data_last_date": latest_data_date.strftime("%Y-%m-%d"),  # 확정종가 마지막 날짜
+            "market_closed": market_closed,  # 미국 정규장 마감 여부
             "mode": self.current_mode,
             "qqq_one_week_ago_rsi": one_week_ago_rsi,  # 1주전 RSI (모드 판단에 사용)
             "qqq_two_weeks_ago_rsi": two_weeks_ago_rsi,  # 2주전 RSI (모드 판단에 사용)

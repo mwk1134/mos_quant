@@ -872,8 +872,16 @@ def show_daily_recommendation():
     except Exception as e:
         st.warning(f"⚠️ 최근 10일 SOXL 종가 데이터 확인 중 오류 발생: {str(e)}")
     
+    # 데이터 기준 상태 표시
+    data_last = recommendation.get('data_last_date', '')
+    basis_date = recommendation.get('basis_date', '')
+    market_closed = recommendation.get('market_closed', True)
+    market_status = "장 마감" if market_closed else "장중"
+    market_icon = "🔴" if not market_closed else "🟢"
+    status_text = f"{market_icon} 미국시장: **{market_status}** · 확정종가: **{data_last}**까지 반영 · 매수/매도 추천: **{basis_date} 종가** 기준"
+    st.info(status_text)
+
     # 기본 정보 - 모바일 최적화
-    # 모바일에서는 2x2 그리드, 데스크톱에서는 1x4 그리드
     col1, col2 = st.columns(2)
     
     with col1:
@@ -896,14 +904,6 @@ def show_daily_recommendation():
     
     # 매매 추천
     st.subheader("📋 오늘의 매매 추천")
-    # 기준 종가 날짜 안내(장중/휴장 시 전 거래일 기준 표시)
-    if 'basis_date' in recommendation:
-        basis_date = recommendation['basis_date']
-        display_date = recommendation.get('date')
-        if display_date and basis_date and display_date != basis_date:
-            st.caption(f"오늘({display_date}) 기준 • 가격 계산은 전 거래일 종가({basis_date}) 기준")
-        elif basis_date:
-            st.caption(f"가격 계산 기준: {basis_date} 종가")
     
     col1, col2 = st.columns(2)
     
