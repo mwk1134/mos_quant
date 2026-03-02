@@ -43,7 +43,7 @@ class CompactJSONEncoder(json.JSONEncoder):
 class RSIDataUpdater:
     """RSI 데이터 업데이트 클래스"""
     
-    def __init__(self, json_file_path: str = "data/weekly_rsi_reference copy.json"):
+    def __init__(self, json_file_path: str = "data/weekly_rsi_reference.json"):
         """
         초기화
         Args:
@@ -420,7 +420,7 @@ def main():
     print()
     
     # JSON 파일 경로 확인
-    json_file = "data/weekly_rsi_reference copy.json"
+    json_file = "data/weekly_rsi_reference.json"
     
     # 명령행 인수로 파일 경로 지정 가능
     if len(sys.argv) > 1:
