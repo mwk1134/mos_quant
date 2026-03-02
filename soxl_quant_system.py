@@ -1149,7 +1149,22 @@ class SOXLQuantTrader:
         one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
         two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
         
-        # RSI 데이터가 없으면 실패
+        # RSI 데이터가 없으면 실시간 계산 폴백
+        if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
+            try:
+                missing = []
+                if one_week_ago_rsi is None:
+                    missing.append(one_week_ago_friday)
+                if two_weeks_ago_rsi is None:
+                    missing.append(two_weeks_ago_friday)
+                fallback = self.calculate_weekly_rsi_for_dates(missing)
+                if one_week_ago_rsi is None:
+                    one_week_ago_rsi = fallback.get(one_week_ago_friday.strftime('%Y-%m-%d'))
+                if two_weeks_ago_rsi is None:
+                    two_weeks_ago_rsi = fallback.get(two_weeks_ago_friday.strftime('%Y-%m-%d'))
+            except Exception as e:
+                print(f"⚠️ RSI 실시간 계산 폴백 실패: {e}")
+        
         if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
             failure_reason = []
             if one_week_ago_rsi is None:
@@ -2744,6 +2759,27 @@ class SOXLQuantTrader:
             
             prev_week_rsi = self.get_rsi_from_reference(prev_week_friday, rsi_ref_data)
             two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
+            
+            # RSI 데이터가 없는 경우 실시간 계산 폴백
+            missing_fridays = []
+            if start_week_rsi is None:
+                missing_fridays.append(start_week_friday)
+            if prev_week_rsi is None:
+                missing_fridays.append(prev_week_friday)
+            if two_weeks_ago_rsi is None:
+                missing_fridays.append(two_weeks_ago_friday)
+            
+            if missing_fridays:
+                try:
+                    fallback_rsi = self.calculate_weekly_rsi_for_dates(missing_fridays)
+                    if start_week_rsi is None:
+                        start_week_rsi = fallback_rsi.get(start_week_friday.strftime('%Y-%m-%d'))
+                    if prev_week_rsi is None:
+                        prev_week_rsi = fallback_rsi.get(prev_week_friday.strftime('%Y-%m-%d'))
+                    if two_weeks_ago_rsi is None:
+                        two_weeks_ago_rsi = fallback_rsi.get(two_weeks_ago_friday.strftime('%Y-%m-%d'))
+                except Exception as e:
+                    print(f"⚠️ RSI 실시간 계산 폴백 실패: {e}")
             
             # 시작 모드 결정
             # 시작일 이전 주차의 모드를 계산하여 시작 모드 결정

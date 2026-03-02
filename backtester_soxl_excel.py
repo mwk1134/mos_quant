@@ -245,62 +245,7 @@ def main():
     print(f"   실제 공세모드 설정: {trader.ag_config}")
     print(f"   실제 안전모드 설정: {trader.sf_config}")
     
-    # RSI 참조 데이터 확인
-    print("\n🔍 주간 RSI 데이터 확인 중...")
-    try:
-        rsi_ref_data = trader.load_rsi_reference_data()
-        if not rsi_ref_data or len(rsi_ref_data) == 0:
-            print("❌ 주간 RSI 데이터가 없습니다!")
-            print("   백테스팅을 실행하기 전에 주간 RSI 데이터를 업데이트해주세요.")
-            print("   웹앱을 실행하거나 update_rsi_data.py를 실행하여 RSI 데이터를 생성하세요.")
-            return
-        
-        # 시작 날짜의 주차 RSI 확인
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        # 시작일이 속한 주의 금요일 계산 (soxl_quant_system.py와 동일한 로직)
-        days_until_friday = (4 - start_dt.weekday()) % 7  # 금요일(4)까지의 일수
-        if days_until_friday == 0 and start_dt.weekday() != 4:  # 금요일이 아닌데 계산이 0이면 다음 주 금요일
-            days_until_friday = 7
-        start_week_friday = start_dt + timedelta(days=days_until_friday)
-        
-        # 시작 주차의 RSI 확인
-        start_rsi = trader.get_rsi_from_reference(start_week_friday, rsi_ref_data)
-        if start_rsi is None:
-            print(f"❌ 백테스팅 시작일({start_date})의 주간 RSI 데이터가 없습니다!")
-            print(f"   필요한 주차: {start_week_friday.strftime('%Y-%m-%d')} (금요일)")
-            print("   백테스팅을 실행하기 전에 주간 RSI 데이터를 업데이트해주세요.")
-            print("   웹앱을 실행하거나 update_rsi_data.py를 실행하여 RSI 데이터를 생성하세요.")
-            return
-        
-        # 1주전, 2주전 RSI도 확인 (모드 결정에 필요)
-        prev_week_friday = start_week_friday - timedelta(days=7)
-        two_weeks_ago_friday = start_week_friday - timedelta(days=14)
-        
-        prev_rsi = trader.get_rsi_from_reference(prev_week_friday, rsi_ref_data)
-        two_weeks_ago_rsi = trader.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
-        
-        if prev_rsi is None or two_weeks_ago_rsi is None:
-            print(f"❌ 백테스팅 시작일({start_date})의 1주전 또는 2주전 RSI 데이터가 없습니다!")
-            if prev_rsi is None:
-                print(f"   누락된 주차: {prev_week_friday.strftime('%Y-%m-%d')} (1주전 금요일)")
-            if two_weeks_ago_rsi is None:
-                print(f"   누락된 주차: {two_weeks_ago_friday.strftime('%Y-%m-%d')} (2주전 금요일)")
-            print("   백테스팅을 실행하기 전에 주간 RSI 데이터를 업데이트해주세요.")
-            print("   웹앱을 실행하거나 update_rsi_data.py를 실행하여 RSI 데이터를 생성하세요.")
-            return
-        
-        print(f"✅ 주간 RSI 데이터 확인 완료")
-        print(f"   시작 주차 ({start_week_friday.strftime('%Y-%m-%d')}): RSI {start_rsi:.2f}")
-        print(f"   1주전 ({prev_week_friday.strftime('%Y-%m-%d')}): RSI {prev_rsi:.2f}")
-        print(f"   2주전 ({two_weeks_ago_friday.strftime('%Y-%m-%d')}): RSI {two_weeks_ago_rsi:.2f}")
-        
-    except Exception as e:
-        print(f"❌ RSI 데이터 확인 중 오류 발생: {e}")
-        print("   백테스팅을 실행하기 전에 주간 RSI 데이터를 업데이트해주세요.")
-        print("   웹앱을 실행하거나 update_rsi_data.py를 실행하여 RSI 데이터를 생성하세요.")
-        return
-    
-    # 백테스팅 실행
+    # 백테스팅 실행 (RSI 데이터는 JSON + 실시간 계산 폴백으로 자동 처리)
     print("\n📊 백테스팅 실행 중...")
     backtest_result = trader.run_backtest(start_date, end_date)
     
