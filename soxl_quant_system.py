@@ -335,7 +335,12 @@ class SOXLQuantTrader:
                         week_exists = False
                         for j, existing_week in enumerate(existing_data[current_year]['weeks']):
                             if existing_week['week'] == week_num:
-                                # 항상 최신 데이터로 재계산하여 업데이트
+                                # 기존 데이터가 있고 rsi 값이 이미 설정되어 있으면 업데이트 건너뜀 (수동 입력 데이터 보호)
+                                if 'rsi' in existing_week and existing_week['rsi'] is not None:
+                                    week_exists = True
+                                    break
+                                
+                                # 기존 데이터 업데이트 (rsi가 없는 경우만)
                                 existing_data[current_year]['weeks'][j] = {
                                     "start": week_start.strftime('%Y-%m-%d'),
                                     "end": week_end.strftime('%Y-%m-%d'),
