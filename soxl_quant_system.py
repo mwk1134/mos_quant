@@ -3060,10 +3060,6 @@ class SOXLQuantTrader:
                 # 새로운 주차의 RSI 값 가져오기 (해당 주차의 금요일 기준)
                 current_week_rsi = self.get_rsi_from_reference(this_week_friday, rsi_ref_data)
                 
-                # 현재 주차 RSI가 없는 경우 백테스팅 중단
-                if current_week_rsi is None:
-                    return {"error": f"RSI 데이터가 없습니다. 주차: {this_week_friday.strftime('%Y-%m-%d')}"}
-                
                 # 모드 업데이트 (2주전 RSI와 1주전 RSI 비교)
                 # 2주전과 1주전 RSI 계산
                 prev_week_friday = this_week_friday - timedelta(days=7)  # 1주전
@@ -3072,7 +3068,29 @@ class SOXLQuantTrader:
                 prev_week_rsi = self.get_rsi_from_reference(prev_week_friday, rsi_ref_data)  # 1주전 RSI
                 two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)  # 2주전 RSI
                 
-                # RSI 데이터가 없는 경우 백테스팅 중단
+                # RSI 데이터가 없는 경우 실시간 계산 폴백
+                missing_fridays = []
+                if current_week_rsi is None:
+                    missing_fridays.append(this_week_friday)
+                if prev_week_rsi is None:
+                    missing_fridays.append(prev_week_friday)
+                if two_weeks_ago_rsi is None:
+                    missing_fridays.append(two_weeks_ago_friday)
+                
+                if missing_fridays:
+                    try:
+                        fallback_rsi = self.calculate_weekly_rsi_for_dates(missing_fridays)
+                        if current_week_rsi is None:
+                            current_week_rsi = fallback_rsi.get(this_week_friday.strftime('%Y-%m-%d'))
+                        if prev_week_rsi is None:
+                            prev_week_rsi = fallback_rsi.get(prev_week_friday.strftime('%Y-%m-%d'))
+                        if two_weeks_ago_rsi is None:
+                            two_weeks_ago_rsi = fallback_rsi.get(two_weeks_ago_friday.strftime('%Y-%m-%d'))
+                    except Exception as e:
+                        print(f"⚠️ RSI 실시간 계산 폴백 실패: {e}")
+                
+                if current_week_rsi is None:
+                    return {"error": f"RSI 데이터가 없습니다. 주차: {this_week_friday.strftime('%Y-%m-%d')}"}
                 if prev_week_rsi is None or two_weeks_ago_rsi is None:
                     return {"error": f"RSI 데이터가 없습니다. 1주전 RSI: {prev_week_rsi}, 2주전 RSI: {two_weeks_ago_rsi}"}
                 
