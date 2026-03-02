@@ -869,6 +869,7 @@ class SOXLQuantTrader:
                                 # NaN 값 제거 (Close가 None인 행은 제거)
                                 df = df.dropna(subset=['Close'])  # Close가 있으면 유효한 거래일로 간주
                                 df.set_index('Date', inplace=True)
+                                df.index = df.index.normalize()
                                 
                                 # 캐시에 저장
                                 self._stock_data_cache[cache_key] = (df, current_time)
