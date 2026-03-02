@@ -891,8 +891,8 @@ def show_daily_recommendation():
             split_ratios = current_config.get("split_ratios", [])
             buy_ratio_pct = split_ratios[buy_round - 1] * 100 if buy_round <= len(split_ratios) else 0
             st.success(f"✅ 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
-            st.info(f"💰 매수가: ${recommendation['buy_price']:.2f} (LOC 주문)")
-            st.info(f"💵 매수금액: ${recommendation['next_buy_amount']:,.0f}")
+            st.info(f"💰 매수가: \\${recommendation['buy_price']:.2f} (LOC 주문)")
+            st.info(f"💵 매수금액: \\${recommendation['next_buy_amount']:,.0f}")
             shares = round(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
             
@@ -900,8 +900,8 @@ def show_daily_recommendation():
             if available_cash < recommendation['next_buy_amount']:
                 possible_shares = int(available_cash / recommendation['buy_price'])
                 possible_amount = possible_shares * recommendation['buy_price']
-                st.warning(f"⚠️ 예수금 부족: 목표 금액 ${recommendation['next_buy_amount']:,.0f} 대비 예수금 ${available_cash:,.0f} 부족")
-                st.info(f"💡 가능한 매수: {possible_shares}주 (약 ${possible_amount:,.0f})")
+                st.warning(f"⚠️ 예수금 부족: 목표 금액 \\${recommendation['next_buy_amount']:,.0f} 대비 예수금 \\${available_cash:,.0f} 부족")
+                st.info(f"💡 가능한 매수: {possible_shares}주 (약 \\${possible_amount:,.0f})")
             
             # 장중 주문 가이드(현재가가 존재하는 경우 간단 안내)
             current_price = recommendation.get('soxl_current_price')
@@ -916,7 +916,7 @@ def show_daily_recommendation():
             else:
                 st.warning("🔴 매수 불가: 시드 부족")
                 if available_cash > 0:
-                    st.info(f"💡 잔여 예수금: ${available_cash:,.0f} (목표 금액 ${recommendation['next_buy_amount']:,.0f} 미만)")
+                    st.info(f"💡 잔여 예수금: \\${available_cash:,.0f} (목표 금액 \\${recommendation['next_buy_amount']:,.0f} 미만)")
     
     with col2:
         st.subheader("🔴 매도 추천")
@@ -937,17 +937,17 @@ def show_daily_recommendation():
                     st.markdown(f"**{sell_icon} {debug_info['round']}회차** - {sell_status}")
                     st.markdown(f"- **매수일**: {debug_info['buy_date']}")
                     st.markdown(f"- **모드**: <span style='color: {mode_color}; font-weight: bold;'>{debug_info['mode']} ({mode_name})</span>", unsafe_allow_html=True)
-                    st.markdown(f"- **매수가**: ${debug_info['buy_price']:.2f}")
-                    st.markdown(f"- **매도목표가**: ${debug_info['target_sell_price']:.2f}")
-                    st.markdown(f"- **현재 종가**: ${debug_info['current_close']:.2f}")
+                    st.markdown(f"- **매수가**: \\${debug_info['buy_price']:.2f}")
+                    st.markdown(f"- **매도목표가**: \\${debug_info['target_sell_price']:.2f}")
+                    st.markdown(f"- **현재 종가**: \\${debug_info['current_close']:.2f}")
                     
                     # 목표가 도달 여부
                     if debug_info['meets_target_price']:
-                        st.success(f"✅ 목표가 도달: ${debug_info['current_close']:.2f} >= ${debug_info['target_sell_price']:.2f}")
+                        st.success(f"✅ 목표가 도달: \\${debug_info['current_close']:.2f} >= \\${debug_info['target_sell_price']:.2f}")
                     else:
                         price_diff = debug_info['target_sell_price'] - debug_info['current_close']
                         price_diff_pct = (price_diff / debug_info['current_close']) * 100
-                        st.info(f"⏳ 목표가 미도달: ${debug_info['current_close']:.2f} < ${debug_info['target_sell_price']:.2f} (차이: ${price_diff:.2f}, {price_diff_pct:+.2f}%)")
+                        st.info(f"⏳ 목표가 미도달: \\${debug_info['current_close']:.2f} < \\${debug_info['target_sell_price']:.2f} (차이: \\${price_diff:.2f}, {price_diff_pct:+.2f}%)")
                     
                     # 손절예정일 확인
                     if debug_info['meets_stop_loss_date']:
@@ -981,7 +981,7 @@ def show_daily_recommendation():
                     buy_date_dt = None
                 
                 buy_price = pos.get('buy_price')
-                buy_price_text = f"${buy_price:.2f}" if isinstance(buy_price, (int, float)) else "-"
+                buy_price_text = f"\\${buy_price:.2f}" if isinstance(buy_price, (int, float)) else "-"
                 mode = pos.get('mode', 'SF')
                 mode_name = "안전모드" if mode == "SF" else "공세모드"
                 
@@ -1008,7 +1008,7 @@ def show_daily_recommendation():
                     pos_ratio_pct = pos_split_ratios[pos['round'] - 1] * 100 if pos['round'] <= len(pos_split_ratios) else 0
                     
                     # 보유 중 상태 표시 (비중%, 목표가와 현재가 차이 포함)
-                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%) 보유 중: {sell_shares}주 (목표가 ${target_sell_price:.2f}, 현재 ${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%) 보유 중: {sell_shares}주 (목표가 \\${target_sell_price:.2f}, 현재 \\${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
                     
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
