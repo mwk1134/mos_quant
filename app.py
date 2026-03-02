@@ -778,35 +778,6 @@ def show_daily_recommendation():
         st.error(f"추천 생성 실패: {recommendation['error']}")
         return
     
-    # 디버깅: reconcile_positions_with_close_history 호출 전후 포지션 목록 확인
-    if 'reconcile_debug_info' in recommendation:
-        reconcile_debug = recommendation['reconcile_debug_info']
-        with st.expander("🔍 포지션 보정 전후 비교 (디버깅)", expanded=False):
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader(f"보정 전 ({len(reconcile_debug['positions_before'])}개)")
-                if reconcile_debug['positions_before']:
-                    for pos in reconcile_debug['positions_before']:
-                        mode_color = "🟢" if pos['mode'] == "SF" else "🔴" if pos['mode'] == "AG" else "⚪"
-                        st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {pos['buy_date']}, 모드: {pos['mode']}, 매수가: ${pos['buy_price']:.2f}")
-                else:
-                    st.info("포지션 없음")
-            with col2:
-                st.subheader(f"보정 후 ({len(reconcile_debug['positions_after'])}개)")
-                if reconcile_debug['positions_after']:
-                    for pos in reconcile_debug['positions_after']:
-                        mode_color = "🟢" if pos['mode'] == "SF" else "🔴" if pos['mode'] == "AG" else "⚪"
-                        st.write(f"{mode_color} **{pos['round']}회차** - 매수일: {pos['buy_date']}, 모드: {pos['mode']}, 매수가: ${pos['buy_price']:.2f}")
-                else:
-                    st.info("포지션 없음")
-            
-            # 사라진 포지션 확인
-            before_dates = {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_before']}
-            after_dates = {f"{p['round']}_{p['buy_date']}" for p in reconcile_debug['positions_after']}
-            removed_positions = before_dates - after_dates
-            if removed_positions:
-                st.warning(f"⚠️ 보정 과정에서 제거된 포지션: {', '.join(removed_positions)}")
-    
     # 데이터 경고 표시 (Close가 None인 날짜들)
     if hasattr(st.session_state.trader, '_data_warnings') and st.session_state.trader._data_warnings:
         unique_warnings = list(set(st.session_state.trader._data_warnings))

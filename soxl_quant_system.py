@@ -2192,35 +2192,7 @@ class SOXLQuantTrader:
                 break  # 12/29일 포지션은 하나만 있을 것으로 예상
         
         # 4. 과거 종가 기반 포지션 보정 (LOC 매도)
-        # 디버깅: reconcile_positions_with_close_history 호출 전 포지션 목록 출력 및 저장
-        positions_before_reconcile = []
-        print(f"🔍 reconcile_positions_with_close_history 호출 전 포지션 목록 ({len(self.positions)}개):")
-        for pos in self.positions:
-            buy_date = pos.get('buy_date')
-            buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
-            print(f"   - {pos['round']}회차: 매수일 {buy_date_str}, 모드 {pos.get('mode', 'N/A')}, 매수가 ${pos.get('buy_price', 0):.2f}")
-            positions_before_reconcile.append({
-                "round": pos['round'],
-                "buy_date": buy_date_str,
-                "mode": pos.get('mode', 'N/A'),
-                "buy_price": pos.get('buy_price', 0)
-            })
-        
-        reconcile_debug_info_detail = self.reconcile_positions_with_close_history(soxl_data)
-        
-        # 디버깅: reconcile_positions_with_close_history 호출 후 포지션 목록 출력 및 저장
-        positions_after_reconcile = []
-        print(f"🔍 reconcile_positions_with_close_history 호출 후 포지션 목록 ({len(self.positions)}개):")
-        for pos in self.positions:
-            buy_date = pos.get('buy_date')
-            buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
-            print(f"   - {pos['round']}회차: 매수일 {buy_date_str}, 모드 {pos.get('mode', 'N/A')}, 매수가 ${pos.get('buy_price', 0):.2f}")
-            positions_after_reconcile.append({
-                "round": pos['round'],
-                "buy_date": buy_date_str,
-                "mode": pos.get('mode', 'N/A'),
-                "buy_price": pos.get('buy_price', 0)
-            })
+        self.reconcile_positions_with_close_history(soxl_data)
 
         # 5. QQQ 주간 RSI 기반 모드 자동 전환
         # get_daily_recommendation()에서는 항상 오늘 날짜 기준으로 실시간 QQQ 데이터를 사용하여 모드를 계산함
@@ -2569,10 +2541,6 @@ class SOXLQuantTrader:
             "next_buy_amount": next_buy_amount,
             "sell_recommendations": sell_recommendations,
             "sell_debug_info": sell_debug_info,  # 매도 조건 확인 디버깅 정보
-            "reconcile_debug_info": {  # reconcile_positions_with_close_history 디버깅 정보
-                "positions_before": positions_before_reconcile,
-                "positions_after": positions_after_reconcile
-            },
             "portfolio": {
                 "positions_count": len(self.positions),
                 "total_invested": total_invested,
