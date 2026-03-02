@@ -109,7 +109,7 @@ class SOXLQuantTrader:
                         return float(week_data['rsi'])
             
             # 2단계: 정확한 주차가 없으면 가장 가까운 이전 주차의 RSI 사용
-            # 모든 연도의 모든 주차를 날짜순으로 정렬하여 검색
+            # 단, 7일 이상 차이나면 다른 주차이므로 None 반환 (실시간 계산 유도)
             all_weeks = []
             for year in available_years:
                 if 'weeks' not in rsi_data[year]:
@@ -122,14 +122,14 @@ class SOXLQuantTrader:
             # 종료일 기준으로 정렬
             all_weeks.sort(key=lambda x: x['end'])
             
-            # 해당 날짜보다 이전의 가장 가까운 주차 찾기
+            # 해당 날짜보다 이전의 가장 가까운 주차 찾기 (7일 이내만)
             for week_data in reversed(all_weeks):
                 if week_data['end'] <= date_str:
-                    return float(week_data['rsi'])
-            
-            # 3단계: 그래도 없으면 가장 최근 주차의 RSI 사용
-            if all_weeks:
-                return float(all_weeks[-1]['rsi'])
+                    gap_days = (datetime.strptime(date_str, '%Y-%m-%d') - datetime.strptime(week_data['end'], '%Y-%m-%d')).days
+                    if gap_days < 7:
+                        return float(week_data['rsi'])
+                    else:
+                        return None
             
             return None
         except Exception as e:
@@ -335,12 +335,7 @@ class SOXLQuantTrader:
                         week_exists = False
                         for j, existing_week in enumerate(existing_data[current_year]['weeks']):
                             if existing_week['week'] == week_num:
-                                # 기존 데이터가 있고 rsi 값이 이미 설정되어 있으면 업데이트 건너뜀 (수동 입력 데이터 보호)
-                                if 'rsi' in existing_week and existing_week['rsi'] is not None:
-                                    week_exists = True
-                                    break
-                                
-                                # 기존 데이터 업데이트 (rsi가 없는 경우만)
+                                # 항상 최신 데이터로 재계산하여 업데이트
                                 existing_data[current_year]['weeks'][j] = {
                                     "start": week_start.strftime('%Y-%m-%d'),
                                     "end": week_end.strftime('%Y-%m-%d'),
