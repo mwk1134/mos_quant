@@ -9,6 +9,8 @@ import io
 from contextlib import redirect_stdout
 from pathlib import Path
 import plotly.graph_objects as go
+import requests as _requests
+import base64
 
 # Force redeploy - version 1.1
 import plotly.express as px
@@ -202,6 +204,88 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- GitHub API 기반 스냅샷 영구 저장 ---
+_GH_REPO = "mwk1134/mos_quant"
+_GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
+
+def _gh_token() -> str:
+    """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
+    try:
+        return st.secrets["GITHUB_TOKEN"]
+    except Exception:
+        return os.environ.get("GITHUB_TOKEN", "")
+
+def _gh_headers():
+    token = _gh_token()
+    if not token:
+        return None
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+def _gh_load_all_snapshots() -> tuple:
+    """GitHub에서 전체 스냅샷 JSON 로드. (data_dict, sha) 반환"""
+    headers = _gh_headers()
+    if not headers:
+        return {}, None
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_SNAPSHOT_PATH}"
+        resp = _requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            info = resp.json()
+            content = base64.b64decode(info["content"]).decode("utf-8")
+            return json.loads(content), info["sha"]
+        return {}, None
+    except Exception as e:
+        print(f"⚠️ GitHub 스냅샷 로드 실패: {e}")
+        return {}, None
+
+def _gh_save_all_snapshots(data: dict, sha: str = None) -> tuple:
+    """GitHub에 전체 스냅샷 JSON 저장. (성공여부, 에러메시지) 반환"""
+    headers = _gh_headers()
+    if not headers:
+        return False, "GITHUB_TOKEN이 설정되지 않았습니다. Streamlit Secrets에 추가해주세요."
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_SNAPSHOT_PATH}"
+        content_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        body = {
+            "message": f"snapshot update {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "content": base64.b64encode(content_bytes).decode("ascii"),
+        }
+        if sha:
+            body["sha"] = sha
+        resp = _requests.put(url, headers=headers, json=body, timeout=10)
+        if resp.status_code in (200, 201):
+            return True, ""
+        err = resp.json() if resp.text else {}
+        msg = err.get("message", resp.text[:200])
+        return False, f"GitHub API 오류 ({resp.status_code}): {msg}"
+    except Exception as e:
+        return False, str(e)
+
+def load_preset_snapshot(preset_name: str) -> dict:
+    """특정 프리셋의 스냅샷을 GitHub에서 로드"""
+    all_data, sha = _gh_load_all_snapshots()
+    st.session_state._gh_snapshot_sha = sha
+    st.session_state._gh_snapshot_all = all_data
+    return all_data.get(preset_name, {})
+
+def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
+    """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
+    all_data = getattr(st.session_state, '_gh_snapshot_all', None)
+    sha = getattr(st.session_state, '_gh_snapshot_sha', None)
+    if all_data is None:
+        all_data, sha = _gh_load_all_snapshots()
+    all_data[preset_name] = snapshot
+    ok, err = _gh_save_all_snapshots(all_data, sha)
+    if ok:
+        _, new_sha = _gh_load_all_snapshots()
+        st.session_state._gh_snapshot_sha = new_sha
+        st.session_state._gh_snapshot_all = all_data
+    return ok, err
+
 # 세션 상태 초기화
 if 'trader' not in st.session_state:
     st.session_state.trader = None
@@ -215,6 +299,10 @@ if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'position_edits' not in st.session_state:
     st.session_state.position_edits = {}  # {position_index: {'shares': int, 'buy_price': float}}
+if 'positions_snapshot' not in st.session_state:
+    st.session_state.positions_snapshot = {}
+if 'active_preset' not in st.session_state:
+    st.session_state.active_preset = None
 if 'kmw_preset' not in st.session_state:
     st.session_state.kmw_preset = {
         'initial_capital': 9000.0,
@@ -343,6 +431,9 @@ def show_mobile_settings():
     
     if initial_capital != st.session_state.initial_capital:
         st.session_state.initial_capital = initial_capital
+        st.session_state.positions_snapshot = {}
+        if st.session_state.get('active_preset'):
+            save_preset_snapshot(st.session_state.active_preset, {})
         st.session_state.trader = None  # 트레이더 재초기화
         if st.session_state.trader:
             st.session_state.trader.clear_cache()  # 캐시 초기화
@@ -371,6 +462,8 @@ def show_mobile_settings():
                 st.session_state.position_edits = kmw['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
+            st.session_state.active_preset = "KMW"
+            st.session_state.positions_snapshot = load_preset_snapshot("KMW")
             st.session_state.trader = None
             st.rerun()
     with pr_col2:
@@ -383,6 +476,8 @@ def show_mobile_settings():
                 st.session_state.position_edits = jeh['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
+            st.session_state.active_preset = "JEH"
+            st.session_state.positions_snapshot = load_preset_snapshot("JEH")
             st.session_state.trader = None
             st.rerun()
     with pr_col3:
@@ -395,6 +490,8 @@ def show_mobile_settings():
                 st.session_state.position_edits = jsd['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
+            st.session_state.active_preset = "JSD"
+            st.session_state.positions_snapshot = load_preset_snapshot("JSD")
             st.session_state.trader = None
             st.rerun()
     with pr_col4:
@@ -407,12 +504,17 @@ def show_mobile_settings():
                 st.session_state.position_edits = jeh2['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
+            st.session_state.active_preset = "JEH2"
+            st.session_state.positions_snapshot = load_preset_snapshot("JEH2")
             st.session_state.trader = None
             st.rerun()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
         st.session_state.session_start_date = new_start_date
+        st.session_state.positions_snapshot = {}
+        if st.session_state.get('active_preset'):
+            save_preset_snapshot(st.session_state.active_preset, {})
         st.session_state.trader = None  # 트레이더 재초기화
         if st.session_state.trader:
             st.session_state.trader.clear_cache()  # 캐시 초기화
@@ -439,6 +541,9 @@ def show_mobile_settings():
             with col3:
                 if st.button("🗑️", key=f"delete_seed_{i}"):
                     st.session_state.seed_increases.pop(i)
+                    st.session_state.positions_snapshot = {}
+                    if st.session_state.get('active_preset'):
+                        save_preset_snapshot(st.session_state.active_preset, {})
                     st.rerun()
     
     # 시드증액 추가
@@ -469,6 +574,9 @@ def show_mobile_settings():
                 "amount": seed_amount
             }
             st.session_state.seed_increases.append(seed_increase)
+            st.session_state.positions_snapshot = {}
+            if st.session_state.get('active_preset'):
+                save_preset_snapshot(st.session_state.active_preset, {})
             st.session_state.trader = None  # 트레이더 재초기화
             if seed_amount > 0:
                 st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
@@ -747,23 +855,33 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
-        # 시뮬레이션 후 수정된 포지션 복원
+        # 시뮬레이션 후 포지션 스냅샷 복원 (Yahoo Finance 데이터 변동으로 인한 수량 차이 방지)
+        snapshot = st.session_state.get('positions_snapshot', {})
+        if snapshot:
+            for pos_idx, pos in enumerate(st.session_state.trader.positions):
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                snap_key = f"{pos['round']}_{buy_date_str}"
+                if snap_key in snapshot:
+                    saved = snapshot[snap_key]
+                    if pos['shares'] != saved['shares'] or abs(pos['buy_price'] - saved['buy_price']) > 0.001:
+                        st.session_state.trader.update_position(
+                            pos_idx,
+                            saved['shares'],
+                            saved['buy_price']
+                        )
+        
+        # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
-            # 수정된 포지션 정보를 회차와 매수일로 매칭하여 복원
             for pos_idx, pos in enumerate(st.session_state.trader.positions):
                 buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
                 
-                # 모든 수정 정보를 확인하여 매칭 (회차와 매수일로 매칭)
                 for position_key, edit_info in st.session_state.position_edits.items():
                     key_parts = position_key.split('_')
                     if len(key_parts) >= 2:
                         key_round = int(key_parts[0])
                         key_date = key_parts[1]
                         
-                        # 회차와 매수일이 일치하면 수정 적용 (매가는 무시)
-                        # 기존에 매가가 포함된 키 형식도 지원 (key_parts[2]가 있으면 무시)
                         if pos['round'] == key_round and buy_date_str == key_date:
-                            # 포지션 수정 (인덱스 사용)
                             st.session_state.trader.update_position(
                                 pos_idx,
                                 edit_info['shares'],
@@ -773,6 +891,26 @@ def show_daily_recommendation():
         
         # 일일 추천 생성
         recommendation = st.session_state.trader.get_daily_recommendation()
+        
+        # 시뮬레이션 결과를 스냅샷으로 저장
+        current_snapshot = st.session_state.get('positions_snapshot', {})
+        for pos in st.session_state.trader.positions:
+            buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+            snap_key = f"{pos['round']}_{buy_date_str}"
+            if snap_key not in current_snapshot:
+                current_snapshot[snap_key] = {
+                    'shares': int(pos['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(pos['amount']),
+                    'round': int(pos['round'])
+                }
+        st.session_state.positions_snapshot = current_snapshot
+        
+        # 포지션이 있으면 GitHub에 영구 저장 (매 로드마다 동기화)
+        st.session_state._gh_save_result = None
+        if current_snapshot and st.session_state.get('active_preset'):
+            ok, err = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
+            st.session_state._gh_save_result = (ok, err)
     
     if "error" in recommendation:
         st.error(f"추천 생성 실패: {recommendation['error']}")
@@ -851,6 +989,16 @@ def show_daily_recommendation():
     market_icon = "🔴" if not market_closed else "🟢"
     status_text = f"{market_icon} 미국시장: **{market_status}** · 확정종가: **{data_last}**까지 반영 · 매수/매도 추천: **{basis_date} 종가** 기준"
     st.info(status_text)
+    
+    # GitHub 스냅샷 저장 결과 표시
+    save_result = st.session_state.get('_gh_save_result')
+    if save_result is not None:
+        ok, err = save_result
+        if ok:
+            st.success("✅ 포지션 스냅샷이 GitHub에 저장되었습니다. (PC/폰 동기화)")
+        else:
+            st.error(f"❌ GitHub 스냅샷 저장 실패: {err}")
+            st.caption("Streamlit Cloud → Settings → Secrets에 GITHUB_TOKEN이 있는지 확인해주세요.")
 
     # 기본 정보 - 모바일 최적화
     col1, col2 = st.columns(2)
@@ -1181,7 +1329,22 @@ def show_daily_recommendation():
                             'buy_price': new_buy_price
                         }
                         
+                        # 스냅샷도 업데이트하고 GitHub에 영구 저장
+                        if 'positions_snapshot' not in st.session_state:
+                            st.session_state.positions_snapshot = {}
+                        st.session_state.positions_snapshot[position_key] = {
+                            'shares': new_shares,
+                            'buy_price': new_buy_price,
+                            'amount': new_amount,
+                            'round': selected_position['round']
+                        }
+                        gh_ok = True
+                        if st.session_state.get('active_preset'):
+                            gh_ok, _ = save_preset_snapshot(st.session_state.active_preset, st.session_state.positions_snapshot)
+                        
                         st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
+                        if not gh_ok:
+                            st.warning("⚠️ GitHub 저장 실패. Secrets에 GITHUB_TOKEN을 확인해주세요.")
                         st.session_state.trader.clear_cache()  # 캐시 초기화
                         st.rerun()
                     else:
@@ -1664,6 +1827,9 @@ def show_advanced_settings():
         
         if config_changed:
             st.session_state.sf_config = new_sf_config
+            st.session_state.positions_snapshot = {}
+            if st.session_state.get('active_preset'):
+                save_preset_snapshot(st.session_state.active_preset, {})
             st.session_state.trader = None  # 트레이더 재초기화 필요
             st.rerun()  # 즉시 재실행하여 트레이더 재초기화
     
@@ -1757,6 +1923,9 @@ def show_advanced_settings():
         
         if ag_config_changed:
             st.session_state.ag_config = new_ag_config
+            st.session_state.positions_snapshot = {}
+            if st.session_state.get('active_preset'):
+                save_preset_snapshot(st.session_state.active_preset, {})
             st.session_state.trader = None  # 트레이더 재초기화 필요
             st.rerun()  # 즉시 재실행하여 트레이더 재초기화
     
@@ -1788,6 +1957,9 @@ def show_advanced_settings():
     st.subheader("🔄 시스템 관리")
     
     if st.button("🔄 시스템 재시작", type="secondary"):
+        st.session_state.positions_snapshot = {}
+        if st.session_state.get('active_preset'):
+            save_preset_snapshot(st.session_state.active_preset, {})
         st.session_state.trader = None
         st.rerun()
 
