@@ -32,7 +32,7 @@ def load_presets():
             'initial_capital': 6812.0,
             'session_start_date': "2025-12-09",
             'seed_increases': [
-                {'date': '2026-03-06', 'amount': 6739}
+                {'date': '2026-03-06', 'amount': 6741}
             ],
             'position_edits': {}
         },
@@ -58,6 +58,14 @@ def load_presets():
             for key in default_presets:
                 if key in saved_presets:
                     default_presets[key] = saved_presets[key]
+            # KMW: 기본 시드증액(3/6 6741)이 없으면 병합 (저장된 값에 기본 시드 추가)
+            kmw_default_seeds = [{'date': '2026-03-06', 'amount': 6741}]
+            kmw = default_presets.get('kmw_preset', {})
+            existing_dates = {s['date'] for s in kmw.get('seed_increases', [])}
+            for seed in kmw_default_seeds:
+                if seed['date'] not in existing_dates:
+                    kmw.setdefault('seed_increases', []).insert(0, seed)
+            default_presets['kmw_preset'] = kmw
             return default_presets
         except Exception as e:
             print(f"⚠️ 프리셋 파일 로드 실패: {e}")
@@ -336,8 +344,8 @@ def show_mobile_settings():
     # session_state에 값이 있으면 사용, 없으면 기본값
     default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
     
-    # 날짜 입력 + 오늘 버튼 + KMW/JEH/JSD 프리셋 버튼
-    start_col1, start_col2, start_col3, start_col4, start_col5 = st.columns([3, 1, 1, 1, 1])
+    # 날짜 입력 + 오늘 버튼 + KMW/JEH/JSD 프리셋 버튼 + 새로고침
+    start_col1, start_col2, start_col3, start_col4, start_col5, start_col6 = st.columns([3, 1, 1, 1, 1, 0.5])
     with start_col1:
         session_start_date = st.date_input(
             "📅 투자 시작일",
@@ -351,7 +359,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with start_col3:
-        if st.button("KMW", help="초기설정: 6812달러, 시작일 2025/12/09, 시드증액 없음"):
+        if st.button("KMW", help="초기설정: 6812달러, 시작일 2025/12/09, 시드증액 3/6 +6741달러"):
             kmw = st.session_state.kmw_preset
             st.session_state.initial_capital = kmw['initial_capital']
             st.session_state.session_start_date = kmw['session_start_date']
@@ -388,6 +396,17 @@ def show_mobile_settings():
                 st.session_state.position_edits = {}
             st.session_state.trader = None
             st.success("✅ JSD 프리셋이 적용되었습니다.")
+            st.rerun()
+    with start_col6:
+        if st.button("🔄", help="프리셋 새로고침 (기본값 다시 로드)"):
+            del st.session_state.presets_loaded
+            presets = load_presets()
+            st.session_state.kmw_preset = presets['kmw_preset']
+            st.session_state.jeh_preset = presets['jeh_preset']
+            st.session_state.jsd_preset = presets['jsd_preset']
+            st.session_state.presets_loaded = True
+            st.session_state.trader = None
+            st.success("✅ 프리셋이 새로고침되었습니다.")
             st.rerun()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
