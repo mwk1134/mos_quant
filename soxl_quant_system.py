@@ -1960,6 +1960,22 @@ class SOXLQuantTrader:
         if soxl_data is None:
             return {"error": "SOXL 데이터를 가져올 수 없습니다."}
         
+        # 오늘 날짜의 미처리 시드증액 적용 (장중엔 시뮬레이션이 어제까지만 실행되므로 오늘 시드가 누락됨)
+        today_str = today.strftime('%Y-%m-%d')
+        unprocessed_today_seeds = [si for si in self.seed_increases
+            if si["date"] == today_str and si["date"] not in self.processed_seed_dates]
+        if unprocessed_today_seeds:
+            total_seed = sum(si["amount"] for si in unprocessed_today_seeds)
+            current_price = soxl_data.iloc[-1]['Close'] if len(soxl_data) > 0 else 0
+            total_shares = sum(pos["shares"] for pos in self.positions)
+            current_total_assets = self.available_cash + (total_shares * current_price)
+            self.available_cash += total_seed
+            self.current_investment_capital = current_total_assets + total_seed
+            for si in unprocessed_today_seeds:
+                self.processed_seed_dates.add(si["date"])
+            seed_dates_str = ", ".join(si["date"] for si in unprocessed_today_seeds)
+            print(f"💰 오늘 시드증액 반영: {seed_dates_str} - ${total_seed:,.0f} 추가 (매수추천에 반영)")
+        
         # 장중에는 오늘 날짜 데이터 제외 (종가가 확정되지 않았으므로)
         today_date = today.date()
         if not self.is_regular_session_closed_now() and len(soxl_data) > 0:
