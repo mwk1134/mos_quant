@@ -1,6 +1,6 @@
 """
 파라미터.xlsx 파일에서 파라미터를 읽어서 백테스팅을 실행하는 스크립트
-초기자산 4000달러, 기간 2011-01-01 ~ 2025-12-07
+초기자산 4000달러, 기간 2011-01-01 ~ 2026-02-27
 """
 import openpyxl
 from datetime import datetime, timedelta
@@ -224,8 +224,10 @@ def main():
     
     # 기본 설정값
     initial_capital = 40000  # 투자원금 4만 달러
-    start_date = "2011-01-01"  # 투자시작일
-    end_date = "2025-12-07"  # 투자종료일
+    #start_date = "2011-01-01"  # 투자시작일
+    start_date = "2018-01-01"  # 투자시작일
+    
+    end_date = "2026-02-27"  # 투자종료일
     
     print(f"\n💰 투자원금: ${initial_capital:,.0f}")
     print(f"📅 투자기간: {start_date} ~ {end_date}")

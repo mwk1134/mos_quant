@@ -236,9 +236,11 @@ class AnyTickerQuantTrader(SOXLQuantTrader):
             sf_config: SF 모드 설정
             ag_config: AG 모드 설정
         """
-        super().__init__(initial_capital, sf_config, ag_config)
         self.ticker = ticker.upper()  # 티커를 대문자로 변환
-        self._original_get_stock_data = super().get_stock_data  # 원본 메서드 저장
+        # super().__init__ 내부에서 RSI 업데이트 시 get_stock_data가 호출되므로,
+        # 부모 __init__ 호출 전에 원본 메서드를 미리 바인딩해둠
+        self._original_get_stock_data = SOXLQuantTrader.get_stock_data.__get__(self, type(self))
+        super().__init__(initial_capital, sf_config, ag_config)
     
     def get_stock_data(self, symbol: str, period: str = "1mo"):
         """

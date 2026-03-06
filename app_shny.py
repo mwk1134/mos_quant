@@ -31,7 +31,9 @@ def load_presets():
         'kmw_preset': {
             'initial_capital': 6812.0,
             'session_start_date': "2025-12-09",
-            'seed_increases': [],
+            'seed_increases': [
+                {'date': '2026-03-06', 'amount': 6739}
+            ],
             'position_edits': {}
         },
         'jeh_preset': {
