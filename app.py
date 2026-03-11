@@ -1164,6 +1164,9 @@ def show_daily_recommendation():
                     stop_loss_display = stop_loss_date if stop_loss_date else "-"
                     stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
                     st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
+                    # 손절예정일 도달 시 주의 문구
+                    if sell_info.get('will_sell', False) and '손절예정일' in sell_info.get('reason', ''):
+                        st.error("⚠️ **손절예정일입니다.** 당일 매도가 필요합니다.")
                 with col2:
                     st.caption(f"매수체결일: {buy_date_str}")
                     st.caption(f"매수가: {buy_price_text}")

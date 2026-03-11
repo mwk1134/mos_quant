@@ -1807,7 +1807,8 @@ class SOXLQuantTrader:
                     "position": position,
                     "reason": "목표가 도달",
                     "sell_price": daily_close,  # 종가에 매도
-                    "will_sell": True  # 매도 조건 충족
+                    "will_sell": True,  # 매도 조건 충족
+                    "show_in_recommendation_list": False  # 목표가 도달 시 리스트에서 제외
                 })
             
             # 2. 손절예정일 경과 시 매도 (당일 종가에 LOC 매도)
@@ -1815,11 +1816,14 @@ class SOXLQuantTrader:
                 print(f"      ✅ 매도 조건 2: 손절예정일 경과 (현재: {current_date.strftime('%Y-%m-%d')} >= 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')})")
                 position_debug["will_sell"] = True
                 position_debug["sell_reason"] = f"손절예정일 경과 (보유기간: {hold_days}일)"
+                # 손절예정일 당일은 매도추천 리스트에 표시, 다음날부터 미표시
+                show_in_list = (current_date.date() == stop_loss_date.date())
                 sell_positions.append({
                     "position": position,
                     "reason": f"손절예정일 경과 (보유기간: {hold_days}일)",
                     "sell_price": row['Close'],  # 종가에 LOC 매도
-                    "will_sell": True  # 매도 조건 충족
+                    "will_sell": True,  # 매도 조건 충족
+                    "show_in_recommendation_list": show_in_list
                 })
             else:
                 # 매도 조건을 만족하지 않아도 매도 추천 리스트에 포함 (보유 중 상태로 표시)
@@ -1830,7 +1834,8 @@ class SOXLQuantTrader:
                     "position": position,
                     "reason": "보유 중 (목표가 미도달)",
                     "sell_price": daily_close,  # 현재 종가 (참고용)
-                    "will_sell": False  # 매도 조건 미충족
+                    "will_sell": False,  # 매도 조건 미충족
+                    "show_in_recommendation_list": True  # 손절예정일까지 표시
                 })
             
             debug_info.append(position_debug)
@@ -2542,8 +2547,8 @@ class SOXLQuantTrader:
         today_datetime = datetime.combine(today_date, datetime.min.time())
         all_sell_recommendations, sell_debug_info = self.check_sell_conditions(check_sell_row, today_datetime, prev_close, return_debug_info=True)
         
-        # 매도 추천 리스트에는 모든 보유 포지션 포함 (매도 조건 충족/미충족 모두 표시)
-        sell_recommendations = all_sell_recommendations
+        # 매도 추천 리스트: 손절예정일 당일까지 표시, 다음날부터 미표시. 목표가 도달 시 즉시 미표시
+        sell_recommendations = [s for s in all_sell_recommendations if s.get('show_in_recommendation_list', True)]
         
         # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round()
