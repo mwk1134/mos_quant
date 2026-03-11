@@ -2542,9 +2542,8 @@ class SOXLQuantTrader:
         today_datetime = datetime.combine(today_date, datetime.min.time())
         all_sell_recommendations, sell_debug_info = self.check_sell_conditions(check_sell_row, today_datetime, prev_close, return_debug_info=True)
         
-        # 매도 추천 리스트에는 매도 조건이 충족되지 않은 포지션만 포함 (사용자 요청)
-        # 실제 매도 조건이 충족된 것(will_sell=True)은 리스트에서 제외
-        sell_recommendations = [s for s in all_sell_recommendations if not s.get('will_sell', False)]
+        # 매도 추천 리스트에는 모든 보유 포지션 포함 (매도 조건 충족/미충족 모두 표시)
+        sell_recommendations = all_sell_recommendations
         
         # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round()

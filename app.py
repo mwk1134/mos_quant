@@ -1108,9 +1108,9 @@ def show_daily_recommendation():
                     if debug_info['will_sell']:
                         st.success(f"**매도 사유**: {debug_info['sell_reason']}")
         
-        # 매도 추천 리스트 표시 (매도 조건 미충족/보유 중인 포지션 표시)
+        # 매도 추천 리스트 표시 (모든 보유 포지션)
         if recommendation['sell_recommendations']:
-            st.info(f"📋 매도 대기 포지션: {len(recommendation['sell_recommendations'])}건")
+            st.info(f"📋 매도 추천: {len(recommendation['sell_recommendations'])}건")
             
             for sell_info in recommendation['sell_recommendations']:
                 pos = sell_info['position']
@@ -1155,8 +1155,7 @@ def show_daily_recommendation():
                     pos_split_ratios = config.get("split_ratios", [])
                     pos_ratio_pct = pos_split_ratios[pos['round'] - 1] * 100 if pos['round'] <= len(pos_split_ratios) else 0
                     
-                    # 보유 중 상태 표시 (비중%, 목표가와 현재가 차이 포함)
-                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%) 보유 중: {sell_shares}주 (목표가 \\${target_sell_price:.2f}, 현재 \\${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%): {sell_shares}주 (목표가 \\${target_sell_price:.2f}, 현재 \\${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
                     
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
@@ -1165,7 +1164,6 @@ def show_daily_recommendation():
                     stop_loss_display = stop_loss_date if stop_loss_date else "-"
                     stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
                     st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
-                    st.caption(f"상태: {sell_info['reason']}")
                 with col2:
                     st.caption(f"매수체결일: {buy_date_str}")
                     st.caption(f"매수가: {buy_price_text}")
