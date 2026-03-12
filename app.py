@@ -892,18 +892,17 @@ def show_daily_recommendation():
         # 일일 추천 생성
         recommendation = st.session_state.trader.get_daily_recommendation()
         
-        # 시뮬레이션 결과를 스냅샷으로 저장
-        current_snapshot = st.session_state.get('positions_snapshot', {})
+        # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
+        current_snapshot = {}
         for pos in st.session_state.trader.positions:
             buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
             snap_key = f"{pos['round']}_{buy_date_str}"
-            if snap_key not in current_snapshot:
-                current_snapshot[snap_key] = {
-                    'shares': int(pos['shares']),
-                    'buy_price': float(pos['buy_price']),
-                    'amount': float(pos['amount']),
-                    'round': int(pos['round'])
-                }
+            current_snapshot[snap_key] = {
+                'shares': int(pos['shares']),
+                'buy_price': float(pos['buy_price']),
+                'amount': float(pos['amount']),
+                'round': int(pos['round'])
+            }
         st.session_state.positions_snapshot = current_snapshot
         
         # 포지션이 있으면 GitHub에 영구 저장 (매 로드마다 동기화)
@@ -1330,18 +1329,21 @@ def show_daily_recommendation():
                             'buy_price': new_buy_price
                         }
                         
-                        # 스냅샷도 업데이트하고 GitHub에 영구 저장
-                        if 'positions_snapshot' not in st.session_state:
-                            st.session_state.positions_snapshot = {}
-                        st.session_state.positions_snapshot[position_key] = {
-                            'shares': new_shares,
-                            'buy_price': new_buy_price,
-                            'amount': new_amount,
-                            'round': selected_position['round']
-                        }
+                        # 스냅샷을 trader.positions 기준으로 재구성 후 GitHub에 영구 저장 (실제 체결 수량 반영)
+                        current_snapshot = {}
+                        for pos in st.session_state.trader.positions:
+                            p_buy_date = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                            snap_key = f"{pos['round']}_{p_buy_date}"
+                            current_snapshot[snap_key] = {
+                                'shares': int(pos['shares']),
+                                'buy_price': float(pos['buy_price']),
+                                'amount': float(pos['amount']),
+                                'round': int(pos['round'])
+                            }
+                        st.session_state.positions_snapshot = current_snapshot
                         gh_ok = True
                         if st.session_state.get('active_preset'):
-                            gh_ok, _ = save_preset_snapshot(st.session_state.active_preset, st.session_state.positions_snapshot)
+                            gh_ok, _ = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
                         
                         st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
                         if not gh_ok:
