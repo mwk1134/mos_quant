@@ -1932,9 +1932,56 @@ class SOXLQuantTrader:
         
         return True
     
-    def get_daily_recommendation(self) -> Dict:
+    def merge_duplicate_positions_by_date(self) -> int:
+        """
+        같은 매수일에 여러 포지션이 있으면 하나로 병합 (하루 1매수 원칙)
+        Returns:
+            int: 병합된 포지션 수 (0이면 병합 없음)
+        """
+        from collections import defaultdict
+        by_date = defaultdict(list)
+        for idx, pos in enumerate(self.positions):
+            buy_date = pos.get('buy_date')
+            if buy_date is None:
+                continue
+            if isinstance(buy_date, pd.Timestamp):
+                date_str = buy_date.strftime('%Y-%m-%d')
+            elif hasattr(buy_date, 'strftime'):
+                date_str = buy_date.strftime('%Y-%m-%d')
+            else:
+                date_str = str(buy_date)
+            by_date[date_str].append((idx, pos))
+        
+        merged_count = 0
+        for date_str, group in by_date.items():
+            if len(group) <= 1:
+                continue
+            # 같은 날짜 포지션들: 회차 낮은 순 정렬, 첫 번째(정당한 매수 회차) 유지, 나머지 병합 후 제거
+            # 하루 1매수 원칙상 당일 매수는 하나뿐 → 낮은 회차가 올바른 회차
+            group.sort(key=lambda x: x[1]['round'])
+            keep_idx, keep_pos = group[0]
+            total_shares = keep_pos['shares']
+            total_amount = keep_pos['amount']
+            for idx, pos in group[1:]:
+                total_shares += pos['shares']
+                total_amount += pos['amount']
+            # 가중평균 매수가
+            new_buy_price = total_amount / total_shares if total_shares > 0 else keep_pos['buy_price']
+            keep_pos['shares'] = int(total_shares)
+            keep_pos['amount'] = total_amount
+            keep_pos['buy_price'] = round(new_buy_price, 2)
+            # 나머지 포지션 제거 (역순으로 제거하여 인덱스 유지)
+            for idx, _ in sorted(group[1:], key=lambda x: -x[0]):
+                self.positions.pop(idx)
+                merged_count += 1
+            print(f"🔧 같은 날짜({date_str}) 포지션 병합: {len(group)}개 → 1개 (총 {total_shares}주)")
+        return merged_count
+    
+    def get_daily_recommendation(self, skip_simulate: bool = False) -> Dict:
         """
         일일 매매 추천 생성
+        Args:
+            skip_simulate: True면 내부 시뮬레이션 생략 (앱에서 이미 simulate+스냅샷복원+병합 완료 시)
         Returns:
             Dict: 매매 추천 정보
         """
@@ -1943,7 +1990,7 @@ class SOXLQuantTrader:
         print("=" * 60)
         
         # 현재 상태를 최신으로 업데이트 (시작일부터 현재까지 시뮬레이션)
-        if self.session_start_date:
+        if not skip_simulate and self.session_start_date:
             print("🔄 트레이더 상태를 최신으로 업데이트 중...")
             sim_result = self.simulate_from_start_to_today(self.session_start_date, quiet=True)
             if "error" in sim_result:

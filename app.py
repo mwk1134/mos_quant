@@ -869,6 +869,8 @@ def show_daily_recommendation():
                             saved['shares'],
                             saved['buy_price']
                         )
+        # 같은 매수일 중복 포지션 병합 (하루 1매수 원칙 - 5회차/6회차 동일일 중복 방지)
+        st.session_state.trader.merge_duplicate_positions_by_date()
         
         # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
@@ -889,8 +891,8 @@ def show_daily_recommendation():
                             )
                             break
         
-        # 일일 추천 생성
-        recommendation = st.session_state.trader.get_daily_recommendation()
+        # 일일 추천 생성 (이미 simulate+스냅샷복원+병합 완료했으므로 skip_simulate=True)
+        recommendation = st.session_state.trader.get_daily_recommendation(skip_simulate=True)
         
         # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
         current_snapshot = {}
