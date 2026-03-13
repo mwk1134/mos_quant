@@ -931,8 +931,6 @@ def show_daily_recommendation():
                     )
                     if 'round' in saved:
                         pos['round'] = int(saved['round'])
-        # 같은 매수일 중복 포지션 병합 (스냅샷에 해당 키 있으면 스냅샷 값 유지)
-        st.session_state.trader.merge_duplicate_positions_by_date(snapshot or {})
         
         # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
