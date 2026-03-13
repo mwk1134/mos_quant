@@ -319,6 +319,42 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         st.session_state._gh_snapshot_all = all_data
     return ok, err
 
+def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
+    """같은 매수일에 여러 포지션이 있으면 하나만 유지 (하루 1매수 원칙). 스냅샷에 있으면 그 값 사용."""
+    from collections import defaultdict
+    by_date = defaultdict(list)
+    for idx, pos in enumerate(trader.positions):
+        buy_date = pos.get('buy_date')
+        if buy_date is None:
+            continue
+        date_str = buy_date.strftime('%Y-%m-%d') if hasattr(buy_date, 'strftime') else str(buy_date)
+        by_date[date_str].append((idx, pos))
+    
+    to_remove = []
+    for date_str, group in by_date.items():
+        if len(group) <= 1:
+            continue
+        group.sort(key=lambda x: x[1]['round'])
+        keep_idx, keep_pos = group[0]
+        snap_key = f"{keep_pos['round']}_{date_str}"
+        saved = snapshot.get(snap_key)
+        if not saved:
+            for sk, sv in snapshot.items():
+                if sk.endswith(f"_{date_str}"):
+                    saved = sv
+                    break
+        if saved:
+            keep_pos['shares'] = int(saved['shares'])
+            keep_pos['buy_price'] = float(saved['buy_price'])
+            keep_pos['amount'] = keep_pos['shares'] * keep_pos['buy_price']
+            if 'round' in saved:
+                keep_pos['round'] = int(saved['round'])
+        for idx, _ in group[1:]:
+            to_remove.append(idx)
+    
+    for idx in sorted(to_remove, reverse=True):
+        trader.positions.pop(idx)
+
 # 세션 상태 초기화
 if 'trader' not in st.session_state:
     st.session_state.trader = None
@@ -931,6 +967,9 @@ def show_daily_recommendation():
                     )
                     if 'round' in saved:
                         pos['round'] = int(saved['round'])
+        
+        # 같은 날짜 포지션 중복 제거 (3/12 등 중복 표시 버그 대응)
+        _deduplicate_positions_by_date(st.session_state.trader, snapshot or {})
         
         # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
