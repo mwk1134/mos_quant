@@ -334,6 +334,22 @@ if 'position_edits' not in st.session_state:
     st.session_state.position_edits = {}  # {position_index: {'shares': int, 'buy_price': float}}
 if 'positions_snapshot' not in st.session_state:
     st.session_state.positions_snapshot = {}
+if 'sf_config' not in st.session_state:
+    st.session_state.sf_config = {
+        "buy_threshold": 3.5,
+        "sell_threshold": 1.1,
+        "max_hold_days": 35,
+        "split_count": 7,
+        "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
+    }
+if 'ag_config' not in st.session_state:
+    st.session_state.ag_config = {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 7,
+        "split_count": 8,
+        "split_ratios": [0.062, 0.134, 0.118, 0.148, 0.150, 0.182, 0.186, 0.020]
+    }
 if 'active_preset' not in st.session_state:
     st.session_state.active_preset = None
 if 'kmw_preset' not in st.session_state:
@@ -898,13 +914,23 @@ def show_daily_recommendation():
             for pos_idx, pos in enumerate(st.session_state.trader.positions):
                 buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
                 snap_key = f"{pos['round']}_{buy_date_str}"
+                saved = None
                 if snap_key in snapshot:
                     saved = snapshot[snap_key]
+                else:
+                    # round 불일치 시 날짜로 매칭 (스냅샷의 round/shares/buy_price 사용)
+                    for sk, sv in snapshot.items():
+                        if sk.endswith(f"_{buy_date_str}"):
+                            saved = sv
+                            break
+                if saved:
                     st.session_state.trader.update_position(
                         pos_idx,
                         int(saved['shares']),
                         float(saved['buy_price'])
                     )
+                    if 'round' in saved:
+                        pos['round'] = int(saved['round'])
         # 같은 매수일 중복 포지션 병합 (스냅샷에 해당 키 있으면 스냅샷 값 유지)
         st.session_state.trader.merge_duplicate_positions_by_date(snapshot or {})
         
