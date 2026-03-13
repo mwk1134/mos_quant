@@ -249,6 +249,11 @@ def _gh_save_all_snapshots(data: dict, sha: str = None) -> tuple:
         return False, "GITHUB_TOKEN이 설정되지 않았습니다. Streamlit Secrets에 추가해주세요."
     try:
         url = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_SNAPSHOT_PATH}"
+        # sha가 없으면 GET으로 현재 파일 정보 조회 (업데이트 시 필수)
+        if not sha:
+            get_resp = _requests.get(url, headers=headers, timeout=10)
+            if get_resp.status_code == 200:
+                sha = get_resp.json().get("sha")
         content_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         body = {
             "message": f"snapshot update {datetime.now().strftime('%Y-%m-%d %H:%M')}",
