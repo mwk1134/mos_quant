@@ -1932,13 +1932,15 @@ class SOXLQuantTrader:
         
         return True
     
-    def merge_duplicate_positions_by_date(self) -> int:
+    def merge_duplicate_positions_by_date(self, snapshot: Optional[dict] = None) -> int:
         """
         같은 매수일에 여러 포지션이 있으면 하나로 병합 (하루 1매수 원칙)
+        snapshot: 스냅샷이 있으면 병합 시 해당 키의 값 사용 (잘못된 합산 방지)
         Returns:
             int: 병합된 포지션 수 (0이면 병합 없음)
         """
         from collections import defaultdict
+        snapshot = snapshot or {}
         by_date = defaultdict(list)
         for idx, pos in enumerate(self.positions):
             buy_date = pos.get('buy_date')
@@ -1956,25 +1958,31 @@ class SOXLQuantTrader:
         for date_str, group in by_date.items():
             if len(group) <= 1:
                 continue
-            # 같은 날짜 포지션들: 회차 낮은 순 정렬, 첫 번째(정당한 매수 회차) 유지, 나머지 병합 후 제거
-            # 하루 1매수 원칙상 당일 매수는 하나뿐 → 낮은 회차가 올바른 회차
+            # 같은 날짜 포지션들: 회차 낮은 순 정렬, 첫 번째(정당한 매수 회차) 유지, 나머지 제거
             group.sort(key=lambda x: x[1]['round'])
             keep_idx, keep_pos = group[0]
-            total_shares = keep_pos['shares']
-            total_amount = keep_pos['amount']
-            for idx, pos in group[1:]:
-                total_shares += pos['shares']
-                total_amount += pos['amount']
-            # 가중평균 매수가
-            new_buy_price = total_amount / total_shares if total_shares > 0 else keep_pos['buy_price']
-            keep_pos['shares'] = int(total_shares)
-            keep_pos['amount'] = total_amount
-            keep_pos['buy_price'] = round(new_buy_price, 2)
+            snap_key = f"{keep_pos['round']}_{date_str}"
+            # 스냅샷에 해당 키 있으면 스냅샷 값 사용 (합산 X)
+            if snap_key in snapshot:
+                saved = snapshot[snap_key]
+                keep_pos['shares'] = int(saved['shares'])
+                keep_pos['buy_price'] = float(saved['buy_price'])
+                keep_pos['amount'] = keep_pos['shares'] * keep_pos['buy_price']
+            else:
+                total_shares = keep_pos['shares']
+                total_amount = keep_pos['amount']
+                for idx, pos in group[1:]:
+                    total_shares += pos['shares']
+                    total_amount += pos['amount']
+                new_buy_price = total_amount / total_shares if total_shares > 0 else keep_pos['buy_price']
+                keep_pos['shares'] = int(total_shares)
+                keep_pos['amount'] = total_amount
+                keep_pos['buy_price'] = round(new_buy_price, 2)
             # 나머지 포지션 제거 (역순으로 제거하여 인덱스 유지)
             for idx, _ in sorted(group[1:], key=lambda x: -x[0]):
                 self.positions.pop(idx)
                 merged_count += 1
-            print(f"🔧 같은 날짜({date_str}) 포지션 병합: {len(group)}개 → 1개 (총 {total_shares}주)")
+            print(f"🔧 같은 날짜({date_str}) 포지션 병합: {len(group)}개 → 1개 (총 {keep_pos['shares']}주)")
         return merged_count
     
     def get_daily_recommendation(self, skip_simulate: bool = False) -> Dict:

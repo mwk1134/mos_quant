@@ -265,12 +265,40 @@ def _gh_save_all_snapshots(data: dict, sha: str = None) -> tuple:
     except Exception as e:
         return False, str(e)
 
+def _load_snapshot_fallback(preset_name: str) -> dict:
+    """GitHub 실패 시 raw URL 또는 로컬 파일에서 로드"""
+    try:
+        # raw URL (인증 불필요)
+        url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_GH_SNAPSHOT_PATH}"
+        resp = _requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = json.loads(resp.text)
+            return data.get(preset_name, {})
+    except Exception:
+        pass
+    try:
+        # 로컬 파일
+        path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get(preset_name, {})
+    except Exception:
+        pass
+    return {}
+
 def load_preset_snapshot(preset_name: str) -> dict:
-    """특정 프리셋의 스냅샷을 GitHub에서 로드"""
+    """특정 프리셋의 스냅샷을 GitHub에서 로드 (실패 시 raw/로컬 fallback)"""
     all_data, sha = _gh_load_all_snapshots()
     st.session_state._gh_snapshot_sha = sha
     st.session_state._gh_snapshot_all = all_data
-    return all_data.get(preset_name, {})
+    result = all_data.get(preset_name, {})
+    if not result:
+        result = _load_snapshot_fallback(preset_name)
+        if result:
+            all_data[preset_name] = result
+            st.session_state._gh_snapshot_all = all_data
+    return result
 
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
@@ -859,7 +887,7 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
-        # 시뮬레이션 후 포지션 스냅샷 복원 (Yahoo Finance 데이터 변동으로 인한 수량 차이 방지)
+        # 시뮬레이션 후 포지션 스냅샷 복원 - 스냅샷이 있으면 무조건 그 값 사용
         snapshot = st.session_state.get('positions_snapshot', {})
         if snapshot:
             for pos_idx, pos in enumerate(st.session_state.trader.positions):
@@ -867,14 +895,13 @@ def show_daily_recommendation():
                 snap_key = f"{pos['round']}_{buy_date_str}"
                 if snap_key in snapshot:
                     saved = snapshot[snap_key]
-                    if pos['shares'] != saved['shares'] or abs(pos['buy_price'] - saved['buy_price']) > 0.001:
-                        st.session_state.trader.update_position(
-                            pos_idx,
-                            saved['shares'],
-                            saved['buy_price']
-                        )
-        # 같은 매수일 중복 포지션 병합 (하루 1매수 원칙 - 5회차/6회차 동일일 중복 방지)
-        st.session_state.trader.merge_duplicate_positions_by_date()
+                    st.session_state.trader.update_position(
+                        pos_idx,
+                        int(saved['shares']),
+                        float(saved['buy_price'])
+                    )
+        # 같은 매수일 중복 포지션 병합 (스냅샷에 해당 키 있으면 스냅샷 값 유지)
+        st.session_state.trader.merge_duplicate_positions_by_date(snapshot or {})
         
         # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
