@@ -272,31 +272,13 @@ def load_preset_snapshot(preset_name: str) -> dict:
     st.session_state._gh_snapshot_all = all_data
     return all_data.get(preset_name, {})
 
-def _sanitize_snapshot_before_save(preset_name: str, snapshot: dict) -> dict:
-    """5회차(2.8% 비중) 등 비정상적으로 큰 수량 보정 - 잘못된 병합/덮어쓰기 방지"""
-    # 5_2026-03-12: 2.8% 비중 → 수량은 보통 50주 이하. 초과 시 상한 적용
-    SANITY_LIMITS = {
-        ("KMW", "5_2026-03-12"): 50,
-        ("JEH", "5_2026-03-12"): 30,
-        ("JSD", "5_2026-03-12"): 30,
-        ("JEH2", "5_2026-03-12"): 10,
-    }
-    import copy
-    out = copy.deepcopy(snapshot)
-    for (preset, key), max_shares in SANITY_LIMITS.items():
-        if preset == preset_name and key in out and out[key].get("shares", 0) > max_shares:
-            out[key]["shares"] = max_shares
-            out[key]["amount"] = round(out[key]["shares"] * out[key]["buy_price"], 2)
-    return out
-
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
     all_data = getattr(st.session_state, '_gh_snapshot_all', None)
     sha = getattr(st.session_state, '_gh_snapshot_sha', None)
     if all_data is None:
         all_data, sha = _gh_load_all_snapshots()
-    sanitized = _sanitize_snapshot_before_save(preset_name, snapshot)
-    all_data[preset_name] = sanitized
+    all_data[preset_name] = snapshot
     ok, err = _gh_save_all_snapshots(all_data, sha)
     if ok:
         _, new_sha = _gh_load_all_snapshots()
@@ -851,6 +833,10 @@ def show_daily_recommendation():
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
         return
+    
+    # 매 실행 시 GitHub에서 스냅샷 최신 로드 (재실행/새로고침 시 수량 누적 방지)
+    if st.session_state.get('active_preset'):
+        st.session_state.positions_snapshot = load_preset_snapshot(st.session_state.active_preset)
     
     # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
     # 테스트 날짜 오버라이드 고려
