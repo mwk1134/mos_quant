@@ -182,8 +182,8 @@ def run_all_etf_backtest():
         print(f"\n파라미터 로드 실패: {e}")
         return
 
-    initial_capital = 40000
-    start_date = "2011-01-01"
+    initial_capital = 40000   
+    start_date = "2025-01-01"
     end_date = datetime.now().strftime("%Y-%m-%d")
     total = len(ETF_LIST)
 
