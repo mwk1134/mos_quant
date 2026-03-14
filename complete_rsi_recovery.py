@@ -27,7 +27,7 @@ def build_complete_rsi_json():
     symbol = "QQQ"
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
     headers = {'User-Agent': 'Mozilla/5.0'}
-    params = {'range': '5y', 'interval': '1d'}
+    params = {'range': '15y', 'interval': '1d'}
     
     print(f"[INFO] {symbol} 데이터 다운로드 중...")
     response = requests.get(url, headers=headers, params=params, timeout=15)

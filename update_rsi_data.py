@@ -247,9 +247,9 @@ class RSIDataUpdater:
             elif days_diff <= 730:
                 period = "2y"
             elif days_diff <= 1825:  # 5년
-                period = "5y"
+                period = "15y"  # 15년으로 통일 (정확한 RSI)
             elif days_diff <= 3650:  # 10년
-                period = "10y"
+                period = "15y"  # 15년으로 통일
             else:
                 period = "15y"  # 15년 (2010년부터 현재까지 약 15년)
             

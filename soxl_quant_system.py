@@ -285,9 +285,9 @@ class SOXLQuantTrader:
             today = datetime.now()
             current_year = today.strftime('%Y')
             
-            # QQQ 데이터 가져오기 (5년 - 정확한 RSI 계산을 위해 충분한 기간)
-            print("[INFO] QQQ 데이터 가져오는 중 (5y)...")
-            qqq_data = self.get_stock_data("QQQ", "5y")
+            # QQQ 데이터 가져오기 (15년 - update_rsi_data.py와 동일한 기간으로 정확한 RSI 계산)
+            print("[INFO] QQQ 데이터 가져오는 중 (15y)...")
+            qqq_data = self.get_stock_data("QQQ", "15y")
             if qqq_data is None:
                 print("[ERROR] QQQ 데이터를 가져올 수 없습니다.")
                 return False
@@ -335,12 +335,7 @@ class SOXLQuantTrader:
                         week_exists = False
                         for j, existing_week in enumerate(existing_data[current_year]['weeks']):
                             if existing_week['week'] == week_num:
-                                # 기존 데이터가 있고 rsi 값이 이미 설정되어 있으면 업데이트 건너뜀 (수동 입력 데이터 보호)
-                                if 'rsi' in existing_week and existing_week['rsi'] is not None:
-                                    week_exists = True
-                                    break
-                                
-                                # 기존 데이터 업데이트 (rsi가 없는 경우만)
+                                # 기존 데이터 업데이트 (항상 최신 계산값으로 덮어씀 - 정확한 RSI 유지)
                                 existing_data[current_year]['weeks'][j] = {
                                     "start": week_start.strftime('%Y-%m-%d'),
                                     "end": week_end.strftime('%Y-%m-%d'),
@@ -935,7 +930,7 @@ class SOXLQuantTrader:
 
     def calculate_weekly_rsi_for_dates(self, target_fridays: list, window: int = 14) -> dict:
         """
-        특정 금요일 날짜들에 대한 정확한 주간 RSI를 실시간 계산 (5년 데이터 기반)
+        특정 금요일 날짜들에 대한 정확한 주간 RSI를 실시간 계산 (15년 데이터 기반)
         참조 데이터에 없을 때 폴백으로 사용
         Args:
             target_fridays: RSI를 계산할 금요일 날짜 리스트 (datetime)
@@ -944,12 +939,12 @@ class SOXLQuantTrader:
             dict: {날짜문자열: RSI값} 딕셔너리
         """
         try:
-            print(f"📊 RSI 실시간 계산 시작 (5y 데이터 기반, 대상: {len(target_fridays)}개 주차)")
+            print(f"📊 RSI 실시간 계산 시작 (15y 데이터 기반, 대상: {len(target_fridays)}개 주차)")
             
-            # 5년치 QQQ 데이터 가져오기 (정확한 RSI 계산을 위해 충분한 기간)
-            qqq_long = self.get_stock_data("QQQ", "5y")
+            # 15년치 QQQ 데이터 가져오기 (update_rsi_data.py와 동일 - 정확한 RSI 계산)
+            qqq_long = self.get_stock_data("QQQ", "15y")
             if qqq_long is None:
-                print("❌ QQQ 5년 데이터를 가져올 수 없습니다.")
+                print("❌ QQQ 15년 데이터를 가져올 수 없습니다.")
                 return {}
             
             # 주간 데이터로 변환 (금요일 기준)
@@ -1387,9 +1382,9 @@ class SOXLQuantTrader:
             one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
             two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
             
-            # 참조 데이터에 없으면 5년치 데이터로 정확한 RSI 실시간 계산
+            # 참조 데이터에 없으면 15년치 데이터로 정확한 RSI 실시간 계산
             if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
-                print(f"⚠️ [update_mode] RSI 참조 데이터 부재 → 5년 데이터 기반 실시간 계산 진행")
+                print(f"⚠️ [update_mode] RSI 참조 데이터 부재 → 15년 데이터 기반 실시간 계산 진행")
                 target_fridays = []
                 if one_week_ago_rsi is None:
                     target_fridays.append(one_week_ago_friday)
@@ -2487,9 +2482,9 @@ class SOXLQuantTrader:
         one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
         two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
         
-        # 참조 데이터에 없으면 5년치 데이터로 정확한 RSI 실시간 계산
+        # 참조 데이터에 없으면 15년치 데이터로 정확한 RSI 실시간 계산
         if one_week_ago_rsi is None or two_weeks_ago_rsi is None:
-            print(f"⚠️ RSI 참조 데이터 부재 → 5년 데이터 기반 실시간 계산 진행")
+            print(f"⚠️ RSI 참조 데이터 부재 → 15년 데이터 기반 실시간 계산 진행")
             target_fridays = []
             if one_week_ago_rsi is None:
                 target_fridays.append(one_week_ago_friday)
@@ -2949,10 +2944,10 @@ class SOXLQuantTrader:
             period = "2y"
 
         elif period_days <= 1825:  # 5년
-            period = "5y"
+            period = "15y"  # 15년으로 통일 (정확한 RSI/데이터)
 
         elif period_days <= 3650:  # 10년
-            period = "10y"
+            period = "15y"  # 15년으로 통일
         else:
             period = "15y"  # 15년 (SOXL은 2010년 출시)
             
