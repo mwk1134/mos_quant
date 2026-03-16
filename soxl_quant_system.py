@@ -662,6 +662,25 @@ class SOXLQuantTrader:
                 snapshot_max_date=max_snap_date,
             )
 
+        # 스냅샷 이후 구간에 데이터가 없으면(예: 2026년 테스트 데이터 vs 2025년 실제 데이터) 스냅샷만 적용
+        if result and "error" in result and "해당 기간에 대한 데이터가 없습니다" in result.get("error", ""):
+            self.positions = positions
+            self.available_cash = available_cash
+            self.current_round = max(p.get("round", 0) for p in positions) + 1
+            self.current_investment_capital = self.initial_capital
+            for si in self.seed_increases:
+                try:
+                    sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
+                    if sd <= max_dt:
+                        self.current_investment_capital += float(si.get("amount", 0))
+                except Exception:
+                    pass
+            self.processed_seed_dates = {si["date"] for si in self.seed_increases
+                                         if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
+            self.trading_days_count = 0
+            self.current_week_friday = None
+            return {"from_snapshot": True, "max_snap_date": max_snap_date, "no_data_fallback": True}
+
         cached = {
             "positions": self.positions.copy(),
             "available_cash": self.available_cash,
