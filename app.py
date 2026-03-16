@@ -944,7 +944,10 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
-        # 시뮬레이션 후 포지션 스냅샷 복원 - 스냅샷이 있으면 무조건 그 값 사용
+        # 시뮬레이션 후 포지션 스냅샷 복원
+        # [참고] 시뮬레이션은 스냅샷을 모르고 시작일부터 처음부터 실행됩니다.
+        # RSI/종가 기반으로 매매를 시뮬레이션하므로, 사용자 실제 포지션과 다른
+        # 8회차 등 스냅샷에 없는 포지션이 생성될 수 있습니다. 아래에서 스냅샷 기준으로 보정합니다.
         snapshot = st.session_state.get('positions_snapshot', {})
         if snapshot:
             snapshot_dates = [sk.split('_', 1)[1] for sk in snapshot.keys() if '_' in sk]
@@ -967,16 +970,43 @@ def show_daily_recommendation():
                         pos['round'] = int(saved['round'])
                     positions_to_keep.append(pos)
                 elif buy_date_str > max_snap_date:
-                    # 스냅샷 최신일 이후 매수(사용자 실제 체결)는 유지
+                    # 스냅샷 최신일 이후 매수: 별도 리스트에 보관 (매수추천 수량 보정 후 추가)
                     positions_to_keep.append(pos)
-            if positions_to_keep:
-                st.session_state.trader.positions = positions_to_keep
+            
+            # 스냅샷 포지션만 먼저 적용 → recommendation 생성 → 새 포지션에 매수추천 수량 적용
+            snapshot_only = [p for p in positions_to_keep if p.get('buy_date') and (p['buy_date'].strftime('%Y-%m-%d') if hasattr(p['buy_date'], 'strftime') else str(p['buy_date'])) <= max_snap_date]
+            new_positions = [p for p in positions_to_keep if p.get('buy_date') and (p['buy_date'].strftime('%Y-%m-%d') if hasattr(p['buy_date'], 'strftime') else str(p['buy_date'])) > max_snap_date]
+            
+            st.session_state.trader.positions = snapshot_only
+            if st.session_state.trader.positions:
+                max_round = max(p.get('round', 0) for p in st.session_state.trader.positions)
+                st.session_state.trader.current_round = max_round + 1
+            
+            # 스냅샷만 적용된 상태에서 recommendation 생성 (next_buy_amount가 해당 회차 금액)
+            _rec = st.session_state.trader.get_daily_recommendation(skip_simulate=True)
+            next_round = _rec.get('next_buy_round') if "error" not in _rec else None
+            next_amount = _rec.get('next_buy_amount', 0) if "error" not in _rec else 0
+            
+            for np in new_positions:
+                buy_date_str = np['buy_date'].strftime('%Y-%m-%d') if isinstance(np['buy_date'], (datetime, pd.Timestamp)) else str(np['buy_date'])
+                if next_round == np['round'] and next_amount > 0 and np['buy_price'] > 0:
+                    rec_shares = max(1, int(next_amount / np['buy_price']))
+                    np['shares'] = rec_shares
+                    np['amount'] = rec_shares * np['buy_price']
+                else:
+                    try:
+                        rec_amt = st.session_state.trader.calculate_position_size(np['round'])
+                        rec_shares = max(1, int(rec_amt / np['buy_price']))
+                        np['shares'] = rec_shares
+                        np['amount'] = rec_shares * np['buy_price']
+                    except Exception:
+                        pass
+                st.session_state.trader.positions.append(np)
         
         # 같은 날짜 포지션 중복 제거 (3/12 등 중복 표시 버그 대응)
         _deduplicate_positions_by_date(st.session_state.trader, snapshot or {})
         
-        # [수정] 스냅샷 적용 후 current_round 재계산 - 시뮬레이션이 생성한 초과 포지션으로 인해
-        # "모든 분할매수 완료" 오판 방지 (예: KMW 7분할에서 6개 보유 시 7회차 매수추천 표시)
+        # [수정] 스냅샷 적용 후 current_round 재계산
         if st.session_state.trader.positions:
             max_round = max(p.get('round', 0) for p in st.session_state.trader.positions)
             st.session_state.trader.current_round = max_round + 1
