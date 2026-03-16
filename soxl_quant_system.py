@@ -534,6 +534,143 @@ class SOXLQuantTrader:
         """특정 날짜의 시드증액 목록 반환"""
         return [si for si in self.seed_increases if si["date"] == date]
 
+    def _get_next_trading_day(self, date_str: str) -> str:
+        """주어진 날짜의 다음 거래일 반환"""
+        dt = datetime.strptime(date_str, "%Y-%m-%d").date()
+        for _ in range(14):  # 최대 2주 탐색
+            dt += timedelta(days=1)
+            if not self.is_market_closed(datetime(dt.year, dt.month, dt.day)):
+                return dt.strftime("%Y-%m-%d")
+        return date_str
+
+    def _snapshot_to_positions_and_state(self, snapshot: dict) -> Tuple[List[dict], str, float]:
+        """
+        스냅샷을 포지션 리스트와 초기 상태로 변환.
+        Returns: (positions, max_snap_date, available_cash)
+        """
+        if not snapshot:
+            return [], "", self.initial_capital
+        dates = [k.split("_", 1)[1] for k in snapshot.keys() if "_" in k and len(k.split("_", 1)) == 2]
+        if not dates:
+            return [], "", self.initial_capital
+        max_snap_date = max(dates)
+        positions = []
+        total_invested = 0.0
+        for key, val in snapshot.items():
+            if "_" not in key:
+                continue
+            parts = key.split("_", 1)
+            if len(parts) != 2:
+                continue
+            date_str = parts[1]
+            try:
+                buy_dt = datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                continue
+            shares = int(val.get("shares", 0))
+            buy_price = float(val.get("buy_price", 0))
+            amount = float(val.get("amount", shares * buy_price))
+            round_num = int(val.get("round", 0))
+            total_invested += amount
+            positions.append({
+                "round": round_num,
+                "buy_date": buy_dt,
+                "buy_price": buy_price,
+                "shares": shares,
+                "amount": amount,
+            })
+        if not positions:
+            return [], max_snap_date, self.initial_capital
+        # 스냅샷 최신일 이전 시드증액 반영
+        seed_before = 0.0
+        max_dt = datetime.strptime(max_snap_date, "%Y-%m-%d").date()
+        for si in self.seed_increases:
+            try:
+                sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
+                if sd <= max_dt:
+                    seed_before += float(si.get("amount", 0))
+            except Exception:
+                pass
+        available_cash = self.initial_capital + seed_before - total_invested
+        available_cash = max(0.0, available_cash)
+        return positions, max_snap_date, available_cash
+
+    def simulate_from_snapshot_to_today(self, snapshot: dict, original_start_date: str, quiet: bool = True) -> Dict:
+        """
+        스냅샷을 기반으로 스냅샷 최신일 이후만 시뮬레이션. 스냅샷에 없는 회차는 생성되지 않음.
+        """
+        positions, max_snap_date, available_cash = self._snapshot_to_positions_and_state(snapshot)
+        if not positions:
+            return self.simulate_from_start_to_today(original_start_date, quiet)
+
+        latest_trading_day = self.get_latest_trading_day().date()
+        max_dt = datetime.strptime(max_snap_date, "%Y-%m-%d").date()
+        if max_dt >= latest_trading_day:
+            # 스냅샷이 이미 최신이면 시뮬레이션 없이 스냅샷만 적용
+            self.positions = positions
+            self.available_cash = available_cash
+            self.current_round = max(p.get("round", 0) for p in positions) + 1
+            self.current_investment_capital = self.initial_capital
+            for si in self.seed_increases:
+                try:
+                    sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
+                    if sd <= max_dt:
+                        self.current_investment_capital += float(si.get("amount", 0))
+                except Exception:
+                    pass
+            self.processed_seed_dates = {si["date"] for si in self.seed_increases
+                                         if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
+            self.trading_days_count = 0
+            self.current_week_friday = None
+            return {"from_snapshot": True, "max_snap_date": max_snap_date}
+
+        start_after_snap = self._get_next_trading_day(max_snap_date)
+        cache_key = f"snap_{max_snap_date}_{self.initial_capital}_{self.test_today_override or 'real'}"
+        if cache_key in self._simulation_cache:
+            cached, cache_time = self._simulation_cache[cache_key]
+            if (datetime.now() - cache_time).seconds < 30:
+                if not quiet:
+                    print(f"⚡ 스냅샷 기반 시뮬레이션 캐시 사용 ({max_snap_date})")
+                self.positions = cached.get("positions", [])
+                self.available_cash = cached.get("available_cash", self.initial_capital)
+                self.current_round = cached.get("current_round", 1)
+                return cached.get("result", {})
+
+        latest_seed_date = None
+        if self.seed_increases:
+            seed_dates = [datetime.strptime(si["date"], "%Y-%m-%d").date() for si in self.seed_increases]
+            latest_seed_date = max(seed_dates)
+        if latest_seed_date and latest_seed_date > latest_trading_day:
+            end_date_str = latest_seed_date.strftime("%Y-%m-%d")
+        else:
+            end_date_str = latest_trading_day.strftime("%Y-%m-%d")
+
+        if quiet:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = self.run_backtest(
+                    start_after_snap, end_date_str,
+                    initial_positions=positions,
+                    initial_cash=available_cash,
+                    snapshot_max_date=max_snap_date,
+                )
+        else:
+            result = self.run_backtest(
+                start_after_snap, end_date_str,
+                initial_positions=positions,
+                initial_cash=available_cash,
+                snapshot_max_date=max_snap_date,
+            )
+
+        cached = {
+            "positions": self.positions.copy(),
+            "available_cash": self.available_cash,
+            "current_round": self.current_round,
+            "result": result,
+        }
+        self._simulation_cache[cache_key] = (cached, datetime.now())
+        return result
+
     def simulate_from_start_to_today(self, start_date: str, quiet: bool = True) -> Dict:
         """
         시작일부터 최근 거래일까지 시뮬레이션 수행하여 현재 포지션 상태를 맞춘다.
@@ -2873,16 +3010,28 @@ class SOXLQuantTrader:
                 "two_weeks_ago_rsi": None
             }
     
-    def run_backtest(self, start_date: str, end_date: str = None) -> Dict:
+    def run_backtest(
+        self,
+        start_date: str,
+        end_date: str = None,
+        initial_positions: List[dict] = None,
+        initial_cash: float = None,
+        snapshot_max_date: str = None,
+    ) -> Dict:
         """
         백테스팅 실행
         Args:
             start_date: 시작 날짜 (YYYY-MM-DD 형식)
             end_date: 종료 날짜 (None이면 오늘까지)
+            initial_positions: 스냅샷 기반 시 초기 포지션 (스냅샷에 없는 회차 생성 방지)
+            initial_cash: 스냅샷 기반 시 초기 현금잔고
+            snapshot_max_date: 스냅샷 최신일 (시드증액 처리용)
         Returns:
             Dict: 백테스팅 결과
         """
-        print(f"🔄 백테스팅 시작: {start_date} ~ {end_date or '오늘'}")
+        from_snapshot = bool(initial_positions is not None and initial_cash is not None and snapshot_max_date)
+
+        print(f"🔄 백테스팅 시작: {start_date} ~ {end_date or '오늘'}" + (" (스냅샷 기반)" if from_snapshot else ""))
         
         # 로그 저장용 리스트 초기화
         self.backtest_logs = []
@@ -2891,8 +3040,26 @@ class SOXLQuantTrader:
         # RSI 참조 데이터 로드
         rsi_ref_data = self.load_rsi_reference_data()
         
-        # 포트폴리오 초기화
-        self.reset_portfolio()
+        if from_snapshot:
+            # 스냅샷 기반: reset 없이 초기 상태 로드 (스냅샷에 없는 회차는 생성되지 않음)
+            self.positions = list(initial_positions)
+            self.available_cash = float(initial_cash)
+            self.current_round = max((p.get("round", 0) for p in initial_positions), default=0) + 1
+            self.current_investment_capital = self.initial_capital
+            max_dt = datetime.strptime(snapshot_max_date, "%Y-%m-%d").date()
+            for si in self.seed_increases:
+                try:
+                    sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
+                    if sd <= max_dt:
+                        self.current_investment_capital += float(si.get("amount", 0))
+                except Exception:
+                    pass
+            self.processed_seed_dates = {si["date"] for si in self.seed_increases
+                                         if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
+            self.trading_days_count = 0
+            self.current_week_friday = None
+        else:
+            self.reset_portfolio()
 
         
         # 백테스팅 시작 상태 확인
@@ -2902,9 +3069,10 @@ class SOXLQuantTrader:
         if "error" in starting_state:
             return {"error": starting_state["error"]}
         
-        # 시작 모드와 회차 설정
+        # 시작 모드와 회차 설정 (스냅샷 기반이면 회차는 이미 설정됨)
         self.current_mode = starting_state["start_mode"]
-        self.current_round = starting_state["start_round"]
+        if not from_snapshot:
+            self.current_round = starting_state["start_round"]
         
         print(f"🎯 백테스팅 시작 설정:")
         print(f"   - 모드: {self.current_mode}")
@@ -3006,8 +3174,8 @@ class SOXLQuantTrader:
         current_mode = starting_state["start_mode"]  # 시작 모드
         current_week = 0  # 현재 주차 (첫 번째 주차 처리 후 1이 됨)
         total_realized_pnl = 0  # 누적 실현손익
-        total_invested = 0  # 총 투자금
-        cash_balance = self.initial_capital  # 현금 잔고
+        total_invested = sum(p.get("amount", 0) for p in self.positions) if from_snapshot else 0  # 총 투자금
+        cash_balance = self.available_cash if from_snapshot else self.initial_capital  # 현금 잔고
         
         print(f"📊 총 {len(soxl_backtest)}일 백테스팅 진행...")
         
@@ -3405,13 +3573,14 @@ class SOXLQuantTrader:
                     print(f"🔄 매도 발생: {len(sold_rounds)}건 매도 → 매수 회차는 매도 전 기준 유지: {self.current_round}회차")
                 
                 # 매수 조건 확인 및 실행
+                # 스냅샷 기반 시: 사용자 실제 포지션만 사용하므로 새 매수 추가 안 함 (매도만 처리)
                 buy_executed = False
                 buy_price_executed = 0
                 buy_quantity = 0
                 buy_amount = 0
                 current_round_before_buy = self.current_round  # 매수 전 회차 저장
                 
-                if self.can_buy_next_round():
+                if not from_snapshot and self.can_buy_next_round():
                     # LOC 매수 조건: 매수가가 종가보다 유리할 때 (매수가 > 종가)
                     daily_close = row['Close']
                     
@@ -3488,8 +3657,12 @@ class SOXLQuantTrader:
                     self.backtest_logs.append(nobuy_msg)
                 
                 # 일일 처리 완료 후 다음 날을 위한 current_round 재계산
-                # (매수/매도 모두 완료된 후의 보유 포지션 수 기준)
-                self.current_round = len(self.positions) + 1
+                # 스냅샷 기반: max(회차)+1 (비연속 회차 1,2,4,5,6 등 대응)
+                # 일반: len(positions)+1 (연속 매수 가정)
+                if from_snapshot and self.positions:
+                    self.current_round = max(p.get("round", 0) for p in self.positions) + 1
+                else:
+                    self.current_round = len(self.positions) + 1
                 if sold_rounds:
                     print(f"🔄 일일 처리 완료 (매도 {len(sold_rounds)}건): 보유 {len(self.positions)}개 → 다음 날 매수 회차: {self.current_round}")
                 
@@ -3625,10 +3798,13 @@ class SOXLQuantTrader:
         # 최종 결과 계산
         
         # 백테스팅 완료 후 current_round를 올바르게 설정
-        # 보유 중인 회차 수 + 1 = 다음 매수 회차
-        holding_rounds = len(self.positions)
-        self.current_round = holding_rounds + 1
-        print(f"🔄 백테스팅 완료 후 current_round 설정: 보유 {holding_rounds}개 → 다음 매수 {self.current_round}회차")
+        # 스냅샷 기반: max(회차)+1 (비연속 회차 대응), 일반: len+1
+        if from_snapshot and self.positions:
+            self.current_round = max(p.get("round", 0) for p in self.positions) + 1
+        else:
+            holding_rounds = len(self.positions)
+            self.current_round = holding_rounds + 1
+        print(f"🔄 백테스팅 완료 후 current_round 설정: 보유 {len(self.positions)}개 → 다음 매수 {self.current_round}회차")
 
         final_value = daily_records[-1]["total_assets"] if daily_records else self.initial_capital
         total_return = ((final_value - self.initial_capital) / self.initial_capital) * 100
