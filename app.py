@@ -957,7 +957,7 @@ def show_daily_recommendation():
         if snapshot:
             snapshot_dates = [sk.split('_', 1)[1] for sk in snapshot.keys() if '_' in sk]
             max_snap_date = max(snapshot_dates) if snapshot_dates else ""
-            _rec = st.session_state.trader.get_daily_recommendation(skip_simulate=True)
+            _rec = st.session_state.trader.get_daily_recommendation(skip_simulate=True, preserve_snapshot_shares=True)
             next_round = _rec.get('next_buy_round') if "error" not in _rec else None
             next_amount = _rec.get('next_buy_amount', 0) if "error" not in _rec else 0
             for pos in st.session_state.trader.positions:
@@ -1011,7 +1011,10 @@ def show_daily_recommendation():
                             break
         
         # 일일 추천 생성 (이미 simulate+스냅샷복원+병합 완료했으므로 skip_simulate=True)
-        recommendation = st.session_state.trader.get_daily_recommendation(skip_simulate=True)
+        # 스냅샷 있으면 preserve_snapshot_shares=True로 모드 재검증 시 수량 덮어쓰기 방지
+        recommendation = st.session_state.trader.get_daily_recommendation(
+            skip_simulate=True, preserve_snapshot_shares=bool(snapshot)
+        )
         
         # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
         current_snapshot = {}

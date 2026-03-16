@@ -578,6 +578,7 @@ class SOXLQuantTrader:
                 "buy_price": buy_price,
                 "shares": shares,
                 "amount": amount,
+                "mode": str(val.get("mode", "SF")),  # 매도조건 확인에 필요
             })
         if not positions:
             return [], max_snap_date, self.initial_capital
@@ -2083,11 +2084,12 @@ class SOXLQuantTrader:
         
         return True
     
-    def get_daily_recommendation(self, skip_simulate: bool = False) -> Dict:
+    def get_daily_recommendation(self, skip_simulate: bool = False, preserve_snapshot_shares: bool = False) -> Dict:
         """
         일일 매매 추천 생성
         Args:
             skip_simulate: True면 내부 시뮬레이션 생략 (앱에서 이미 simulate+스냅샷복원+병합 완료 시)
+            preserve_snapshot_shares: True면 포지션 모드 재검증 시 수량/금액 덮어쓰기 안 함 (스냅샷 수량 유지)
         Returns:
             Dict: 매매 추천 정보
         """
@@ -2263,57 +2265,62 @@ class SOXLQuantTrader:
                             print(f"   RSI 값: 1주전={one_week_ago_rsi:.2f}, 2주전={two_weeks_ago_rsi:.2f}")
                             print(f"🔧 포지션 모드 수정: {pos_key} = {current_stored_mode} → {correct_mode}")
                             
-                            # 모드 변경 시 수량과 금액도 재계산
-                            old_mode = current_stored_mode
-                            old_config = self.sf_config if old_mode == "SF" else self.ag_config
-                            new_config = self.sf_config if correct_mode == "SF" else self.ag_config
-                            
-                            # 매수일 시점의 투자원금 추정 (기존 금액과 split_ratios로 역산)
-                            old_round = pos['round']
-                            if old_round <= len(old_config["split_ratios"]):
-                                old_ratio = old_config["split_ratios"][old_round - 1]
-                                if old_ratio > 0:
-                                    estimated_investment_capital = pos['amount'] / old_ratio
-                                    
-                                    # 새로운 모드의 split_ratios로 재계산
-                                    if old_round <= len(new_config["split_ratios"]):
-                                        new_ratio = new_config["split_ratios"][old_round - 1]
-                                        new_target_amount = estimated_investment_capital * new_ratio
-                                        
-                                        # 수량과 금액 재계산
-                                        buy_price = pos['buy_price']
-                                        new_shares = int(new_target_amount / buy_price)
-                                        if new_shares > 0:
-                                            new_amount = new_shares * buy_price
-                                            
-                                            print(f"   수량/금액 재계산: {pos['shares']}주 @ ${pos['amount']:,.0f} → {new_shares}주 @ ${new_amount:,.0f}")
-                                            
-                                            # 예수금 차이 계산 (기존 금액에서 새 금액 차감)
-                                            amount_diff = pos['amount'] - new_amount
-                                            self.available_cash += amount_diff
-                                            
-                                            # 포지션 업데이트
-                                            pos['mode'] = correct_mode
-                                            pos['shares'] = new_shares
-                                            pos['amount'] = new_amount
-                                            
-                                            print(f"   예수금 조정: ${amount_diff:+,.0f} (총 예수금: ${self.available_cash:,.0f})")
-                                        else:
-                                            # 수량이 0이면 모드만 변경
-                                            pos['mode'] = correct_mode
-                                            print(f"   ⚠️ 수량이 0이므로 모드만 변경")
-                                    else:
-                                        # 새로운 모드의 회차가 범위를 벗어나면 모드만 변경
-                                        pos['mode'] = correct_mode
-                                        print(f"   ⚠️ 새로운 모드의 회차 범위를 벗어나므로 모드만 변경")
-                                else:
-                                    # 비율이 0이면 모드만 변경
-                                    pos['mode'] = correct_mode
-                                    print(f"   ⚠️ 기존 비율이 0이므로 모드만 변경")
-                            else:
-                                # 기존 회차가 범위를 벗어나면 모드만 변경
+                            # preserve_snapshot_shares면 수량/금액 덮어쓰기 안 함 (스냅샷 수량 유지)
+                            if preserve_snapshot_shares:
                                 pos['mode'] = correct_mode
-                                print(f"   ⚠️ 기존 회차가 범위를 벗어나므로 모드만 변경")
+                                print(f"   (스냅샷 수량 유지로 수량/금액 재계산 생략)")
+                            else:
+                                # 모드 변경 시 수량과 금액도 재계산
+                                old_mode = current_stored_mode
+                                old_config = self.sf_config if old_mode == "SF" else self.ag_config
+                                new_config = self.sf_config if correct_mode == "SF" else self.ag_config
+                                
+                                # 매수일 시점의 투자원금 추정 (기존 금액과 split_ratios로 역산)
+                                old_round = pos['round']
+                                if old_round <= len(old_config["split_ratios"]):
+                                    old_ratio = old_config["split_ratios"][old_round - 1]
+                                    if old_ratio > 0:
+                                        estimated_investment_capital = pos['amount'] / old_ratio
+                                        
+                                        # 새로운 모드의 split_ratios로 재계산
+                                        if old_round <= len(new_config["split_ratios"]):
+                                            new_ratio = new_config["split_ratios"][old_round - 1]
+                                            new_target_amount = estimated_investment_capital * new_ratio
+                                            
+                                            # 수량과 금액 재계산
+                                            buy_price = pos['buy_price']
+                                            new_shares = int(new_target_amount / buy_price)
+                                            if new_shares > 0:
+                                                new_amount = new_shares * buy_price
+                                                
+                                                print(f"   수량/금액 재계산: {pos['shares']}주 @ ${pos['amount']:,.0f} → {new_shares}주 @ ${new_amount:,.0f}")
+                                                
+                                                # 예수금 차이 계산 (기존 금액에서 새 금액 차감)
+                                                amount_diff = pos['amount'] - new_amount
+                                                self.available_cash += amount_diff
+                                                
+                                                # 포지션 업데이트
+                                                pos['mode'] = correct_mode
+                                                pos['shares'] = new_shares
+                                                pos['amount'] = new_amount
+                                                
+                                                print(f"   예수금 조정: ${amount_diff:+,.0f} (총 예수금: ${self.available_cash:,.0f})")
+                                            else:
+                                                # 수량이 0이면 모드만 변경
+                                                pos['mode'] = correct_mode
+                                                print(f"   ⚠️ 수량이 0이므로 모드만 변경")
+                                        else:
+                                            # 새로운 모드의 회차가 범위를 벗어나면 모드만 변경
+                                            pos['mode'] = correct_mode
+                                            print(f"   ⚠️ 새로운 모드의 회차 범위를 벗어나므로 모드만 변경")
+                                    else:
+                                        # 비율이 0이면 모드만 변경
+                                        pos['mode'] = correct_mode
+                                        print(f"   ⚠️ 기존 비율이 0이므로 모드만 변경")
+                                else:
+                                    # 기존 회차가 범위를 벗어나면 모드만 변경 (old_round > len(old_config))
+                                    pos['mode'] = correct_mode
+                                    print(f"   ⚠️ 기존 회차가 범위를 벗어나므로 모드만 변경")
         
         # 3-1. 12/29일 매수 포지션 보정 (안전모드로 강제 변경 및 매수 금액 재계산)
         target_date = datetime(2025, 12, 29)
@@ -2369,13 +2376,16 @@ class SOXLQuantTrader:
                     
                     target_amount = investment_capital * ratio
                     
-                    # 매수 가격은 그대로 유지하고, 수량과 금액만 재계산
-                    buy_price = pos['buy_price']
-                    new_shares = int(target_amount / buy_price)
-                    if new_shares > 0:
-                        new_amount = new_shares * buy_price
-                        pos['shares'] = new_shares
-                        pos['amount'] = new_amount
+                    # 매수 가격은 그대로 유지하고, 수량과 금액만 재계산 (preserve_snapshot_shares면 생략)
+                    if not preserve_snapshot_shares:
+                        buy_price = pos['buy_price']
+                        new_shares = int(target_amount / buy_price)
+                        if new_shares > 0:
+                            new_amount = new_shares * buy_price
+                            pos['shares'] = new_shares
+                            pos['amount'] = new_amount
+                            pos['round'] = new_round
+                    else:
                         pos['round'] = new_round
                 
                 break  # 12/29일 포지션은 하나만 있을 것으로 예상
