@@ -293,7 +293,21 @@ def _load_snapshot_fallback(preset_name: str) -> dict:
     return {}
 
 def load_preset_snapshot(preset_name: str) -> dict:
-    """특정 프리셋의 스냅샷을 GitHub에서 로드 (실패 시 raw/로컬 fallback)"""
+    """특정 프리셋의 스냅샷 로드. 로컬 파일 우선(수량 정확도 보장), 없으면 GitHub/raw fallback"""
+    # 로컬 파일 우선: GitHub에 잘못 저장된 데이터가 있어도 로컬의 올바른 수량 사용
+    local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+    if local_path.exists():
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                local_data = json.load(f)
+            result = local_data.get(preset_name, {})
+            if result and isinstance(result, dict) and any("_" in k for k in result.keys()):
+                # 유효한 스냅샷 형식 (1_2026-02-26 등)
+                st.session_state._gh_snapshot_all = local_data
+                return result
+        except Exception:
+            pass
+    # 로컬 없거나 실패 시 GitHub → raw → 로컬 fallback
     all_data, sha = _gh_load_all_snapshots()
     st.session_state._gh_snapshot_sha = sha
     st.session_state._gh_snapshot_all = all_data
@@ -304,6 +318,14 @@ def load_preset_snapshot(preset_name: str) -> dict:
             all_data[preset_name] = result
             st.session_state._gh_snapshot_all = all_data
     return result
+
+def _is_market_trading_day() -> bool:
+    """미국 시장이 거래일인지 확인 (주말/휴장일이면 False). 스냅샷 저장 시 사용."""
+    trader = st.session_state.get('trader')
+    if not trader:
+        return False
+    et_now = trader.get_us_eastern_now()
+    return trader.is_trading_day(et_now)
 
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
@@ -923,9 +945,19 @@ def show_daily_recommendation():
         st.error("시스템이 초기화되지 않았습니다.")
         return
     
-    # 매 실행 시 GitHub에서 스냅샷 최신 로드 (재실행/새로고침 시 수량 누적 방지)
+    # 매 실행 시 스냅샷 로드 (로컬 우선 → GitHub fallback). preset 선택 시 수량 정확도 보장
     if st.session_state.get('active_preset'):
         st.session_state.positions_snapshot = load_preset_snapshot(st.session_state.active_preset)
+        # 이중 안전장치: 로드 결과가 비어있으면 로컬 파일에서 직접 로드
+        if not st.session_state.positions_snapshot:
+            try:
+                path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+                if path.exists():
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    st.session_state.positions_snapshot = data.get(st.session_state.active_preset, {})
+            except Exception:
+                pass
     
     # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
     # 테스트 날짜 오버라이드 고려
@@ -1045,9 +1077,9 @@ def show_daily_recommendation():
                 }
         st.session_state.positions_snapshot = current_snapshot
         
-        # 포지션이 있으면 GitHub에 영구 저장 (매 로드마다 동기화)
+        # 포지션이 있으면 GitHub에 영구 저장 (거래일일 때만 - 주말/휴장일에는 저장 안 함)
         st.session_state._gh_save_result = None
-        if current_snapshot and st.session_state.get('active_preset'):
+        if current_snapshot and st.session_state.get('active_preset') and _is_market_trading_day():
             ok, err = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
             st.session_state._gh_save_result = (ok, err)
     
@@ -1483,7 +1515,7 @@ def show_daily_recommendation():
                             }
                         st.session_state.positions_snapshot = current_snapshot
                         gh_ok = True
-                        if st.session_state.get('active_preset'):
+                        if st.session_state.get('active_preset') and _is_market_trading_day():
                             gh_ok, _ = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
                         
                         st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
