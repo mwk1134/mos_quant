@@ -970,6 +970,22 @@ def show_daily_recommendation():
         # 같은 날짜 포지션 중복 제거 (3/12 등 중복 표시 버그 대응)
         _deduplicate_positions_by_date(st.session_state.trader, snapshot or {})
         
+        # 스냅샷 수량을 포지션에 명시 적용 (매도추천 리스트 수량이 스냅샷과 일치하도록)
+        if snapshot:
+            for pos in st.session_state.trader.positions:
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                snap_key = f"{pos['round']}_{buy_date_str}"
+                saved = snapshot.get(snap_key)
+                if not saved:
+                    for sk, sv in snapshot.items():
+                        if sk.endswith(f"_{buy_date_str}"):
+                            saved = sv
+                            break
+                if saved:
+                    pos['shares'] = int(saved['shares'])
+                    pos['buy_price'] = float(saved['buy_price'])
+                    pos['amount'] = pos['shares'] * pos['buy_price']
+        
         # [수정] 스냅샷 적용 후 current_round 재계산
         if st.session_state.trader.positions:
             max_round = max(p.get('round', 0) for p in st.session_state.trader.positions)
