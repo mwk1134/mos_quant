@@ -1017,16 +1017,32 @@ def show_daily_recommendation():
         )
         
         # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
+        # preset일 때: 원본 스냅샷의 수량 유지 (시뮬레이션 결과로 덮어쓰지 않음)
         current_snapshot = {}
         for pos in st.session_state.trader.positions:
             buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
             snap_key = f"{pos['round']}_{buy_date_str}"
-            current_snapshot[snap_key] = {
-                'shares': int(pos['shares']),
-                'buy_price': float(pos['buy_price']),
-                'amount': float(pos['amount']),
-                'round': int(pos['round'])
-            }
+            # preset 스냅샷에 있으면 원본 수량 유지, 없으면 시뮬레이션 결과 사용 (스냅샷 이후 신규 매수)
+            saved = snapshot.get(snap_key) if snapshot else None
+            if not saved and snapshot:
+                for sk, sv in snapshot.items():
+                    if sk.endswith(f"_{buy_date_str}"):
+                        saved = sv
+                        break
+            if saved:
+                current_snapshot[snap_key] = {
+                    'shares': int(saved['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(saved['shares']) * float(pos['buy_price']),
+                    'round': int(pos['round'])
+                }
+            else:
+                current_snapshot[snap_key] = {
+                    'shares': int(pos['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(pos['amount']),
+                    'round': int(pos['round'])
+                }
         st.session_state.positions_snapshot = current_snapshot
         
         # 포지션이 있으면 GitHub에 영구 저장 (매 로드마다 동기화)
