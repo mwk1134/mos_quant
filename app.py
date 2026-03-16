@@ -947,29 +947,39 @@ def show_daily_recommendation():
         # 시뮬레이션 후 포지션 스냅샷 복원 - 스냅샷이 있으면 무조건 그 값 사용
         snapshot = st.session_state.get('positions_snapshot', {})
         if snapshot:
-            for pos_idx, pos in enumerate(st.session_state.trader.positions):
+            snapshot_dates = [sk.split('_', 1)[1] for sk in snapshot.keys() if '_' in sk]
+            max_snap_date = max(snapshot_dates) if snapshot_dates else ""
+            positions_to_keep = []
+            for pos in st.session_state.trader.positions:
                 buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
                 snap_key = f"{pos['round']}_{buy_date_str}"
-                saved = None
-                if snap_key in snapshot:
-                    saved = snapshot[snap_key]
-                else:
-                    # round 불일치 시 날짜로 매칭 (스냅샷의 round/shares/buy_price 사용)
+                saved = snapshot.get(snap_key)
+                if not saved:
                     for sk, sv in snapshot.items():
                         if sk.endswith(f"_{buy_date_str}"):
                             saved = sv
                             break
                 if saved:
-                    st.session_state.trader.update_position(
-                        pos_idx,
-                        int(saved['shares']),
-                        float(saved['buy_price'])
-                    )
+                    pos['shares'] = int(saved['shares'])
+                    pos['buy_price'] = float(saved['buy_price'])
+                    pos['amount'] = pos['shares'] * pos['buy_price']
                     if 'round' in saved:
                         pos['round'] = int(saved['round'])
+                    positions_to_keep.append(pos)
+                elif buy_date_str > max_snap_date:
+                    # 스냅샷 최신일 이후 매수(사용자 실제 체결)는 유지
+                    positions_to_keep.append(pos)
+            if positions_to_keep:
+                st.session_state.trader.positions = positions_to_keep
         
         # 같은 날짜 포지션 중복 제거 (3/12 등 중복 표시 버그 대응)
         _deduplicate_positions_by_date(st.session_state.trader, snapshot or {})
+        
+        # [수정] 스냅샷 적용 후 current_round 재계산 - 시뮬레이션이 생성한 초과 포지션으로 인해
+        # "모든 분할매수 완료" 오판 방지 (예: KMW 7분할에서 6개 보유 시 7회차 매수추천 표시)
+        if st.session_state.trader.positions:
+            max_round = max(p.get('round', 0) for p in st.session_state.trader.positions)
+            st.session_state.trader.current_round = max_round + 1
         
         # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
@@ -1211,6 +1221,7 @@ def show_daily_recommendation():
         # 매도 추천 리스트 표시 (모든 보유 포지션)
         if recommendation['sell_recommendations']:
             st.info(f"📋 매도 추천: {len(recommendation['sell_recommendations'])}건")
+            st.caption("💡 매수추천 수량과 다르면 포지션 수정으로 실제 체결 수량을 반영해주세요.")
             
             for sell_info in recommendation['sell_recommendations']:
                 pos = sell_info['position']
