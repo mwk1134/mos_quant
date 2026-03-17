@@ -339,6 +339,14 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         _, new_sha = _gh_load_all_snapshots()
         st.session_state._gh_snapshot_sha = new_sha
         st.session_state._gh_snapshot_all = all_data
+        # 로컬 파일도 동기화 (다음 로드 시 일치)
+        try:
+            local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(all_data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
     return ok, err
 
 def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
@@ -1018,10 +1026,9 @@ def show_daily_recommendation():
                     pos['buy_price'] = float(saved['buy_price'])
                     pos['amount'] = pos['shares'] * pos['buy_price']
         
-        # [수정] 스냅샷 적용 후 current_round 재계산
+        # [수정] 스냅샷 적용 후 current_round 재계산 (보유 N개 → 다음 N+1회차)
         if st.session_state.trader.positions:
-            max_round = max(p.get('round', 0) for p in st.session_state.trader.positions)
-            st.session_state.trader.current_round = max_round + 1
+            st.session_state.trader.current_round = len(st.session_state.trader.positions) + 1
         
         # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
@@ -1077,7 +1084,8 @@ def show_daily_recommendation():
                 }
         st.session_state.positions_snapshot = current_snapshot
         
-        # 포지션이 있으면 GitHub에 영구 저장 (거래일일 때만 - 주말/휴장일에는 저장 안 함)
+        # 포지션이 있으면 GitHub에 영구 저장 (거래일일 때만 - 주말/휴장일에는 자동 저장 안 함)
+        # 매도처리된 포지션은 positions에서 제외되므로 current_snapshot에 자동 반영됨
         st.session_state._gh_save_result = None
         if current_snapshot and st.session_state.get('active_preset') and _is_market_trading_day():
             ok, err = save_preset_snapshot(st.session_state.active_preset, current_snapshot)

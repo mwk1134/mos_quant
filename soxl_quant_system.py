@@ -610,7 +610,7 @@ class SOXLQuantTrader:
             # 스냅샷이 이미 최신이면 시뮬레이션 없이 스냅샷만 적용
             self.positions = positions
             self.available_cash = available_cash
-            self.current_round = max(p.get("round", 0) for p in positions) + 1
+            self.current_round = len(positions) + 1
             self.current_investment_capital = self.initial_capital
             for si in self.seed_increases:
                 try:
@@ -667,7 +667,7 @@ class SOXLQuantTrader:
         if result and "error" in result and "해당 기간에 대한 데이터가 없습니다" in result.get("error", ""):
             self.positions = positions
             self.available_cash = available_cash
-            self.current_round = max(p.get("round", 0) for p in positions) + 1
+            self.current_round = len(positions) + 1
             self.current_investment_capital = self.initial_capital
             for si in self.seed_increases:
                 try:
@@ -3073,7 +3073,7 @@ class SOXLQuantTrader:
             # 스냅샷 기반: reset 없이 초기 상태 로드 (스냅샷에 없는 회차는 생성되지 않음)
             self.positions = list(initial_positions)
             self.available_cash = float(initial_cash)
-            self.current_round = max((p.get("round", 0) for p in initial_positions), default=0) + 1
+            self.current_round = len(initial_positions) + 1  # 보유 N개 → 다음 N+1회차
             self.current_investment_capital = self.initial_capital
             max_dt = datetime.strptime(snapshot_max_date, "%Y-%m-%d").date()
             for si in self.seed_increases:
@@ -3686,11 +3686,8 @@ class SOXLQuantTrader:
                     self.backtest_logs.append(nobuy_msg)
                 
                 # 일일 처리 완료 후 다음 날을 위한 current_round 재계산
-                # 스냅샷 기반: max(회차)+1 (비연속 회차 1,2,4,5,6 등 대응)
-                # 일반: len(positions)+1 (연속 매수 가정)
-                if from_snapshot and self.positions:
-                    self.current_round = max(p.get("round", 0) for p in self.positions) + 1
-                else:
+                # 보유 N개 → 다음 N+1회차 (len+1)
+                if self.positions:
                     self.current_round = len(self.positions) + 1
                 if sold_rounds:
                     print(f"🔄 일일 처리 완료 (매도 {len(sold_rounds)}건): 보유 {len(self.positions)}개 → 다음 날 매수 회차: {self.current_round}")
@@ -3826,13 +3823,9 @@ class SOXLQuantTrader:
         
         # 최종 결과 계산
         
-        # 백테스팅 완료 후 current_round를 올바르게 설정
-        # 스냅샷 기반: max(회차)+1 (비연속 회차 대응), 일반: len+1
-        if from_snapshot and self.positions:
-            self.current_round = max(p.get("round", 0) for p in self.positions) + 1
-        else:
-            holding_rounds = len(self.positions)
-            self.current_round = holding_rounds + 1
+        # 백테스팅 완료 후 current_round를 올바르게 설정 (보유 N개 → 다음 N+1회차)
+        if self.positions:
+            self.current_round = len(self.positions) + 1
         print(f"🔄 백테스팅 완료 후 current_round 설정: 보유 {len(self.positions)}개 → 다음 매수 {self.current_round}회차")
 
         final_value = daily_records[-1]["total_assets"] if daily_records else self.initial_capital
