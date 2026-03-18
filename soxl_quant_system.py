@@ -3602,14 +3602,14 @@ class SOXLQuantTrader:
                     print(f"🔄 매도 발생: {len(sold_rounds)}건 매도 → 매수 회차는 매도 전 기준 유지: {self.current_round}회차")
                 
                 # 매수 조건 확인 및 실행
-                # 스냅샷 기반 시: 사용자 실제 포지션만 사용하므로 새 매수 추가 안 함 (매도만 처리)
+                # 스냅샷 기반이든 아니든 동일하게 LOC 매수 조건 충족 시 자동 체결 처리
                 buy_executed = False
                 buy_price_executed = 0
                 buy_quantity = 0
                 buy_amount = 0
                 current_round_before_buy = self.current_round  # 매수 전 회차 저장
                 
-                if not from_snapshot and self.can_buy_next_round():
+                if self.can_buy_next_round():
                     # LOC 매수 조건: 매수가가 종가보다 유리할 때 (매수가 > 종가)
                     daily_close = row['Close']
                     

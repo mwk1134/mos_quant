@@ -1288,6 +1288,94 @@ def show_daily_recommendation():
                 st.warning("🔴 매수 불가: 시드 부족")
                 if available_cash > 0:
                     st.info(f"💡 잔여 예수금: \\${available_cash:,.0f} (목표 금액 \\${recommendation['next_buy_amount']:,.0f} 미만)")
+        
+        # ── 매수 체결 완료 확인 ──────────────────────────────────────────
+        # 스냅샷 기반 시뮬레이션은 새 매수를 자동 생성하지 않으므로,
+        # 실제 체결 후 이 버튼으로 스냅샷에 직접 반영해야 합니다.
+        snapshot_for_btn = st.session_state.get('positions_snapshot', {})
+        with st.expander("✅ 매수 체결 완료 확인 (스냅샷 반영)", expanded=False):
+            st.caption("실제로 매수 체결하셨나요? 아래에서 확인하면 스냅샷에 저장됩니다.")
+            
+            # 기본값: 추천 회차/가격/수량
+            default_round = recommendation.get('next_buy_round') or st.session_state.trader.current_round
+            default_buy_price = recommendation.get('buy_price', 0.0)
+            default_shares = max(1, round(recommendation.get('next_buy_amount', 0) / default_buy_price)) if default_buy_price > 0 else 1
+            
+            confirm_date = st.date_input(
+                "체결일",
+                value=datetime.now().date(),
+                key="confirm_buy_date"
+            )
+            confirm_round = st.number_input(
+                "회차",
+                min_value=1,
+                value=int(default_round),
+                step=1,
+                key="confirm_buy_round"
+            )
+            confirm_price = st.number_input(
+                "체결가 ($)",
+                min_value=0.01,
+                value=float(default_buy_price) if default_buy_price > 0 else 1.0,
+                step=0.01,
+                format="%.2f",
+                key="confirm_buy_price"
+            )
+            confirm_shares = st.number_input(
+                "체결 수량 (주)",
+                min_value=1,
+                value=int(default_shares),
+                step=1,
+                key="confirm_buy_shares"
+            )
+            confirm_amount = confirm_shares * confirm_price
+            st.write(f"**투자금액: ${confirm_amount:,.0f}**")
+            
+            if st.button("✅ 체결 확인 (스냅샷 저장)", key="confirm_buy_btn", use_container_width=True):
+                buy_date_dt = datetime.combine(confirm_date, datetime.min.time())
+                buy_date_str = confirm_date.strftime('%Y-%m-%d')
+                snap_key = f"{int(confirm_round)}_{buy_date_str}"
+                
+                # trader.positions에 중복 추가 방지
+                already_exists = any(
+                    (pos.get('round') == int(confirm_round) and
+                     (pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])) == buy_date_str)
+                    for pos in st.session_state.trader.positions
+                )
+                if not already_exists:
+                    new_pos = {
+                        "round": int(confirm_round),
+                        "buy_date": buy_date_dt,
+                        "buy_price": float(confirm_price),
+                        "shares": int(confirm_shares),
+                        "amount": float(confirm_amount),
+                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF')
+                    }
+                    st.session_state.trader.positions.append(new_pos)
+                
+                # 스냅샷 재구성 및 저장
+                new_snapshot = {}
+                for pos in st.session_state.trader.positions:
+                    bd = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
+                    sk = f"{pos['round']}_{bd}"
+                    new_snapshot[sk] = {
+                        'shares': int(pos['shares']),
+                        'buy_price': float(pos['buy_price']),
+                        'amount': float(pos['amount']),
+                        'round': int(pos['round'])
+                    }
+                st.session_state.positions_snapshot = new_snapshot
+                if st.session_state.get('active_preset'):
+                    gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
+                    if gh_ok:
+                        st.success(f"✅ {int(confirm_round)}회차 매수 체결이 스냅샷에 저장되었습니다!")
+                    else:
+                        st.warning(f"⚠️ GitHub 저장 실패: {gh_err}")
+                        st.success(f"✅ 세션에는 저장되었습니다. (GitHub 미반영)")
+                else:
+                    st.success(f"✅ {int(confirm_round)}회차 매수 체결이 세션 스냅샷에 저장되었습니다.")
+                st.session_state.trader.clear_cache()
+                st.rerun()
     
     with col2:
         st.subheader("🔴 매도 추천")
