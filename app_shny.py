@@ -6,9 +6,11 @@ import json
 import os
 import sys
 import io
+import base64
 from contextlib import redirect_stdout
 from pathlib import Path
 import plotly.graph_objects as go
+import requests as _requests
 
 # Force redeploy - version 1.1
 import plotly.express as px
@@ -24,6 +26,86 @@ from shny_qunat_system import SHNYQuantTrader
 
 # 프리셋 파일 경로
 PRESETS_FILE = Path(__file__).resolve().parent / "data" / "presets.json"
+# SHNY 스냅샷 파일 (app.py의 positions_snapshots.json과 별도)
+_SHNY_SNAPSHOT_PATH = "data/positions_snapshots_shny.json"
+_SOXL_SNAPSHOT_PATH = "data/positions_snapshots.json"  # 폴백용 (git pull로 갱신됨)
+
+# --- GitHub API 기반 스냅샷 영구 저장 (app.py와 동일) ---
+_GH_REPO = "mwk1134/mos_quant"
+_GH_SHNY_PATH = "data/positions_snapshots_shny.json"
+
+def _gh_token_shny() -> str:
+    """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
+    try:
+        return st.secrets["GITHUB_TOKEN"]
+    except Exception:
+        return os.environ.get("GITHUB_TOKEN", "")
+
+def _gh_headers_shny():
+    token = _gh_token_shny()
+    if not token:
+        return None
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+def _gh_load_all_shny() -> tuple:
+    """GitHub에서 SHNY 전체 스냅샷 JSON 로드. (data_dict, sha) 반환"""
+    headers = _gh_headers_shny()
+    if not headers:
+        return {}, None
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_SHNY_PATH}"
+        resp = _requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            info = resp.json()
+            content = base64.b64decode(info["content"]).decode("utf-8")
+            return json.loads(content), info["sha"]
+        return {}, None
+    except Exception as e:
+        print(f"⚠️ GitHub SHNY 스냅샷 로드 실패: {e}")
+        return {}, None
+
+def _gh_save_all_shny(data: dict, sha: str = None) -> tuple:
+    """GitHub에 SHNY 전체 스냅샷 JSON 저장. (성공여부, 에러메시지) 반환"""
+    headers = _gh_headers_shny()
+    if not headers:
+        return False, "GITHUB_TOKEN이 설정되지 않았습니다. Streamlit Secrets에 추가해주세요."
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_SHNY_PATH}"
+        if not sha:
+            get_resp = _requests.get(url, headers=headers, timeout=10)
+            if get_resp.status_code == 200:
+                sha = get_resp.json().get("sha")
+        content_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        body = {
+            "message": f"shny snapshot update {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "content": base64.b64encode(content_bytes).decode("ascii"),
+        }
+        if sha:
+            body["sha"] = sha
+        resp = _requests.put(url, headers=headers, json=body, timeout=10)
+        if resp.status_code in (200, 201):
+            return True, ""
+        err = resp.json() if resp.text else {}
+        msg = err.get("message", resp.text[:200])
+        return False, f"GitHub API 오류 ({resp.status_code}): {msg}"
+    except Exception as e:
+        return False, str(e)
+
+def _load_shny_fallback_raw(preset_name: str) -> dict:
+    """GitHub 실패 시 raw URL에서 SHNY 로드"""
+    try:
+        url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_GH_SHNY_PATH}"
+        resp = _requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = json.loads(resp.text)
+            return data.get(preset_name, {})
+    except Exception:
+        pass
+    return {}
 
 def load_presets():
     """프리셋 데이터를 JSON 파일에서 로드"""
@@ -85,6 +167,131 @@ def save_presets(presets_data):
     except Exception as e:
         print(f"❌ 프리셋 파일 저장 실패: {e}")
         return False
+
+
+def load_preset_snapshot_shny(preset_name: str) -> tuple[dict, str]:
+    """
+    특정 프리셋의 스냅샷 로드.
+    로컬 SHNY → GitHub SHNY → raw URL SHNY → 로컬 SOXL 폴백.
+    Returns: (snapshot_dict, source)  # source: "shny_local" | "shny_github" | "soxl_fallback"
+    """
+    base = Path(__file__).resolve().parent
+
+    def _load_from(path: Path) -> dict:
+        if not path.exists():
+            return {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            result = data.get(preset_name, {})
+            if result and isinstance(result, dict) and any("_" in str(k) for k in result.keys()):
+                return result
+            return result if result else {}
+        except Exception:
+            return {}
+
+    # 1) 로컬 SHNY 우선
+    shny_path = base / _SHNY_SNAPSHOT_PATH
+    shny_data = _load_from(shny_path)
+    if shny_data:
+        return shny_data, "shny_local"
+
+    # 2) GitHub SHNY
+    all_data, sha = _gh_load_all_shny()
+    st.session_state._gh_shny_snapshot_all = all_data
+    st.session_state._gh_shny_snapshot_sha = sha
+    result = all_data.get(preset_name, {})
+    if result and isinstance(result, dict) and any("_" in str(k) for k in result.keys()):
+        return result, "shny_github"
+
+    # 3) raw URL SHNY
+    raw_data = _load_shny_fallback_raw(preset_name)
+    if raw_data:
+        all_data = all_data or {}
+        all_data[preset_name] = raw_data
+        st.session_state._gh_shny_snapshot_all = all_data
+        return raw_data, "shny_github"
+
+    # 4) SOXL 폴백 (로컬)
+    soxl_path = base / _SOXL_SNAPSHOT_PATH
+    soxl_data = _load_from(soxl_path)
+    if soxl_data:
+        return soxl_data, "soxl_fallback"
+
+    return {}, ""
+
+
+def _is_market_trading_day_shny() -> bool:
+    """미국 시장이 거래일인지 확인 (주말/휴장일이면 False). 스냅샷 저장 시 사용."""
+    trader = st.session_state.get('trader')
+    if not trader:
+        return False
+    et_now = trader.get_us_eastern_now()
+    return trader.is_trading_day(et_now)
+
+
+def save_preset_snapshot_shny(preset_name: str, snapshot: dict) -> tuple:
+    """특정 프리셋의 스냅샷을 GitHub에 저장 (로컬도 동기화). (성공여부, 에러메시지) 반환"""
+    all_data = getattr(st.session_state, '_gh_shny_snapshot_all', None)
+    sha = getattr(st.session_state, '_gh_shny_snapshot_sha', None)
+    if all_data is None:
+        all_data, sha = _gh_load_all_shny()
+    all_data = all_data or {}
+    all_data[preset_name] = snapshot
+
+    # 로컬 파일은 항상 저장 (GitHub 없어도 동작)
+    try:
+        local_path = Path(__file__).resolve().parent / _SHNY_SNAPSHOT_PATH
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump(all_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return False, str(e)
+
+    ok, err = _gh_save_all_shny(all_data, sha)
+    if ok:
+        _, new_sha = _gh_load_all_shny()
+        st.session_state._gh_shny_snapshot_sha = new_sha
+        st.session_state._gh_shny_snapshot_all = all_data
+    return ok, err
+
+
+def _deduplicate_positions_by_date_shny(trader, snapshot: dict) -> None:
+    """같은 매수일에 여러 포지션이 있으면 하나만 유지 (하루 1매수 원칙). 스냅샷에 있으면 그 값 사용."""
+    from collections import defaultdict
+    by_date = defaultdict(list)
+    for idx, pos in enumerate(trader.positions):
+        buy_date = pos.get('buy_date')
+        if buy_date is None:
+            continue
+        date_str = buy_date.strftime('%Y-%m-%d') if hasattr(buy_date, 'strftime') else str(buy_date)
+        by_date[date_str].append((idx, pos))
+    
+    to_remove = []
+    for date_str, group in by_date.items():
+        if len(group) <= 1:
+            continue
+        group.sort(key=lambda x: x[1]['round'])
+        keep_idx, keep_pos = group[0]
+        snap_key = f"{keep_pos['round']}_{date_str}"
+        saved = snapshot.get(snap_key)
+        if not saved:
+            for sk, sv in snapshot.items():
+                if sk.endswith(f"_{date_str}"):
+                    saved = sv
+                    break
+        if saved:
+            keep_pos['shares'] = int(saved['shares'])
+            keep_pos['buy_price'] = float(saved['buy_price'])
+            keep_pos['amount'] = keep_pos['shares'] * keep_pos['buy_price']
+            if 'round' in saved:
+                keep_pos['round'] = int(saved['round'])
+        for idx, _ in group[1:]:
+            to_remove.append(idx)
+    
+    for idx in sorted(to_remove, reverse=True):
+        trader.positions.pop(idx)
+
 
 # 페이지 설정
 st.set_page_config(
@@ -269,6 +476,10 @@ st.markdown("""
 # 세션 상태 초기화
 if 'trader' not in st.session_state:
     st.session_state.trader = None
+if 'positions_snapshot' not in st.session_state:
+    st.session_state.positions_snapshot = {}
+if 'active_preset' not in st.session_state:
+    st.session_state.active_preset = None
 if 'initial_capital' not in st.session_state:
     st.session_state.initial_capital = 9000
 if 'session_start_date' not in st.session_state:
@@ -368,6 +579,10 @@ def show_mobile_settings():
                 st.session_state.position_edits = kmw['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
+            st.session_state.active_preset = "KMW"
+            snap, src = load_preset_snapshot_shny("KMW")
+            st.session_state.positions_snapshot = snap
+            st.session_state.snapshot_source_shny = src
             st.session_state.trader = None
             st.success("✅ KMW 프리셋이 적용되었습니다.")
             st.rerun()
@@ -381,6 +596,10 @@ def show_mobile_settings():
                 st.session_state.position_edits = jeh['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
+            st.session_state.active_preset = "JEH"
+            snap, src = load_preset_snapshot_shny("JEH")
+            st.session_state.positions_snapshot = snap
+            st.session_state.snapshot_source_shny = src
             st.session_state.trader = None
             st.success("✅ JEH 프리셋이 적용되었습니다.")
             st.rerun()
@@ -394,6 +613,10 @@ def show_mobile_settings():
                 st.session_state.position_edits = jsd['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
+            st.session_state.active_preset = "JSD"
+            snap, src = load_preset_snapshot_shny("JSD")
+            st.session_state.positions_snapshot = snap
+            st.session_state.snapshot_source_shny = src
             st.session_state.trader = None
             st.success("✅ JSD 프리셋이 적용되었습니다.")
             st.rerun()
@@ -405,6 +628,9 @@ def show_mobile_settings():
             st.session_state.jeh_preset = presets['jeh_preset']
             st.session_state.jsd_preset = presets['jsd_preset']
             st.session_state.presets_loaded = True
+            st.session_state.active_preset = None
+            st.session_state.positions_snapshot = {}
+            st.session_state.snapshot_source_shny = ""
             st.session_state.trader = None
             st.success("✅ 프리셋이 새로고침되었습니다.")
             st.rerun()
@@ -577,8 +803,12 @@ def show_dashboard():
         latest_trading_day = st.session_state.trader.get_latest_trading_day()
         st.info(f"🔄 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
         
-        # 10/10일 매수 조건 확인을 위해 quiet=False로 변경
-        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=False)
+        # 스냅샷이 있으면 스냅샷 기반, 없으면 처음부터 시뮬레이션
+        snapshot = st.session_state.get('positions_snapshot', {})
+        if snapshot:
+            sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=False)
+        else:
+            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=False)
         st.session_state.sim_result = sim_result  # 로그 표시를 위해 저장
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
@@ -709,7 +939,10 @@ def show_dashboard():
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
     st.header("📊 일일 매매 추천")
-    
+
+    if st.session_state.get('snapshot_source_shny') == "soxl_fallback":
+        st.info("📥 SHNY 전용 스냅샷이 비어 있어 **positions_snapshots.json**(SOXL, git pull로 갱신) 데이터를 사용 중입니다.")
+
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
         return
@@ -721,6 +954,12 @@ def show_daily_recommendation():
         today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
     start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
     
+    # active_preset이 있으면 스냅샷 로드 (프리셋 버튼 클릭 시 설정됨)
+    if st.session_state.get('active_preset'):
+        snapshot, src = load_preset_snapshot_shny(st.session_state.active_preset)
+        st.session_state.positions_snapshot = snapshot
+        st.session_state.snapshot_source_shny = src
+    
     with st.spinner('현재 상태 계산 중...'):
         # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
         st.session_state.trader.clear_cache()
@@ -729,28 +968,63 @@ def show_daily_recommendation():
         latest_trading_day = st.session_state.trader.get_latest_trading_day()
         st.info(f"🔄 일일 추천 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
         
-        # 먼저 시뮬레이션 실행하여 트레이더 상태 업데이트
-        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        # 스냅샷이 있으면 스냅샷 기반 시뮬레이션, 없으면 처음부터 시뮬레이션
+        snapshot = st.session_state.get('positions_snapshot', {})
+        if snapshot:
+            sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=True)
+        else:
+            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
-        # 시뮬레이션 후 수정된 포지션 복원
+        # 스냅샷 최신일 이후 매수된 포지션에 매수추천 수량 적용
+        if snapshot:
+            snapshot_dates = [sk.split('_', 1)[1] for sk in snapshot.keys() if '_' in sk]
+            max_snap_date = max(snapshot_dates) if snapshot_dates else ""
+            _rec = st.session_state.trader.get_daily_recommendation(skip_simulate=True, preserve_snapshot_shares=True)
+            next_round = _rec.get('next_buy_round') if "error" not in _rec else None
+            next_amount = _rec.get('next_buy_amount', 0) if "error" not in _rec else 0
+            for pos in st.session_state.trader.positions:
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                if buy_date_str > max_snap_date and next_round == pos.get('round') and next_amount > 0 and pos.get('buy_price', 0) > 0:
+                    rec_shares = max(1, int(next_amount / pos['buy_price']))
+                    pos['shares'] = rec_shares
+                    pos['amount'] = rec_shares * pos['buy_price']
+        
+        # 같은 날짜 포지션 중복 제거
+        _deduplicate_positions_by_date_shny(st.session_state.trader, snapshot or {})
+        
+        # 스냅샷 수량을 포지션에 명시 적용
+        if snapshot:
+            for pos in st.session_state.trader.positions:
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                snap_key = f"{pos['round']}_{buy_date_str}"
+                saved = snapshot.get(snap_key)
+                if not saved:
+                    for sk, sv in snapshot.items():
+                        if sk.endswith(f"_{buy_date_str}"):
+                            saved = sv
+                            break
+                if saved:
+                    pos['shares'] = int(saved['shares'])
+                    pos['buy_price'] = float(saved['buy_price'])
+                    pos['amount'] = pos['shares'] * pos['buy_price']
+        
+        # 스냅샷 적용 후 current_round 재계산 (보유 N개 → 다음 N+1회차)
+        if st.session_state.trader.positions:
+            st.session_state.trader.current_round = len(st.session_state.trader.positions) + 1
+        
+        # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:
-            # 수정된 포지션 정보를 회차와 매수일로 매칭하여 복원
             for pos_idx, pos in enumerate(st.session_state.trader.positions):
                 buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
-                
-                # 모든 수정 정보를 확인하여 매칭 (회차와 매수일로 매칭)
                 for position_key, edit_info in st.session_state.position_edits.items():
                     key_parts = position_key.split('_')
                     if len(key_parts) >= 2:
                         key_round = int(key_parts[0])
                         key_date = key_parts[1]
-                        
-                        # 회차와 매수일이 일치하면 수정 적용
                         if pos['round'] == key_round and buy_date_str == key_date:
-                            # 포지션 수정 (인덱스 사용)
                             st.session_state.trader.update_position(
                                 pos_idx,
                                 edit_info['shares'],
@@ -758,8 +1032,42 @@ def show_daily_recommendation():
                             )
                             break
         
-        # 일일 추천 생성
-        recommendation = st.session_state.trader.get_daily_recommendation()
+        # 일일 추천 생성 (이미 simulate+스냅샷복원+병합 완료했으므로 skip_simulate=True)
+        recommendation = st.session_state.trader.get_daily_recommendation(
+            skip_simulate=True, preserve_snapshot_shares=bool(snapshot)
+        )
+        
+        # 시뮬레이션 결과를 스냅샷으로 저장 (매도된 포지션 제거)
+        current_snapshot = {}
+        for pos in st.session_state.trader.positions:
+            buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+            snap_key = f"{pos['round']}_{buy_date_str}"
+            saved = snapshot.get(snap_key) if snapshot else None
+            if not saved and snapshot:
+                for sk, sv in snapshot.items():
+                    if sk.endswith(f"_{buy_date_str}"):
+                        saved = sv
+                        break
+            if saved:
+                current_snapshot[snap_key] = {
+                    'shares': int(saved['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(saved['shares']) * float(pos['buy_price']),
+                    'round': int(pos['round'])
+                }
+            else:
+                current_snapshot[snap_key] = {
+                    'shares': int(pos['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(pos['amount']),
+                    'round': int(pos['round'])
+                }
+        st.session_state.positions_snapshot = current_snapshot
+        
+        # 거래일일 때만 저장 (주말/휴장일에는 자동 저장 안 함) - app.py와 동일
+        if current_snapshot and st.session_state.get('active_preset') and _is_market_trading_day_shny():
+            ok, err = save_preset_snapshot_shny(st.session_state.active_preset, current_snapshot)
+            st.session_state._gh_shny_save_result = (ok, err)
     
     if "error" in recommendation:
         st.error(f"추천 생성 실패: {recommendation['error']}")
@@ -773,6 +1081,16 @@ def show_daily_recommendation():
     market_icon = "🔴" if not market_closed else "🟢"
     status_text = f"{market_icon} 미국시장: **{market_status}** · 확정종가: **{data_last}**까지 반영 · 매수/매도 추천: **{basis_date} 종가** 기준"
     st.info(status_text)
+
+    # GitHub 스냅샷 저장 결과 표시
+    save_result = st.session_state.pop('_gh_shny_save_result', None)
+    if save_result is not None:
+        ok, err = save_result
+        if ok:
+            st.success("✅ 포지션 스냅샷이 GitHub에 저장되었습니다. (PC/폰 동기화)")
+        else:
+            st.warning(f"⚠️ GitHub 저장 실패: {err}")
+            st.caption("로컬에는 저장됨. Streamlit Cloud → Settings → Secrets에 GITHUB_TOKEN을 추가하면 GitHub 동기화됩니다.")
 
     # 기본 정보 - 모바일 최적화
     col1, col2 = st.columns(2)
@@ -1042,6 +1360,15 @@ def show_daily_recommendation():
                             'buy_price': new_buy_price
                         }
                         
+                        # 스냅샷 저장 (거래일일 때만, active_preset이 있을 때)
+                        if st.session_state.get('active_preset') and _is_market_trading_day_shny():
+                            current_snap = {}
+                            for pos in st.session_state.trader.positions:
+                                bd = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                                k = f"{pos['round']}_{bd}"
+                                current_snap[k] = {'shares': int(pos['shares']), 'buy_price': float(pos['buy_price']), 'amount': float(pos['amount']), 'round': int(pos['round'])}
+                            save_preset_snapshot_shny(st.session_state.active_preset, current_snap)
+                        
                         st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
                         st.session_state.trader.clear_cache()  # 캐시 초기화
                         st.rerun()
@@ -1071,7 +1398,12 @@ def show_portfolio():
         latest_trading_day = st.session_state.trader.get_latest_trading_day()
         st.info(f"🔄 포트폴리오 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
         
-        sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        # 스냅샷이 있으면 스냅샷 기반, 없으면 처음부터 시뮬레이션
+        snapshot = st.session_state.get('positions_snapshot', {})
+        if snapshot:
+            sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=True)
+        else:
+            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
             
         if "error" in sim_result:
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
