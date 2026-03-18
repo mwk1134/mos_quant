@@ -392,7 +392,8 @@ class SOXLQuantTrader:
             ag_config: AG 모드 설정 (None이면 기본값 사용)
         """
         self.initial_capital = initial_capital
-        
+        self.ticker = "SOXL"  # SHNYQuantTrader가 "SHNY"로 오버라이드
+
         # 성능 최적화를 위한 캐시
         self._stock_data_cache = {}  # 주식 데이터 캐시
         self._simulation_cache = {}  # 시뮬레이션 결과 캐시
@@ -626,7 +627,7 @@ class SOXLQuantTrader:
             return {"from_snapshot": True, "max_snap_date": max_snap_date}
 
         start_after_snap = self._get_next_trading_day(max_snap_date)
-        cache_key = f"snap_{max_snap_date}_{self.initial_capital}_{self.test_today_override or 'real'}"
+        cache_key = f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_{self.test_today_override or 'real'}"
         if cache_key in self._simulation_cache:
             cached, cache_time = self._simulation_cache[cache_key]
             if (datetime.now() - cache_time).seconds < 30:
@@ -708,7 +709,7 @@ class SOXLQuantTrader:
             sorted_seeds = sorted(self.seed_increases, key=lambda x: x["date"])
             seed_increases_str = "_".join([f"{s['date']}_{s['amount']}" for s in sorted_seeds])
         
-        cache_key = f"{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}_{seed_increases_str}"
+        cache_key = f"{self.ticker}_{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}_{seed_increases_str}"
         
         # 캐시된 결과가 있고 2분 이내면 재사용
         if cache_key in self._simulation_cache:
