@@ -28,7 +28,6 @@ from shny_qunat_system import SHNYQuantTrader
 PRESETS_FILE = Path(__file__).resolve().parent / "data" / "presets.json"
 # SHNY 스냅샷 파일 (app.py의 positions_snapshots.json과 별도)
 _SHNY_SNAPSHOT_PATH = "data/positions_snapshots_shny.json"
-_SOXL_SNAPSHOT_PATH = "data/positions_snapshots.json"  # 폴백용 (git pull로 갱신됨)
 
 # --- GitHub API 기반 스냅샷 영구 저장 (app.py와 동일) ---
 _GH_REPO = "mwk1134/mos_quant"
@@ -171,9 +170,9 @@ def save_presets(presets_data):
 
 def load_preset_snapshot_shny(preset_name: str) -> tuple[dict, str]:
     """
-    특정 프리셋의 스냅샷 로드.
-    로컬 SHNY → GitHub SHNY → raw URL SHNY → 로컬 SOXL 폴백.
-    Returns: (snapshot_dict, source)  # source: "shny_local" | "shny_github" | "soxl_fallback"
+    특정 프리셋의 스냅샷 로드 (SHNY 전용).
+    로컬 SHNY → GitHub SHNY → raw URL SHNY.
+    Returns: (snapshot_dict, source)  # source: "shny_local" | "shny_github" | ""
     """
     base = Path(__file__).resolve().parent
 
@@ -211,12 +210,6 @@ def load_preset_snapshot_shny(preset_name: str) -> tuple[dict, str]:
         all_data[preset_name] = raw_data
         st.session_state._gh_shny_snapshot_all = all_data
         return raw_data, "shny_github"
-
-    # 4) SOXL 폴백 (로컬)
-    soxl_path = base / _SOXL_SNAPSHOT_PATH
-    soxl_data = _load_from(soxl_path)
-    if soxl_data:
-        return soxl_data, "soxl_fallback"
 
     return {}, ""
 
@@ -939,9 +932,6 @@ def show_dashboard():
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
     st.header("📊 일일 매매 추천")
-
-    if st.session_state.get('snapshot_source_shny') == "soxl_fallback":
-        st.info("📥 SHNY 전용 스냅샷이 비어 있어 **positions_snapshots.json**(SOXL, git pull로 갱신) 데이터를 사용 중입니다.")
 
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
