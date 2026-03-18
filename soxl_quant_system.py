@@ -3610,7 +3610,7 @@ class SOXLQuantTrader:
                 current_round_before_buy = self.current_round  # 매수 전 회차 저장
                 
                 if self.can_buy_next_round():
-                    # LOC 매수 조건: 매수가 < 종가 일 때 매수 체결 (종가가 매수가를 상회할 때)
+                    # LOC 매수 조건: 매수가 > 종가 일 때 매수 체결 (종가가 매수가보다 낮을 때)
                     daily_close = row['Close']
                     
                     # 디버깅: 매수 조건 확인
@@ -3618,13 +3618,13 @@ class SOXLQuantTrader:
                     log_msg += f"   전일 종가(prev_close): ${prev_close:.2f}\n"
                     log_msg += f"   당일 종가(daily_close): ${daily_close:.2f}\n"
                     log_msg += f"   매수가(buy_price): ${buy_price:.2f} = prev_close * {1 + config['buy_threshold'] / 100}\n"
-                    log_msg += f"   매수 조건: 매수가 < 종가 = {buy_price:.2f} < {daily_close:.2f} = {buy_price < daily_close}\n"
+                    log_msg += f"   매수 조건: 매수가 > 종가 = {buy_price:.2f} > {daily_close:.2f} = {buy_price > daily_close}\n"
                     log_msg += f"   현재 회차: {self.current_round}, 현금잔고: ${self.available_cash:,.0f}"
                     
                     print(log_msg)
                     self.backtest_logs.append(log_msg)
                     
-                    if buy_price < daily_close:
+                    if buy_price > daily_close:
                         success_msg = f"✅ 매수 조건 충족! 매수 실행 시도..."
                         print(success_msg)
                         self.backtest_logs.append(success_msg)
@@ -3677,7 +3677,7 @@ class SOXLQuantTrader:
                             print(fail_msg)
                             self.backtest_logs.append(fail_msg)
                     else:
-                        nocond_msg = f"❌ 매수 조건 불충족: 매수가 >= 종가 ({buy_price:.2f} >= {daily_close:.2f})"
+                        nocond_msg = f"❌ 매수 조건 불충족: 매수가 <= 종가 ({buy_price:.2f} <= {daily_close:.2f})"
                         print(nocond_msg)
                         self.backtest_logs.append(nocond_msg)
                 else:
