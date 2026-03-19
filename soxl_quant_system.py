@@ -548,17 +548,20 @@ class SOXLQuantTrader:
         """
         스냅샷을 포지션 리스트와 초기 상태로 변환.
         Returns: (positions, max_snap_date, available_cash)
+        
+        available_cash: (초기+시드-현재포지션투자금)로 초기값 계산. 실제 값은
+        simulate_from_snapshot_to_today에서 시뮬레이션으로 매도 수익 반영하여 보정.
         """
         if not snapshot:
             return [], "", self.initial_capital
-        dates = [k.split("_", 1)[1] for k in snapshot.keys() if "_" in k and len(k.split("_", 1)) == 2]
+        dates = [k.split("_", 1)[1] for k in snapshot.keys() if k != "available_cash" and "_" in k and len(k.split("_", 1)) == 2]
         if not dates:
             return [], "", self.initial_capital
         max_snap_date = max(dates)
         positions = []
         total_invested = 0.0
         for key, val in snapshot.items():
-            if "_" not in key:
+            if "_" not in key or key == "available_cash":
                 continue
             parts = key.split("_", 1)
             if len(parts) != 2:
@@ -583,7 +586,7 @@ class SOXLQuantTrader:
             })
         if not positions:
             return [], max_snap_date, self.initial_capital
-        # 스냅샷 최신일 이전 시드증액 반영
+        # available_cash는 simulate_from_snapshot_to_today에서 시뮬레이션으로 계산 (매도 수익 반영)
         seed_before = 0.0
         max_dt = datetime.strptime(max_snap_date, "%Y-%m-%d").date()
         for si in self.seed_increases:
@@ -597,6 +600,26 @@ class SOXLQuantTrader:
         available_cash = max(0.0, available_cash)
         return positions, max_snap_date, available_cash
 
+    def _compute_available_cash_from_simulation(self, original_start_date: str, max_snap_date: str, snapshot_total_invested: float, quiet: bool) -> float:
+        """
+        시작일~스냅샷최신일까지 시뮬레이션하여 매도 수익을 반영한 잔여예수금 계산.
+        공식: available_cash = (시뮬 시점 총자산) - snapshot_total_invested
+        """
+        try:
+            if quiet:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    res = self.run_backtest(original_start_date, max_snap_date)
+            else:
+                res = self.run_backtest(original_start_date, max_snap_date)
+            if res and "error" in res:
+                return None
+            sim_total_invested = sum(p.get("amount", 0) for p in self.positions)
+            sim_capital = self.available_cash + sim_total_invested
+            return max(0.0, sim_capital - snapshot_total_invested)
+        except Exception:
+            return None
+
     def simulate_from_snapshot_to_today(self, snapshot: dict, original_start_date: str, quiet: bool = True) -> Dict:
         """
         스냅샷을 기반으로 스냅샷 최신일 이후만 시뮬레이션. 스냅샷에 없는 회차는 생성되지 않음.
@@ -604,6 +627,14 @@ class SOXLQuantTrader:
         positions, max_snap_date, available_cash = self._snapshot_to_positions_and_state(snapshot)
         if not positions:
             return self.simulate_from_start_to_today(original_start_date, quiet)
+
+        # 매도 수익 반영: 시작일~스냅최신일 시뮬레이션으로 잔여예수금 계산
+        snapshot_total_invested = sum(p.get("amount", 0) for p in positions)
+        sim_cash = self._compute_available_cash_from_simulation(
+            original_start_date, max_snap_date, snapshot_total_invested, quiet
+        )
+        if sim_cash is not None:
+            available_cash = sim_cash
 
         latest_trading_day = self.get_latest_trading_day().date()
         max_dt = datetime.strptime(max_snap_date, "%Y-%m-%d").date()

@@ -745,8 +745,6 @@ def show_mobile_settings():
         else:
             st.error("❌ 금액을 입력해주세요. (0은 불가)")
     
-    
-    
     # 설정 변경 안내
     if st.session_state.initial_capital != 9000 or st.session_state.session_start_date != "2025-08-27":
         st.info("💡 설정이 변경되었습니다. 대시보드가 업데이트됩니다.")

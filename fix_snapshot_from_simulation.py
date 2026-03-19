@@ -96,7 +96,6 @@ def run_simulation_and_build_snapshot(preset_name: str) -> dict:
             "round": int(pos["round"])
         }
         print(f"   {snap_key}: {pos['shares']} shares @ ${pos['buy_price']:.2f}")
-
     return snapshot
 
 
