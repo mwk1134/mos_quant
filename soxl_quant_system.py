@@ -564,6 +564,27 @@ class SOXLQuantTrader:
                 return dt.strftime("%Y-%m-%d")
         return date_str
 
+    def _sync_investment_capital_to_latest_total_assets(self) -> None:
+        """
+        current_investment_capital을 예수금 + 보유×최근 종가(총자산)로 맞춤.
+        시뮬 마지막 날이 10거래일 갱신일이 아니면 투자원금이 시드합(예: 4만)에
+        머물러 1회시드가 수익을 반영하지 않는 문제를 방지할 때 사용.
+        """
+        try:
+            data = self.get_stock_data(self.ticker, "1mo")
+            if data is None or len(data) == 0:
+                return
+            px = float(data.iloc[-1]["Close"])
+            if px <= 0:
+                return
+            total = float(self.available_cash)
+            for p in self.positions:
+                total += float(p.get("shares", 0) or 0) * px
+            if total > 0:
+                self.current_investment_capital = total
+        except Exception:
+            pass
+
     def _snapshot_to_positions_and_state(self, snapshot: dict) -> Tuple[List[dict], str, float]:
         """
         스냅샷을 포지션 리스트와 초기 상태로 변환.
@@ -663,18 +684,12 @@ class SOXLQuantTrader:
             self.positions = positions
             self.available_cash = available_cash
             self.current_round = len(positions) + 1
-            self.current_investment_capital = self.initial_capital
-            for si in self.seed_increases:
-                try:
-                    sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
-                    if sd <= max_dt:
-                        self.current_investment_capital += float(si.get("amount", 0))
-                except Exception:
-                    pass
             self.processed_seed_dates = {si["date"] for si in self.seed_increases
                                          if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
             self.trading_days_count = 0
             self.current_week_friday = None
+            # 입금+시뮬 수익(평가) 반영: 초기+시드 합이 아닌 현재 총자산 기준
+            self._sync_investment_capital_to_latest_total_assets()
             return {"from_snapshot": True, "max_snap_date": max_snap_date}
 
         start_after_snap = self._get_next_trading_day(max_snap_date)
@@ -694,6 +709,7 @@ class SOXLQuantTrader:
                 self.positions = cached.get("positions", [])
                 self.available_cash = cached.get("available_cash", self.initial_capital)
                 self.current_round = cached.get("current_round", 1)
+                self._sync_investment_capital_to_latest_total_assets()
                 return cached.get("result", {})
 
         latest_seed_date = None
@@ -727,18 +743,11 @@ class SOXLQuantTrader:
             self.positions = positions
             self.available_cash = available_cash
             self.current_round = len(positions) + 1
-            self.current_investment_capital = self.initial_capital
-            for si in self.seed_increases:
-                try:
-                    sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
-                    if sd <= max_dt:
-                        self.current_investment_capital += float(si.get("amount", 0))
-                except Exception:
-                    pass
             self.processed_seed_dates = {si["date"] for si in self.seed_increases
                                          if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
             self.trading_days_count = 0
             self.current_week_friday = None
+            self._sync_investment_capital_to_latest_total_assets()
             return {"from_snapshot": True, "max_snap_date": max_snap_date, "no_data_fallback": True}
 
         cached = {
@@ -3897,6 +3906,11 @@ class SOXLQuantTrader:
         print(f"🔄 백테스팅 완료 후 current_round 설정: 보유 {len(self.positions)}개 → 다음 매수 {self.current_round}회차")
 
         final_value = daily_records[-1]["total_assets"] if daily_records else self.initial_capital
+        # 마지막 거래일이 10거래일 갱신일이 아니어도, 1회시드·추천은 최종 총자산(입금+수익) 기준으로 맞춤
+        if daily_records:
+            ta_end = float(daily_records[-1].get("total_assets") or 0)
+            if ta_end > 0:
+                self.current_investment_capital = ta_end
         total_return = ((final_value - self.initial_capital) / self.initial_capital) * 100
         
         seed_total = sum(float(s.get("amount", 0) or 0) for s in self.seed_increases)
