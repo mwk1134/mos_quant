@@ -530,6 +530,26 @@ class SOXLQuantTrader:
         # 날짜순으로 정렬
         self.seed_increases.sort(key=lambda x: x["date"])
         print(f"시드증액 추가: {date} - ${amount:,.0f} ({description})")
+
+    def set_seed_increases(self, seeds: Optional[List[Dict]] = None) -> None:
+        """
+        시드증액 목록을 통째로 교체 (세션/UI와 동기화).
+        트레이더를 재생성하지 않고 설정만 바뀐 경우에도 시뮬에 반영되도록 매 렌더 시 호출 권장.
+        """
+        self.seed_increases = []
+        if not seeds:
+            return
+        for s in sorted(seeds, key=lambda x: x.get("date", "")):
+            ds = s.get("date")
+            if not ds:
+                continue
+            amt = float(s.get("amount", 0) or 0)
+            desc = s.get("description") or f"시드증액 {ds}"
+            self.seed_increases.append({
+                "date": ds,
+                "amount": amt,
+                "description": desc,
+            })
     
     def get_seed_increases_for_date(self, date: str) -> List[Dict]:
         """특정 날짜의 시드증액 목록 반환"""
@@ -658,7 +678,14 @@ class SOXLQuantTrader:
             return {"from_snapshot": True, "max_snap_date": max_snap_date}
 
         start_after_snap = self._get_next_trading_day(max_snap_date)
-        cache_key = f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_{self.test_today_override or 'real'}"
+        seed_increases_str = ""
+        if self.seed_increases:
+            sorted_seeds = sorted(self.seed_increases, key=lambda x: x["date"])
+            seed_increases_str = "_".join([f"{s['date']}_{s['amount']}" for s in sorted_seeds])
+        cache_key = (
+            f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_"
+            f"{self.test_today_override or 'real'}_{seed_increases_str}"
+        )
         if cache_key in self._simulation_cache:
             cached, cache_time = self._simulation_cache[cache_key]
             if (datetime.now() - cache_time).seconds < 30:
@@ -3789,7 +3816,7 @@ class SOXLQuantTrader:
                     "cumulative_realized": total_realized_pnl,
                     "daily_realized": daily_realized,
                     "update": False,
-                    "investment_update": self.initial_capital,
+                    "investment_update": self.current_investment_capital,
                     "withdrawal": False,
                     "withdrawal_amount": 0,
                     "seed_increase": seed_capital_injection_today,
@@ -3873,6 +3900,13 @@ class SOXLQuantTrader:
         total_return = ((final_value - self.initial_capital) / self.initial_capital) * 100
         
         seed_total = sum(float(s.get("amount", 0) or 0) for s in self.seed_increases)
+        # 시드·인출 포함 순투입(초기 + 시드증액 합); 수익률 비교용
+        capital_basis = float(self.initial_capital) + seed_total
+        total_return_on_capital_basis = (
+            ((final_value - capital_basis) / capital_basis) * 100
+            if capital_basis > 0
+            else total_return
+        )
         summary = {
             "start_date": start_date,
             "end_date": end_date or datetime.now().strftime("%Y-%m-%d"),
@@ -3880,6 +3914,8 @@ class SOXLQuantTrader:
             "trading_days": len(soxl_backtest),
             "initial_capital": self.initial_capital,
             "seed_increases_total": seed_total,
+            "capital_basis": capital_basis,
+            "total_return_on_capital_basis": total_return_on_capital_basis,
             "seed_increases_detail": [
                 {"date": s["date"], "amount": float(s.get("amount", 0) or 0)}
                 for s in sorted(self.seed_increases, key=lambda x: x["date"])
@@ -3901,8 +3937,12 @@ class SOXLQuantTrader:
         print(f"\n📊 백테스팅 결과 요약:")
         print(f"   📅 기간: {start_date} ~ {end_date or datetime.now().strftime('%Y-%m-%d')}")
         print(f"   💰 초기자본: ${self.initial_capital:,.0f}")
+        if seed_total:
+            print(f"   💰 시드증액(순): ${seed_total:,.0f} → 투입원금 합계: ${capital_basis:,.0f}")
         print(f"   💰 최종자산: ${final_value:,.0f}")
-        print(f"   📈 총수익률: {total_return:+.2f}%")
+        print(f"   📈 총수익률 (초기자본만 기준): {total_return:+.2f}%")
+        if seed_total:
+            print(f"   📈 총수익률 (초기+시드 투입 합계 기준): {total_return_on_capital_basis:+.2f}%")
         print(f"   📦 최종보유포지션: {len(self.positions)}개")
         print(f"\n⚠️ 리스크 지표:")
         print(f"   📉 MDD (최대낙폭): {mdd_info.get('mdd_percent', 0.0):.2f}%")
@@ -4036,9 +4076,18 @@ class SOXLQuantTrader:
             summary_data.append([f"  시드증액 ({sd['date']})", f"${sd['amount']:,.0f}"])
         if seed_detail:
             summary_data.append(["", ""])
+        cap_basis = backtest_result.get("capital_basis")
+        if seed_total and cap_basis is not None:
+            summary_data.append(["투입원금 합계 (초기+시드순증)", f"${float(cap_basis):,.0f}"])
+            summary_data.append(["", ""])
         summary_data.extend([
             ["최종자산", f"${backtest_result['final_value']:,.0f}"],
-            ["총수익률", f"{backtest_result['total_return']:+.2f}%"],
+            ["총수익률 (초기자본만 기준)", f"{backtest_result['total_return']:+.2f}%"],
+        ])
+        tr_basis = backtest_result.get("total_return_on_capital_basis")
+        if tr_basis is not None and seed_total:
+            summary_data.append(["총수익률 (초기+시드 투입 합계 기준)", f"{tr_basis:+.2f}%"])
+        summary_data.extend([
 
             ["최종보유포지션", f"{backtest_result['final_positions']}개"],
             ["", ""],

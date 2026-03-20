@@ -797,9 +797,20 @@ def show_daily_recommendation():
         st.metric("💵 잔여 예수금", f"${available_cash:,.0f}")
         
         if recommendation['can_buy']:
-            st.success(f"✅ 매수 추천: {recommendation['next_buy_round']}회차")
+            buy_round = recommendation['next_buy_round']
+            current_config = st.session_state.trader.get_current_config()
+            split_ratios = current_config.get("split_ratios", [])
+            buy_ratio_pct = split_ratios[buy_round - 1] * 100 if buy_round <= len(split_ratios) else 0
+            st.success(f"✅ 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
             st.info(f"💰 매수가: ${recommendation['buy_price']:.2f} (LOC 주문)")
             st.info(f"💵 매수금액: ${recommendation['next_buy_amount']:,.0f}")
+            inv_base = float(st.session_state.trader.current_investment_capital)
+            ratio_dec = float(split_ratios[buy_round - 1]) if buy_round <= len(split_ratios) else 0.0
+            calc_amt = inv_base * ratio_dec
+            st.caption(
+                f"📐 계산식: 투자원금(갱신 기준) ${inv_base:,.0f} × 비중 {buy_ratio_pct:.1f}% "
+                f"(×{ratio_dec:.4f}) = ${calc_amt:,.0f}"
+            )
             shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
             

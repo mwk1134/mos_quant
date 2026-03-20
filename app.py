@@ -500,14 +500,7 @@ def initialize_trader():
                 if st.session_state.test_today_override:
                     st.session_state.trader.set_test_today(st.session_state.test_today_override)
                 
-                # 시드증액 데이터 전달
-                if 'seed_increases' in st.session_state and st.session_state.seed_increases:
-                    for seed in st.session_state.seed_increases:
-                        st.session_state.trader.add_seed_increase(
-                            seed['date'],
-                            seed['amount'],
-                            f"시드증액 {seed['date']}"
-                        )
+                # 시드증액은 아래 set_seed_increases로 매 호출 동기화
                 
                 # RSI 참조 데이터 자동 업데이트 체크 (웹앱 실행 시마다)
                 try:
@@ -526,6 +519,12 @@ def initialize_trader():
             st.info("페이지를 새로고침해주세요.")
             if st.button("🔄 새로고침"):
                 st.rerun()
+    # 트레이더 재생성 없이 세션에서 시드만 바뀐 경우에도 시뮬에 반영
+    if st.session_state.trader is not None:
+        try:
+            st.session_state.trader.set_seed_increases(st.session_state.get("seed_increases") or [])
+        except Exception:
+            pass
 
 
 def show_mobile_settings():
@@ -703,6 +702,7 @@ def show_mobile_settings():
                     st.session_state.positions_snapshot = {}
                     if st.session_state.get('active_preset'):
                         save_preset_snapshot(st.session_state.active_preset, {})
+                    st.session_state.trader = None
                     st.rerun()
     
     # 시드증액 추가
@@ -1264,6 +1264,13 @@ def show_daily_recommendation():
             st.success(f"✅ 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
             st.info(f"💰 매수가: \\${recommendation['buy_price']:.2f} (LOC 주문)")
             st.info(f"💵 매수금액: \\${recommendation['next_buy_amount']:,.0f}")
+            inv_base = float(st.session_state.trader.current_investment_capital)
+            ratio_dec = float(split_ratios[buy_round - 1]) if buy_round <= len(split_ratios) else 0.0
+            calc_amt = inv_base * ratio_dec
+            st.caption(
+                f"📐 계산식: 투자원금(갱신 기준) \\${inv_base:,.0f} × 비중 {buy_ratio_pct:.1f}% "
+                f"(×{ratio_dec:.4f}) = \\${calc_amt:,.0f}"
+            )
             shares = round(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
             

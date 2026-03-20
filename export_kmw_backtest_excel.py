@@ -76,7 +76,15 @@ def main():
         sys.exit(1)
 
     print(f"저장 완료: {out_path.resolve()}")
-    print(f"  최종자산: ${result['final_value']:,.0f}  수익률: {result['total_return']:+.2f}%")
+    print(f"  최종자산: ${result['final_value']:,.0f}")
+    print(f"  수익률(초기만): {result['total_return']:+.2f}%", end="")
+    if result.get("seed_increases_total"):
+        print(
+            f"  |  투입합 ${result.get('capital_basis', 0):,.0f}  "
+            f"수익률(투입기준): {result.get('total_return_on_capital_basis', 0):+.2f}%"
+        )
+    else:
+        print()
 
 
 if __name__ == "__main__":
