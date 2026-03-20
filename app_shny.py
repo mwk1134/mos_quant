@@ -1001,9 +1001,11 @@ def show_daily_recommendation():
                     pos['buy_price'] = float(saved['buy_price'])
                     pos['amount'] = pos['shares'] * pos['buy_price']
         
-        # 스냅샷 적용 후 current_round 재계산 (보유 N개 → 다음 N+1회차)
+        # 스냅샷 적용 후 current_round 재계산 (보유 N개 → N+1회차, 보유 0 → 1회차)
         if st.session_state.trader.positions:
             st.session_state.trader.current_round = len(st.session_state.trader.positions) + 1
+        else:
+            st.session_state.trader.current_round = 1
         
         # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
         if 'position_edits' in st.session_state and st.session_state.position_edits:

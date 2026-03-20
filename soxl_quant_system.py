@@ -3272,6 +3272,8 @@ class SOXLQuantTrader:
         
         for i, (current_date, row) in enumerate(soxl_backtest.iterrows()):
             current_price = row['Close']
+            # 당일 시드증액(입금) — 일별기록·엑셀 반영용
+            seed_capital_injection_today = 0.0
             
             # 매도 후 current_round를 보유 중인 회차 수 + 1로 재계산
             if previous_day_sold_rounds > 0:
@@ -3310,6 +3312,9 @@ class SOXLQuantTrader:
                     
                     # 시드증액을 현금잔고에 추가
                     self.available_cash += total_seed_increase
+                    seed_capital_injection_today = total_seed_increase
+                    # 일별 기록용 cash_balance와 동기화 (기존엔 시드만 반영 안 되어 예수금/총자산이 틀어짐)
+                    cash_balance = self.available_cash
                     
                     # 투자원금을 현재 총자산 + 시드증액으로 갱신
                     new_investment_capital = current_total_assets + total_seed_increase
@@ -3718,9 +3723,11 @@ class SOXLQuantTrader:
                     self.backtest_logs.append(nobuy_msg)
                 
                 # 일일 처리 완료 후 다음 날을 위한 current_round 재계산
-                # 보유 N개 → 다음 N+1회차 (len+1)
+                # 보유 N개 → 다음 N+1회차, 보유 0개 → 1회차부터 다시 (전량 매도 후 회차 리셋)
                 if self.positions:
                     self.current_round = len(self.positions) + 1
+                else:
+                    self.current_round = 1
                 if sold_rounds:
                     print(f"🔄 일일 처리 완료 (매도 {len(sold_rounds)}건): 보유 {len(self.positions)}개 → 다음 날 매수 회차: {self.current_round}")
                 
@@ -3785,10 +3792,10 @@ class SOXLQuantTrader:
                     "investment_update": self.initial_capital,
                     "withdrawal": False,
                     "withdrawal_amount": 0,
-                    "seed_increase": 0,
+                    "seed_increase": seed_capital_injection_today,
                     "position_value": position_value,
-                    "cash_balance": cash_balance,
-                    "total_assets": cash_balance + position_value
+                    "cash_balance": self.available_cash,
+                    "total_assets": self.available_cash + position_value
                 }
                 
                 daily_records.append(daily_record)
@@ -3855,20 +3862,28 @@ class SOXLQuantTrader:
         
         # 최종 결과 계산
         
-        # 백테스팅 완료 후 current_round를 올바르게 설정 (보유 N개 → 다음 N+1회차)
+        # 백테스팅 완료 후 current_round를 올바르게 설정 (보유 N개 → 다음 N+1회차, 0개 → 1회차)
         if self.positions:
             self.current_round = len(self.positions) + 1
+        else:
+            self.current_round = 1
         print(f"🔄 백테스팅 완료 후 current_round 설정: 보유 {len(self.positions)}개 → 다음 매수 {self.current_round}회차")
 
         final_value = daily_records[-1]["total_assets"] if daily_records else self.initial_capital
         total_return = ((final_value - self.initial_capital) / self.initial_capital) * 100
         
+        seed_total = sum(float(s.get("amount", 0) or 0) for s in self.seed_increases)
         summary = {
             "start_date": start_date,
             "end_date": end_date or datetime.now().strftime("%Y-%m-%d"),
 
             "trading_days": len(soxl_backtest),
             "initial_capital": self.initial_capital,
+            "seed_increases_total": seed_total,
+            "seed_increases_detail": [
+                {"date": s["date"], "amount": float(s.get("amount", 0) or 0)}
+                for s in sorted(self.seed_increases, key=lambda x: x["date"])
+            ],
             "final_value": final_value,
             "total_return": total_return,
             "final_positions": len(self.positions),
@@ -4003,6 +4018,8 @@ class SOXLQuantTrader:
         # MDD 계산
         mdd_info = self.calculate_mdd(backtest_result['daily_records'])
         
+        seed_total = backtest_result.get("seed_increases_total") or 0.0
+        seed_detail = backtest_result.get("seed_increases_detail") or []
         # 요약 데이터 작성
         summary_data = [
             ["SOXL 퀀트투자 백테스팅 결과", ""],
@@ -4012,6 +4029,14 @@ class SOXLQuantTrader:
             ["거래일수", f"{backtest_result['trading_days']}일"],
             ["", ""],
             ["초기자본", f"${backtest_result['initial_capital']:,.0f}"],
+            ["시드증액 합계", f"${seed_total:,.0f}" if seed_total else "-"],
+            ["", ""],
+        ]
+        for sd in seed_detail:
+            summary_data.append([f"  시드증액 ({sd['date']})", f"${sd['amount']:,.0f}"])
+        if seed_detail:
+            summary_data.append(["", ""])
+        summary_data.extend([
             ["최종자산", f"${backtest_result['final_value']:,.0f}"],
             ["총수익률", f"{backtest_result['total_return']:+.2f}%"],
 
@@ -4025,7 +4050,7 @@ class SOXLQuantTrader:
             ["MDD 발생 최고자산일", mdd_info.get('mdd_peak_date', '')],
             ["최고자산일", mdd_info.get('overall_peak_date', '')],
             ["최고자산", f"${mdd_info.get('overall_peak_value', 0.0):,.0f}"]
-        ]
+        ])
         
         for row_idx, (label, value) in enumerate(summary_data, 1):
 
@@ -4052,7 +4077,7 @@ class SOXLQuantTrader:
         # 헤더 작성 (실제 양식에 맞게)
         headers = [
 
-            "날짜", "주차", "RSI", "모드", "현재회차", "1회시드", 
+            "날짜", "주차", "RSI", "모드", "현재회차", "1회시드", "시드증액",
             "매수주문가", "종가", "매도목표가", "손절예정일", "거래일수", 
             "매수체결", "수량", "매수대금", "매도일", "매도체결", "보유기간",
             "보유", "실현손익", "누적실현", "당일실현",
@@ -4108,7 +4133,7 @@ class SOXLQuantTrader:
             cell = ws_detail.cell(row=row_idx, column=5, value=record['current_round'])
             cell.alignment = center_alignment
             
-            # 1회시드
+            # 1회시드 (회차별 분할 매수 목표금액)
             seed_amount = record.get('seed_amount', 0.0) or 0.0
             if seed_amount > 0:
                 cell = ws_detail.cell(row=row_idx, column=6, value=f"${seed_amount:,.0f}")
@@ -4116,14 +4141,22 @@ class SOXLQuantTrader:
                 cell = ws_detail.cell(row=row_idx, column=6, value="")
             cell.alignment = center_alignment
             
+            # 시드증액(입금·인출)
+            seed_inj = record.get('seed_increase', 0.0) or 0.0
+            if seed_inj != 0:
+                cell = ws_detail.cell(row=row_idx, column=7, value=f"${seed_inj:,.0f}")
+            else:
+                cell = ws_detail.cell(row=row_idx, column=7, value="")
+            cell.alignment = center_alignment
+            
             # 매수주문가
             buy_order_price = record.get('buy_order_price', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=7, value=f"${buy_order_price:.2f}")
+            cell = ws_detail.cell(row=row_idx, column=8, value=f"${buy_order_price:.2f}")
             cell.alignment = center_alignment
             
             # 종가 (어제 대비 상승: 빨간색, 하락: 파란색)
             close_price = record.get('close_price', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=8, value=f"{close_price:.2f}")
+            cell = ws_detail.cell(row=row_idx, column=9, value=f"{close_price:.2f}")
             cell.alignment = center_alignment
             
             # 전일 대비 상승/하락 색상 적용
@@ -4137,46 +4170,46 @@ class SOXLQuantTrader:
             
             # 매도목표가
             sell_target_price = record.get('sell_target_price', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=9, value=f"${sell_target_price:.2f}")
+            cell = ws_detail.cell(row=row_idx, column=10, value=f"${sell_target_price:.2f}")
             cell.alignment = center_alignment
             
             # 손절예정일
-            cell = ws_detail.cell(row=row_idx, column=10, value=record['stop_loss_date'])
+            cell = ws_detail.cell(row=row_idx, column=11, value=record['stop_loss_date'])
             cell.alignment = center_alignment
             
             # 거래일수
-            cell = ws_detail.cell(row=row_idx, column=11, value=record['trading_days'])
+            cell = ws_detail.cell(row=row_idx, column=12, value=record['trading_days'])
             cell.alignment = center_alignment
             
             # 매수체결 (빨간색)
             buy_executed_price = record.get('buy_executed_price', 0.0) or 0.0
             if buy_executed_price > 0:
-                cell = ws_detail.cell(row=row_idx, column=12, value=f"${buy_executed_price:.2f}")
-                cell.font = Font(color="FF0000")  # 빨간색
-            else:
-                cell = ws_detail.cell(row=row_idx, column=12, value="")
-            cell.alignment = center_alignment
-            
-            # 수량 (매수체결 시 빨간색)
-            buy_quantity = record.get('buy_quantity', 0) or 0
-            if buy_quantity > 0:
-                cell = ws_detail.cell(row=row_idx, column=13, value=buy_quantity)
+                cell = ws_detail.cell(row=row_idx, column=13, value=f"${buy_executed_price:.2f}")
                 cell.font = Font(color="FF0000")  # 빨간색
             else:
                 cell = ws_detail.cell(row=row_idx, column=13, value="")
             cell.alignment = center_alignment
             
-            # 매수대금 (매수체결 시 빨간색)
-            buy_amount = record.get('buy_amount', 0.0) or 0.0
-            if buy_amount > 0:
-                cell = ws_detail.cell(row=row_idx, column=14, value=f"${buy_amount:,.0f}")
+            # 수량 (매수체결 시 빨간색)
+            buy_quantity = record.get('buy_quantity', 0) or 0
+            if buy_quantity > 0:
+                cell = ws_detail.cell(row=row_idx, column=14, value=buy_quantity)
                 cell.font = Font(color="FF0000")  # 빨간색
             else:
                 cell = ws_detail.cell(row=row_idx, column=14, value="")
             cell.alignment = center_alignment
             
+            # 매수대금 (매수체결 시 빨간색)
+            buy_amount = record.get('buy_amount', 0.0) or 0.0
+            if buy_amount > 0:
+                cell = ws_detail.cell(row=row_idx, column=15, value=f"${buy_amount:,.0f}")
+                cell.font = Font(color="FF0000")  # 빨간색
+            else:
+                cell = ws_detail.cell(row=row_idx, column=15, value="")
+            cell.alignment = center_alignment
+            
             # 매도일 (파란색 글씨)
-            cell = ws_detail.cell(row=row_idx, column=15, value=record['sell_date'])
+            cell = ws_detail.cell(row=row_idx, column=16, value=record['sell_date'])
             cell.alignment = center_alignment
             if record['sell_date']:  # 매도일이 있는 경우에만 파란색 적용
                 cell.font = Font(color="0000FF")  # 파란색 글씨
@@ -4184,54 +4217,54 @@ class SOXLQuantTrader:
             # 매도체결 (파란색 글씨)
             sell_executed_price = record.get('sell_executed_price', 0.0) or 0.0
             if sell_executed_price > 0:
-                cell = ws_detail.cell(row=row_idx, column=16, value=f"${sell_executed_price:.2f}")
+                cell = ws_detail.cell(row=row_idx, column=17, value=f"${sell_executed_price:.2f}")
                 cell.font = Font(color="0000FF")  # 파란색 글씨
             else:
-                cell = ws_detail.cell(row=row_idx, column=16, value="")
+                cell = ws_detail.cell(row=row_idx, column=17, value="")
             cell.alignment = center_alignment
             
             # 보유기간
             holding_days = record.get('holding_days', 0) or 0
             if holding_days > 0:
-                cell = ws_detail.cell(row=row_idx, column=17, value=f"{holding_days}일")
+                cell = ws_detail.cell(row=row_idx, column=18, value=f"{holding_days}일")
             else:
-                cell = ws_detail.cell(row=row_idx, column=17, value="")
+                cell = ws_detail.cell(row=row_idx, column=18, value="")
             cell.alignment = center_alignment
             
             # 보유
-            cell = ws_detail.cell(row=row_idx, column=18, value=record['holdings'])
+            cell = ws_detail.cell(row=row_idx, column=19, value=record['holdings'])
             cell.alignment = center_alignment
             
             # 실현손익
             realized_pnl = record.get('realized_pnl', 0.0) or 0.0
             if realized_pnl != 0:
-                cell = ws_detail.cell(row=row_idx, column=19, value=f"${realized_pnl:,.0f}")
+                cell = ws_detail.cell(row=row_idx, column=20, value=f"${realized_pnl:,.0f}")
             else:
-                cell = ws_detail.cell(row=row_idx, column=19, value="")
+                cell = ws_detail.cell(row=row_idx, column=20, value="")
             cell.alignment = center_alignment
             
             # 누적실현
             cumulative_realized = record.get('cumulative_realized', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=20, value=f"${cumulative_realized:,.0f}")
+            cell = ws_detail.cell(row=row_idx, column=21, value=f"${cumulative_realized:,.0f}")
             cell.alignment = center_alignment
             cell.font = Font(color="FF0000")  # 빨간색
             
             # 당일실현
             daily_realized = record.get('daily_realized', 0.0) or 0.0
             if daily_realized != 0:
-                cell = ws_detail.cell(row=row_idx, column=21, value=f"${daily_realized:,.0f}")
+                cell = ws_detail.cell(row=row_idx, column=22, value=f"${daily_realized:,.0f}")
             else:
-                cell = ws_detail.cell(row=row_idx, column=21, value="")
+                cell = ws_detail.cell(row=row_idx, column=22, value="")
             cell.alignment = center_alignment
             
             # 예수금
             cash_balance = record.get('cash_balance', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=22, value=f"${cash_balance:,.0f}")
+            cell = ws_detail.cell(row=row_idx, column=23, value=f"${cash_balance:,.0f}")
             cell.alignment = center_alignment
             
             # 총자산 (숫자 형식으로 저장)
             total_assets = record.get('total_assets', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=23, value=total_assets)
+            cell = ws_detail.cell(row=row_idx, column=24, value=total_assets)
             cell.alignment = center_alignment
             # 숫자 형식으로 표시 (천 단위 구분자 포함)
             cell.number_format = '#,##0'
