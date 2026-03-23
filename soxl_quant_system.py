@@ -3198,7 +3198,16 @@ class SOXLQuantTrader:
         print(f"🎯 백테스팅 시작 설정:")
         print(f"   - 모드: {self.current_mode}")
         print(f"   - 회차: {self.current_round}")
-        print(f"   - 1회시드 예상: ${self.initial_capital * self.get_current_config()['split_ratios'][self.current_round-1]:,.0f}")
+        _ratios = self.get_current_config().get("split_ratios") or []
+        if 1 <= self.current_round <= len(_ratios):
+            print(
+                f"   - 1회시드 예상: ${self.initial_capital * _ratios[self.current_round - 1]:,.0f}"
+            )
+        else:
+            print(
+                f"   - 1회시드 예상: (다음 매수 회차 {self.current_round} — "
+                f"분할 비중 {len(_ratios)}회 범위 밖, 표시 생략)"
+            )
         
         # 날짜 파싱 (종료일은 해당 날짜의 23:59:59로 설정하여 당일 데이터 포함)
         try:
