@@ -585,6 +585,37 @@ class SOXLQuantTrader:
         except Exception:
             pass
 
+    def _set_investment_capital_from_snapshot_total_assets(
+        self, soxl_df: pd.DataFrame, snapshot_max_date: str
+    ) -> None:
+        """
+        스냅샷으로 백테스트를 이어갈 때 initial_capital+시드만 두면 평가손익이 빠져
+        execute_buy의 회차별 매수액이 get_daily_recommendation(총자산 기준)과 어긋난다.
+        스냅샷 최신일(또는 그 이전 거래일) 종가로 현금+보유평가를 합산해 current_investment_capital을 맞춘다.
+        """
+        if soxl_df is None or len(soxl_df) == 0:
+            return
+        try:
+            as_of = datetime.strptime(snapshot_max_date, "%Y-%m-%d").date()
+            rows = soxl_df[soxl_df.index.date <= as_of]
+            if len(rows) == 0:
+                return
+            px = float(rows.iloc[-1]["Close"])
+            if px <= 0:
+                return
+            cash = float(self.available_cash)
+            held = sum(float(p.get("shares", 0) or 0) * px for p in self.positions)
+            total = cash + held
+            if total > 0:
+                self.current_investment_capital = total
+                ref_day = rows.index[-1].strftime("%Y-%m-%d")
+                print(
+                    f"💰 스냅샷 기준 투자원금(총자산): ${total:,.0f} "
+                    f"(스냅샷일 {snapshot_max_date} → 종가 기준일 {ref_day}, ${px:.2f})"
+                )
+        except Exception:
+            pass
+
     def _snapshot_to_positions_and_state(self, snapshot: dict) -> Tuple[List[dict], str, float]:
         """
         스냅샷을 포지션 리스트와 초기 상태로 변환.
@@ -3142,15 +3173,8 @@ class SOXLQuantTrader:
             self.positions = list(initial_positions)
             self.available_cash = float(initial_cash)
             self.current_round = len(initial_positions) + 1  # 보유 N개 → 다음 N+1회차
-            self.current_investment_capital = self.initial_capital
+            # current_investment_capital은 SOXL 데이터 로드 후 스냅샷 기준일 총자산으로 설정
             max_dt = datetime.strptime(snapshot_max_date, "%Y-%m-%d").date()
-            for si in self.seed_increases:
-                try:
-                    sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
-                    if sd <= max_dt:
-                        self.current_investment_capital += float(si.get("amount", 0))
-                except Exception:
-                    pass
             self.processed_seed_dates = {si["date"] for si in self.seed_increases
                                          if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
             self.trading_days_count = 0
@@ -3256,6 +3280,30 @@ class SOXLQuantTrader:
                         qqq_data = qqq_data[qqq_data.index.date < last_date]
         except Exception:
             pass
+
+        # 스냅샷 재개: 스냅샷 기준일 종가로 총자산 → 투자원금 (1회시드·일일 추천과 동일 기준)
+        if from_snapshot and snapshot_max_date:
+            self.current_investment_capital = 0.0
+            try:
+                self._set_investment_capital_from_snapshot_total_assets(soxl_data, snapshot_max_date)
+            except Exception:
+                pass
+            # 종가를 못 찾거나 총자산이 0이면 예전 방식(초기+스냅샷 이전 시드)으로 폴백
+            if self.current_investment_capital is None or float(self.current_investment_capital) <= 0:
+                try:
+                    max_dt_fb = datetime.strptime(snapshot_max_date, "%Y-%m-%d").date()
+                    cap_fb = float(self.initial_capital)
+                    for si in self.seed_increases:
+                        try:
+                            sd = datetime.strptime(si["date"], "%Y-%m-%d").date()
+                            if sd <= max_dt_fb:
+                                cap_fb += float(si.get("amount", 0))
+                        except Exception:
+                            pass
+                    self.current_investment_capital = cap_fb
+                    print(f"💰 스냅샷 투자원금 폴백(초기+시드): ${cap_fb:,.0f}")
+                except Exception:
+                    pass
         
         # 백테스팅 기간 데이터 필터링 (기존 방식: 타임스탬프 비교)
         soxl_backtest = soxl_data[soxl_data.index >= start_dt]
