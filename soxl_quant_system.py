@@ -781,6 +781,10 @@ class SOXLQuantTrader:
             self._sync_investment_capital_to_latest_total_assets()
             return {"from_snapshot": True, "max_snap_date": max_snap_date, "no_data_fallback": True}
 
+        soxl_prune = self.get_stock_data("SOXL", "1mo")
+        if soxl_prune is not None and len(soxl_prune) > 0:
+            self._prune_positions_failing_loc_verification(soxl_prune)
+
         cached = {
             "positions": self.positions.copy(),
             "available_cash": self.available_cash,
@@ -1031,7 +1035,15 @@ class SOXLQuantTrader:
                                             "Low": 41.06,
                                             "Close": 41.71,
                                             "Volume": 138088200
-                                        }
+                                        },
+                                        # API가 Close=None이면 dropna로 제거되어 3/23 LOC가 전일=3/19로 오판됨
+                                        "2026-03-20": {
+                                            "Open": 54.69,
+                                            "High": 55.36,
+                                            "Low": 49.00,
+                                            "Close": 51.14,
+                                            "Volume": 101773000
+                                        },
                                     }
                                 
                                 # 원본 API 응답에서 Close가 None인 날짜 감지 및 수동 보정 정보 저장 (수동 보정 전)
@@ -2183,6 +2195,56 @@ class SOXLQuantTrader:
         
         return True
     
+    def _prune_positions_failing_loc_verification(self, soxl_data: pd.DataFrame) -> None:
+        """
+        run_backtest LOC 조건(매수가 > 당일 종가)과 불일치하는 포지션 제거.
+        Yahoo가 특정 일 봉 Close를 null로 주면 해당 행이 drop되어 전일 종가가 밀려
+        (예: 3/23의 전일이 3/19가 되어 LOC가 잘못 충족)하는 경우를 완화한다.
+        manual_corrections와 함께 사용.
+        """
+        if soxl_data is None or len(soxl_data) == 0 or not self.positions:
+            return
+        try:
+            df = soxl_data.copy()
+            df.index = pd.to_datetime(df.index).normalize()
+            idx_list = []
+            for ts in df.index:
+                idx_list.append(ts.date() if hasattr(ts, "date") else pd.Timestamp(ts).date())
+            removed = []
+            for i in range(len(self.positions) - 1, -1, -1):
+                pos = self.positions[i]
+                buy_date = pos.get("buy_date")
+                if isinstance(buy_date, pd.Timestamp):
+                    bd = buy_date.date()
+                elif isinstance(buy_date, datetime):
+                    bd = buy_date.date()
+                else:
+                    continue
+                try:
+                    j = idx_list.index(bd)
+                except ValueError:
+                    continue
+                if j < 1:
+                    continue
+                prev_close = float(df.iloc[j - 1]["Close"])
+                daily_close = float(df.iloc[j]["Close"])
+                mode = pos.get("mode") or "SF"
+                cfg = self.sf_config if mode == "SF" else self.ag_config
+                thr = float(cfg.get("buy_threshold", 3.5)) / 100.0
+                buy_limit = prev_close * (1.0 + thr)
+                if buy_limit > daily_close:
+                    continue
+                amt = float(pos.get("amount", 0) or 0)
+                self.available_cash += amt
+                removed.append(f"{pos.get('round')}회차 {bd}")
+                self.positions.pop(i)
+            if removed:
+                self.current_round = len(self.positions) + 1 if self.positions else 1
+                print(f"⚠️ LOC 미충족으로 제거된 포지션: {', '.join(removed)}")
+                self._sync_investment_capital_to_latest_total_assets()
+        except Exception:
+            pass
+    
     def get_daily_recommendation(self, skip_simulate: bool = False, preserve_snapshot_shares: bool = False) -> Dict:
         """
         일일 매매 추천 생성
@@ -2240,6 +2302,8 @@ class SOXLQuantTrader:
         if not self.is_regular_session_closed_now() and len(soxl_data) > 0:
             if soxl_data.index.max().date() == today_date:
                 soxl_data = soxl_data[soxl_data.index.date < today_date]
+        
+        self._prune_positions_failing_loc_verification(soxl_data)
         
         # 2. QQQ 데이터 가져오기 (주간 RSI 계산용)
         qqq_data = self.get_stock_data("QQQ", "6mo")  # 충분한 데이터 확보
