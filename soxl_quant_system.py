@@ -483,6 +483,10 @@ class SOXLQuantTrader:
 
         # 투자원금 관리 (10거래일마다 업데이트)
         self.current_investment_capital = initial_capital
+        # 10거래일 체크포인트 투자원금: 매수추천·시뮬레이션 매수 금액의 공통 기준
+        # current_investment_capital은 최신 총자산 동기화용이고,
+        # last_10day_capital은 실제 포지션 사이즈 계산(calculate_position_size)에 사용됨
+        self.last_10day_capital = initial_capital
         self.trading_days_count = 0  # 거래일 카운터
         
         # 시드증액 관리
@@ -608,6 +612,9 @@ class SOXLQuantTrader:
             total = cash + held
             if total > 0:
                 self.current_investment_capital = total
+                # 스냅샷 시작 시 last_10day_capital도 동일 값으로 초기화
+                # (시뮬 시작 시점이 첫 번째 10거래일 체크포인트 기준이 됨)
+                self.last_10day_capital = total
                 ref_day = rows.index[-1].strftime("%Y-%m-%d")
                 print(
                     f"💰 스냅샷 기준 투자원금(총자산): ${total:,.0f} "
@@ -626,7 +633,18 @@ class SOXLQuantTrader:
         """
         if not snapshot:
             return [], "", self.initial_capital
-        dates = [k.split("_", 1)[1] for k in snapshot.keys() if k != "available_cash" and "_" in k and len(k.split("_", 1)) == 2]
+        dates = []
+        for k in snapshot.keys():
+            if "_" not in k or k == "available_cash":
+                continue
+            parts = k.split("_", 1)
+            if len(parts) != 2:
+                continue
+            try:
+                datetime.strptime(parts[1], "%Y-%m-%d")
+                dates.append(parts[1])
+            except ValueError:
+                pass
         if not dates:
             return [], "", self.initial_capital
         max_snap_date = max(dates)
@@ -1736,8 +1754,10 @@ class SOXLQuantTrader:
         
         if round_num <= len(config["split_ratios"]):
             ratio = config["split_ratios"][round_num - 1]
-            # 투자원금 사용 (10거래일마다 총자산으로 업데이트됨)
-            amount = self.current_investment_capital * ratio
+            # 10거래일 체크포인트 투자원금 사용 (매수추천·시뮬레이션 매수 일관성 보장)
+            # last_10day_capital: 가장 최근 10거래일 갱신값 (또는 스냅샷 시작값)
+            capital = getattr(self, 'last_10day_capital', self.current_investment_capital)
+            amount = capital * ratio
             return amount
         else:
             return 0.0
@@ -2291,7 +2311,10 @@ class SOXLQuantTrader:
             total_shares = sum(pos["shares"] for pos in self.positions)
             current_total_assets = self.available_cash + (total_shares * current_price)
             self.available_cash += total_seed
-            self.current_investment_capital = current_total_assets + total_seed
+            new_capital = current_total_assets + total_seed
+            self.current_investment_capital = new_capital
+            # 시드증액은 즉시 10거래일 투자원금에도 반영
+            self.last_10day_capital = new_capital
             for si in unprocessed_today_seeds:
                 self.processed_seed_dates.add(si["date"])
             seed_dates_str = ", ".join(si["date"] for si in unprocessed_today_seeds)
@@ -3064,6 +3087,7 @@ class SOXLQuantTrader:
         
         # 투자원금 관리 초기화
         self.current_investment_capital = self.initial_capital
+        self.last_10day_capital = self.initial_capital
         self.trading_days_count = 0
         
         # 처리된 시드증액 날짜 초기화
@@ -3474,9 +3498,11 @@ class SOXLQuantTrader:
                     cash_balance = self.available_cash
                     
                     # 투자원금을 현재 총자산 + 시드증액으로 갱신
+                    # 시드증액은 즉시 10거래일 투자원금에도 반영 (투자 규모 자체가 변동)
                     new_investment_capital = current_total_assets + total_seed_increase
                     old_capital = self.current_investment_capital
                     self.current_investment_capital = new_investment_capital
+                    self.last_10day_capital = new_investment_capital
                     
                     # 처리된 시드증액 날짜 기록
                     for seed in unprocessed_seeds:
@@ -3896,9 +3922,10 @@ class SOXLQuantTrader:
                     total_shares_for_update = sum([pos["shares"] for pos in self.positions])
                     total_assets_for_update = self.available_cash + (total_shares_for_update * current_price)
                     
-                    # 투자원금 업데이트
+                    # 투자원금 업데이트 (current + last_10day 동시 갱신)
                     old_capital = self.current_investment_capital
                     self.current_investment_capital = total_assets_for_update
+                    self.last_10day_capital = total_assets_for_update
                     
                     print(f"💰 투자원금 업데이트: {self.trading_days_count}거래일째 - ${old_capital:,.0f} → ${total_assets_for_update:,.0f}")
                 
