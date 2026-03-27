@@ -1027,9 +1027,6 @@ def show_daily_recommendation():
         # 스냅샷이 있으면 스냅샷 기반 시뮬레이션 (스냅샷에 없는 회차는 생성되지 않음)
         # 스냅샷이 없으면 기존처럼 처음부터 시뮬레이션
         snapshot = st.session_state.get('positions_snapshot', {})
-        # 메타 키 추출 (시뮬레이션에 영향 안 줌)
-        _pending_buy_meta = snapshot.get('_pending_buy', None)
-        _rejected_buys_meta = snapshot.get('_rejected_buys', [])
         if snapshot:
             sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=True)
         else:
@@ -1038,35 +1035,17 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
-        # 스냅샷 최신일 이후 시뮬레이션으로 생성된 포지션의 수량 재계산
-        # calculate_position_size가 last_10day_capital을 사용하므로, 동일한 기준으로 수량 계산
-        # → 시뮬레이션 매수 수량과 매수추천 수량이 항상 일치
+        # 스냅샷 최신일 이후 매수된 포지션에 매수추천 수량 적용 (스냅샷 기반 시뮬레이션에서도 보정)
         if snapshot:
-            snapshot_dates = []
-            for _sk in snapshot.keys():
-                if '_' not in _sk:
-                    continue
-                _parts = _sk.split('_', 1)
-                if len(_parts) == 2:
-                    try:
-                        datetime.strptime(_parts[1], '%Y-%m-%d')
-                        snapshot_dates.append(_parts[1])
-                    except ValueError:
-                        pass
+            snapshot_dates = [sk.split('_', 1)[1] for sk in snapshot.keys() if '_' in sk]
             max_snap_date = max(snapshot_dates) if snapshot_dates else ""
-            _new_pos_current_config = st.session_state.trader.get_current_config()
-            _new_pos_split_ratios = _new_pos_current_config.get("split_ratios", [])
-            # last_10day_capital 우선 사용 (없으면 current_investment_capital 폴백)
-            _new_pos_capital = getattr(st.session_state.trader, 'last_10day_capital',
-                                       st.session_state.trader.current_investment_capital)
+            _rec = st.session_state.trader.get_daily_recommendation(skip_simulate=True, preserve_snapshot_shares=True)
+            next_round = _rec.get('next_buy_round') if "error" not in _rec else None
+            next_amount = _rec.get('next_buy_amount', 0) if "error" not in _rec else 0
             for pos in st.session_state.trader.positions:
                 buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
-                pos_round = pos.get('round', 1)
-                if (buy_date_str > max_snap_date and pos.get('buy_price', 0) > 0
-                        and 1 <= pos_round <= len(_new_pos_split_ratios) and _new_pos_capital > 0):
-                    ratio = _new_pos_split_ratios[pos_round - 1]
-                    rec_amount = _new_pos_capital * ratio
-                    rec_shares = max(1, round(rec_amount / pos['buy_price']))
+                if buy_date_str > max_snap_date and next_round == pos.get('round') and next_amount > 0 and pos.get('buy_price', 0) > 0:
+                    rec_shares = max(1, int(next_amount / pos['buy_price']))
                     pos['shares'] = rec_shares
                     pos['amount'] = rec_shares * pos['buy_price']
         
@@ -1088,24 +1067,7 @@ def show_daily_recommendation():
                     pos['shares'] = int(saved['shares'])
                     pos['buy_price'] = float(saved['buy_price'])
                     pos['amount'] = pos['shares'] * pos['buy_price']
-
-        # 스냅샷에 없는 포지션(시뮬레이션 신규 생성분)을 매도 추천에서 제외
-        # → YES 체결 확인 후 스냅샷에 저장되어야만 매도 추천에 표시됨
-        # → 스냅샷 없는 경우(신규 사용자 등)는 필터링 없이 모두 표시
-        if snapshot:
-            def _pos_in_snapshot(pos):
-                _bd = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
-                _sk = f"{pos['round']}_{_bd}"
-                if snapshot.get(_sk):
-                    return True
-                return any(
-                    not k.startswith('_') and k.endswith(f"_{_bd}")
-                    for k in snapshot.keys()
-                )
-            st.session_state.trader.positions = [
-                p for p in st.session_state.trader.positions if _pos_in_snapshot(p)
-            ]
-
+        
         # [수정] 스냅샷 적용 후 current_round 재계산 (보유 N개 → N+1회차, 보유 0 → 1회차)
         if st.session_state.trader.positions:
             st.session_state.trader.current_round = len(st.session_state.trader.positions) + 1
@@ -1138,12 +1100,12 @@ def show_daily_recommendation():
         )
         
         # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
-        # confirmed 포지션(원본 스냅샷에 있던 것)만 저장, 시뮬레이션 신규 생성분은 제외
-        # → 신규 포지션은 YES 버튼 체결 확인 후에만 스냅샷에 추가됨
+        # preset일 때: 원본 스냅샷의 수량 유지 (시뮬레이션 결과로 덮어쓰지 않음)
         current_snapshot = {}
         for pos in st.session_state.trader.positions:
             buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
             snap_key = f"{pos['round']}_{buy_date_str}"
+            # preset 스냅샷에 있으면 원본 수량 유지, 없으면 시뮬레이션 결과 사용 (스냅샷 이후 신규 매수)
             saved = snapshot.get(snap_key) if snapshot else None
             if not saved and snapshot:
                 for sk, sv in snapshot.items():
@@ -1155,16 +1117,15 @@ def show_daily_recommendation():
                     'shares': int(saved['shares']),
                     'buy_price': float(pos['buy_price']),
                     'amount': float(saved['shares']) * float(pos['buy_price']),
-                    'round': int(pos['round']),
-                    'confirmed': saved.get('confirmed', True),
+                    'round': int(pos['round'])
                 }
-            # 원본 스냅샷에 없는 포지션(시뮬레이션 생성분)은 저장하지 않음
-            # → YES 체결 확인 후에만 스냅샷에 추가됨
-        # 메타 키 보존 (_pending_buy, _rejected_buys)
-        if _pending_buy_meta:
-            current_snapshot['_pending_buy'] = _pending_buy_meta
-        if _rejected_buys_meta:
-            current_snapshot['_rejected_buys'] = _rejected_buys_meta
+            else:
+                current_snapshot[snap_key] = {
+                    'shares': int(pos['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(pos['amount']),
+                    'round': int(pos['round'])
+                }
         st.session_state.positions_snapshot = current_snapshot
         
         # 포지션이 있으면 GitHub에 영구 저장 (거래일일 때만 - 주말/휴장일에는 자동 저장 안 함)
@@ -1335,171 +1296,93 @@ def show_daily_recommendation():
                 if available_cash > 0:
                     st.info(f"💡 잔여 예수금: \\${available_cash:,.0f} (목표 금액 \\${recommendation['next_buy_amount']:,.0f} 미만)")
         
-        # ── 체결 여부 확인 (YES / NO) ────────────────────────────────────
-        _preset_name = st.session_state.get('active_preset', '')
-        _cur_snap = st.session_state.positions_snapshot  # current_snapshot already built above
-        _cur_pending = _cur_snap.get('_pending_buy')
-        _cur_rejected = _cur_snap.get('_rejected_buys', [])
-
-        # 매수 신호가 있으면 pending_buy 자동 생성 (없는 경우에만)
-        if recommendation.get('can_buy'):
-            _cb_round = recommendation['next_buy_round']
-            _cb_price = recommendation['buy_price']
-            _cb_amount = recommendation['next_buy_amount']
-            _cb_shares = round(_cb_amount / _cb_price) if _cb_price > 0 else 0
-            _cb_mode = recommendation.get('mode', getattr(st.session_state.trader, 'current_mode', 'SF') or 'SF')
-
-            _is_rejected_now = any(r.get('round') == _cb_round for r in _cur_rejected)
-            _round_in_snap = any(
-                not k.startswith('_') and '_' in k
-                and k.split('_', 1)[0].isdigit()
-                and int(k.split('_', 1)[0]) == _cb_round
-                for k in _cur_snap.keys()
+        # ── 매수 체결 완료 확인 ──────────────────────────────────────────
+        # 스냅샷 기반 시뮬레이션은 새 매수를 자동 생성하지 않으므로,
+        # 실제 체결 후 이 버튼으로 스냅샷에 직접 반영해야 합니다.
+        snapshot_for_btn = st.session_state.get('positions_snapshot', {})
+        with st.expander("✅ 매수 체결 완료 확인 (스냅샷 반영)", expanded=False):
+            st.caption("실제로 매수 체결하셨나요? 아래에서 확인하면 스냅샷에 저장됩니다.")
+            
+            # 기본값: 추천 회차/가격/수량
+            default_round = recommendation.get('next_buy_round') or st.session_state.trader.current_round
+            default_buy_price = recommendation.get('buy_price', 0.0)
+            default_shares = max(1, round(recommendation.get('next_buy_amount', 0) / default_buy_price)) if default_buy_price > 0 else 1
+            
+            confirm_date = st.date_input(
+                "체결일",
+                value=datetime.now().date(),
+                key="confirm_buy_date"
             )
-
-            if not _is_rejected_now and not _round_in_snap:
-                if _cur_pending is None or _cur_pending.get('round') != _cb_round:
-                    _cur_pending = {
-                        'round': _cb_round,
-                        'rec_date': datetime.now().strftime('%Y-%m-%d'),
-                        'shares': _cb_shares,
-                        'price': _cb_price,
-                        'amount': _cb_amount,
-                        'mode': _cb_mode,
-                    }
-                    _cur_snap['_pending_buy'] = _cur_pending
-                    st.session_state.positions_snapshot = _cur_snap
-                    if _preset_name:
-                        save_preset_snapshot(_preset_name, _cur_snap)
-
-        # pending_buy가 있으면 YES/NO 버튼 표시
-        if _cur_pending:
-            _pnd_round = _cur_pending.get('round', '?')
-            _pnd_shares = _cur_pending.get('shares', 0)
-            _pnd_price = _cur_pending.get('price', 0.0)
-            _pnd_amount = _cur_pending.get('amount', 0.0)
-            _pnd_date = _cur_pending.get('rec_date', datetime.now().strftime('%Y-%m-%d'))
-            _pnd_mode = _cur_pending.get('mode', 'SF')
-
-            st.divider()
-            st.markdown(f"#### 📋 {_pnd_round}회차 매수 체결 여부를 선택해주세요")
-            st.info(
-                f"추천 수량 **{_pnd_shares}주** | 추천가 **${_pnd_price:.2f}** | "
-                f"추천금액 **${_pnd_amount:,.0f}** | 추천일 **{_pnd_date}**"
+            confirm_round = st.number_input(
+                "회차",
+                min_value=1,
+                value=int(default_round),
+                step=1,
+                key="confirm_buy_round"
             )
-            st.caption("⚠️ YES 또는 NO를 누를 때까지 이 항목이 유지됩니다.")
-
-            _btn_yes, _btn_no = st.columns(2)
-            with _btn_yes:
-                if st.button(
-                    f"✅ YES  ({_pnd_shares}주 체결됨)",
-                    key="buy_yes_btn",
-                    use_container_width=True,
-                    type="primary",
-                ):
-                    _fill_date_str = _pnd_date
-                    _snap_key_new = f"{_pnd_round}_{_fill_date_str}"
-                    # trader.positions에 없으면 추가
-                    _already = any(
-                        pos.get('round') == int(_pnd_round) and
-                        (pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime')
-                         else str(pos['buy_date'])) == _fill_date_str
-                        for pos in st.session_state.trader.positions
-                    )
-                    if not _already:
-                        st.session_state.trader.positions.append({
-                            "round": int(_pnd_round),
-                            "buy_date": datetime.strptime(_fill_date_str, '%Y-%m-%d'),
-                            "buy_price": float(_pnd_price),
-                            "shares": int(_pnd_shares),
-                            "amount": float(_pnd_amount),
-                            "mode": _pnd_mode,
-                        })
-                    # 메타 키 제외한 스냅샷 + 새 포지션 저장
-                    _new_snap = {k: v for k, v in _cur_snap.items() if not k.startswith('_')}
-                    _new_snap[_snap_key_new] = {
-                        'shares': int(_pnd_shares),
-                        'buy_price': float(_pnd_price),
-                        'amount': float(_pnd_amount),
-                        'round': int(_pnd_round),
-                        'confirmed': True,
-                    }
-                    if _cur_rejected:
-                        _new_snap['_rejected_buys'] = _cur_rejected
-                    st.session_state.positions_snapshot = _new_snap
-                    if _preset_name:
-                        _ok, _err = save_preset_snapshot(_preset_name, _new_snap)
-                        if _ok:
-                            st.success(f"✅ {_pnd_round}회차 {_pnd_shares}주 체결 완료! 매도 추천에 반영됩니다.")
-                        else:
-                            st.warning(f"⚠️ 저장 실패: {_err}")
-                    st.session_state.trader.clear_cache()
-                    st.rerun()
-
-            with _btn_no:
-                if st.button(
-                    "❌ NO  (체결 안 함)",
-                    key="buy_no_btn",
-                    use_container_width=True,
-                ):
-                    _new_rejected = list(_cur_rejected) + [{'round': _pnd_round}]
-                    _new_snap = {k: v for k, v in _cur_snap.items() if not k.startswith('_')}
-                    _new_snap['_rejected_buys'] = _new_rejected
-                    st.session_state.positions_snapshot = _new_snap
-                    if _preset_name:
-                        save_preset_snapshot(_preset_name, _new_snap)
-                    st.session_state.trader.clear_cache()
-                    st.rerun()
-
-            # 수량·가격이 다를 때를 위한 직접 입력
-            with st.expander("✏️ 수량 또는 체결가가 다른 경우 직접 입력"):
-                _cust_date = st.date_input("체결일", value=datetime.now().date(), key="confirm_buy_date")
-                _cust_round = st.number_input("회차", min_value=1, value=int(_pnd_round), step=1, key="confirm_buy_round")
-                _cust_price = st.number_input(
-                    "체결가 ($)", min_value=0.01,
-                    value=float(_pnd_price) if _pnd_price > 0 else 1.0,
-                    step=0.01, format="%.2f", key="confirm_buy_price"
+            confirm_price = st.number_input(
+                "체결가 ($)",
+                min_value=0.01,
+                value=float(default_buy_price) if default_buy_price > 0 else 1.0,
+                step=0.01,
+                format="%.2f",
+                key="confirm_buy_price"
+            )
+            confirm_shares = st.number_input(
+                "체결 수량 (주)",
+                min_value=1,
+                value=int(default_shares),
+                step=1,
+                key="confirm_buy_shares"
+            )
+            confirm_amount = confirm_shares * confirm_price
+            st.write(f"**투자금액: ${confirm_amount:,.0f}**")
+            
+            if st.button("✅ 체결 확인 (스냅샷 저장)", key="confirm_buy_btn", use_container_width=True):
+                buy_date_dt = datetime.combine(confirm_date, datetime.min.time())
+                buy_date_str = confirm_date.strftime('%Y-%m-%d')
+                snap_key = f"{int(confirm_round)}_{buy_date_str}"
+                
+                # trader.positions에 중복 추가 방지
+                already_exists = any(
+                    (pos.get('round') == int(confirm_round) and
+                     (pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])) == buy_date_str)
+                    for pos in st.session_state.trader.positions
                 )
-                _cust_shares = st.number_input("체결 수량 (주)", min_value=1, value=int(_pnd_shares), step=1, key="confirm_buy_shares")
-                _cust_amount = _cust_shares * _cust_price
-                st.write(f"**투자금액: ${_cust_amount:,.0f}**")
-                if st.button("✅ 위 내용으로 저장", key="confirm_buy_custom_btn", use_container_width=True):
-                    _cust_date_str = _cust_date.strftime('%Y-%m-%d')
-                    _cust_key = f"{int(_cust_round)}_{_cust_date_str}"
-                    _already_c = any(
-                        pos.get('round') == int(_cust_round) and
-                        (pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime')
-                         else str(pos['buy_date'])) == _cust_date_str
-                        for pos in st.session_state.trader.positions
-                    )
-                    if not _already_c:
-                        st.session_state.trader.positions.append({
-                            "round": int(_cust_round),
-                            "buy_date": datetime.combine(_cust_date, datetime.min.time()),
-                            "buy_price": float(_cust_price),
-                            "shares": int(_cust_shares),
-                            "amount": float(_cust_amount),
-                            "mode": recommendation.get('mode', 'SF'),
-                        })
-                    _new_snap_c = {k: v for k, v in _cur_snap.items() if not k.startswith('_')}
-                    _new_snap_c[_cust_key] = {
-                        'shares': int(_cust_shares),
-                        'buy_price': float(_cust_price),
-                        'amount': float(_cust_amount),
-                        'round': int(_cust_round),
-                        'confirmed': True,
+                if not already_exists:
+                    new_pos = {
+                        "round": int(confirm_round),
+                        "buy_date": buy_date_dt,
+                        "buy_price": float(confirm_price),
+                        "shares": int(confirm_shares),
+                        "amount": float(confirm_amount),
+                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF')
                     }
-                    if _cur_rejected:
-                        _new_snap_c['_rejected_buys'] = _cur_rejected
-                    st.session_state.positions_snapshot = _new_snap_c
-                    if _preset_name:
-                        _ok_c, _err_c = save_preset_snapshot(_preset_name, _new_snap_c)
-                        if _ok_c:
-                            st.success(f"✅ {int(_cust_round)}회차 {int(_cust_shares)}주 체결 저장 완료!")
-                        else:
-                            st.warning(f"⚠️ 저장 실패: {_err_c}")
-                    st.session_state.trader.clear_cache()
-                    st.rerun()
+                    st.session_state.trader.positions.append(new_pos)
+                
+                # 스냅샷 재구성 및 저장
+                new_snapshot = {}
+                for pos in st.session_state.trader.positions:
+                    bd = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
+                    sk = f"{pos['round']}_{bd}"
+                    new_snapshot[sk] = {
+                        'shares': int(pos['shares']),
+                        'buy_price': float(pos['buy_price']),
+                        'amount': float(pos['amount']),
+                        'round': int(pos['round'])
+                    }
+                st.session_state.positions_snapshot = new_snapshot
+                if st.session_state.get('active_preset'):
+                    gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
+                    if gh_ok:
+                        st.success(f"✅ {int(confirm_round)}회차 매수 체결이 스냅샷에 저장되었습니다!")
+                    else:
+                        st.warning(f"⚠️ GitHub 저장 실패: {gh_err}")
+                        st.success(f"✅ 세션에는 저장되었습니다. (GitHub 미반영)")
+                else:
+                    st.success(f"✅ {int(confirm_round)}회차 매수 체결이 세션 스냅샷에 저장되었습니다.")
+                st.session_state.trader.clear_cache()
+                st.rerun()
     
     with col2:
         st.subheader("🔴 매도 추천")
