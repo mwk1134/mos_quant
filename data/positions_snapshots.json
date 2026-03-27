@@ -4,19 +4,22 @@
       "shares": 36,
       "buy_price": 65.33999633789062,
       "amount": 2352.2398681640625,
-      "round": 1
+      "round": 1,
+      "confirmed": true
     },
     "2_2026-02-27": {
       "shares": 103,
       "buy_price": 62.77000045776367,
       "amount": 6465.310047149658,
-      "round": 2
+      "round": 2,
+      "confirmed": true
     },
     "3_2026-03-26": {
       "shares": 106,
       "buy_price": 48.970001220703125,
       "amount": 5190.820129394531,
-      "round": 3
+      "round": 3,
+      "confirmed": true
     }
   },
   "JEH": {
