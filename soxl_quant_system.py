@@ -648,13 +648,19 @@ class SOXLQuantTrader:
             amount = float(val.get("amount", shares * buy_price))
             round_num = int(val.get("round", 0))
             total_invested += amount
+            stored_mode = val.get("mode")
+            # 스냅샷에 mode가 없으면 임시로 "SF"를 넣되, 이후 simulate_from_snapshot_to_today에서
+            # 매수일 기준으로 재계산되도록 _mode_needs_recalc 플래그로 표시.
+            # (과거 버전은 mode 필드를 저장하지 않아 SF로 간주되어 공세모드 포지션이
+            # 재시뮬 매도조건 체크에서 잘못 매도되는 버그가 있었음)
             positions.append({
                 "round": round_num,
                 "buy_date": buy_dt,
                 "buy_price": buy_price,
                 "shares": shares,
                 "amount": amount,
-                "mode": str(val.get("mode", "SF")),  # 매도조건 확인에 필요
+                "mode": str(stored_mode) if stored_mode else "SF",
+                "_mode_needs_recalc": stored_mode is None,
             })
         if not positions:
             return [], max_snap_date, self.initial_capital
@@ -692,6 +698,100 @@ class SOXLQuantTrader:
         except Exception:
             return None
 
+    def _recompute_missing_position_modes(self, positions: List[dict]) -> None:
+        """
+        스냅샷에 mode 필드가 누락된 포지션들을 매수일 기준으로 주간 RSI를 계산해 올바른 모드를 채워 넣는다.
+        in-place 수정. `_mode_needs_recalc` 플래그가 True인 포지션만 대상으로 한다.
+        과거 버전은 스냅샷에 mode를 저장하지 않아 재로드 시 SF로 간주되어,
+        공세모드 포지션이 재시뮬에서 SF 매도조건(1.1%)으로 잘못 매도되는 버그를 방지한다.
+        """
+        targets = [p for p in positions if p.get("_mode_needs_recalc")]
+        if not targets:
+            return
+
+        rsi_ref_data = {}
+        try:
+            rsi_file_path = str(self._resolve_data_path("weekly_rsi_reference.json"))
+            if os.path.exists(rsi_file_path):
+                with open(rsi_file_path, "r", encoding="utf-8") as f:
+                    rsi_ref_data = json.load(f)
+        except Exception as e:
+            print(f"⚠️ RSI 참조 데이터 로드 실패: {e}")
+
+        qqq_data = self.get_stock_data("QQQ", "6mo")
+        weekly_df = None
+        rsi_series = None
+        if qqq_data is not None and len(qqq_data) > 0:
+            weekly_df = qqq_data.resample('W-FRI').agg({
+                'Open': 'first', 'High': 'max', 'Low': 'min',
+                'Close': 'last', 'Volume': 'sum'
+            }).dropna()
+            if len(weekly_df) >= 15:
+                delta = weekly_df['Close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                rsi_series = 100 - (100 / (1 + rs))
+
+        for pos in targets:
+            buy_date = pos.get("buy_date")
+            if isinstance(buy_date, pd.Timestamp):
+                buy_date_dt = buy_date.to_pydatetime()
+            elif isinstance(buy_date, datetime):
+                buy_date_dt = buy_date
+            else:
+                pos.pop("_mode_needs_recalc", None)
+                continue
+
+            buy_date_weekday = buy_date_dt.weekday()
+            days_until_friday = (4 - buy_date_weekday) % 7
+            if days_until_friday == 0 and buy_date_weekday != 4:
+                days_until_friday = 7
+            buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
+            one_week_ago_friday = buy_week_friday - timedelta(days=7)
+            two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
+
+            one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
+            two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
+
+            if (one_week_ago_rsi is None or two_weeks_ago_rsi is None) and weekly_df is not None and rsi_series is not None:
+                if one_week_ago_rsi is None:
+                    one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
+                    earlier_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
+                    if len(earlier_1w) > 0:
+                        idx = weekly_df.index.get_loc(earlier_1w[-1])
+                        if idx < len(rsi_series) and not pd.isna(rsi_series.iloc[idx]):
+                            one_week_ago_rsi = float(rsi_series.iloc[idx])
+                if two_weeks_ago_rsi is None:
+                    two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
+                    earlier_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
+                    if len(earlier_2w) > 0:
+                        idx = weekly_df.index.get_loc(earlier_2w[-1])
+                        if idx < len(rsi_series) and not pd.isna(rsi_series.iloc[idx]):
+                            two_weeks_ago_rsi = float(rsi_series.iloc[idx])
+
+            correct_mode = None
+            if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
+                prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(
+                    one_week_ago_friday, rsi_ref_data
+                )
+                if not success and weekly_df is not None and rsi_series is not None:
+                    prev_week_mode, success = self._calculate_week_mode_recursive(
+                        one_week_ago_friday, weekly_df, rsi_series
+                    )
+                if success:
+                    is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
+                    correct_mode = matched_mode if is_matched else prev_week_mode
+
+            pos_key = f"{pos.get('round')}_{buy_date_dt.strftime('%Y-%m-%d')}"
+            if correct_mode:
+                if correct_mode != pos.get("mode"):
+                    print(f"🔧 스냅샷 mode 누락 → 매수일 기준 재계산: {pos_key} = {pos.get('mode')} → {correct_mode}")
+                pos["mode"] = correct_mode
+            else:
+                print(f"⚠️ {pos_key}: mode 재계산 실패 (RSI 데이터 부족) → 기본값 {pos.get('mode')} 유지")
+            pos.pop("_mode_needs_recalc", None)
+
     def simulate_from_snapshot_to_today(self, snapshot: dict, original_start_date: str, quiet: bool = True) -> Dict:
         """
         스냅샷을 기반으로 스냅샷 최신일 이후만 시뮬레이션. 스냅샷에 없는 회차는 생성되지 않음.
@@ -699,6 +799,11 @@ class SOXLQuantTrader:
         positions, max_snap_date, available_cash = self._snapshot_to_positions_and_state(snapshot)
         if not positions:
             return self.simulate_from_start_to_today(original_start_date, quiet)
+
+        # [버그픽스] 스냅샷에 mode가 저장돼있지 않은 과거 포지션은 매수일 주간 RSI로 재계산.
+        # 이 작업을 run_backtest 호출 전에 수행해, 재시뮬 매도조건 체크가 올바른 모드(SF/AG)로
+        # 동작하도록 한다. (이전엔 모두 SF로 기본값 처리되어 공세 포지션이 잘못 매도됐음)
+        self._recompute_missing_position_modes(positions)
 
         # 매도 수익 반영: 시작일~스냅최신일 시뮬레이션으로 잔여예수금 계산
         snapshot_total_invested = sum(p.get("amount", 0) for p in positions)

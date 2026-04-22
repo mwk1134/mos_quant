@@ -1117,14 +1117,16 @@ def show_daily_recommendation():
                     'shares': int(saved['shares']),
                     'buy_price': float(pos['buy_price']),
                     'amount': float(saved['shares']) * float(pos['buy_price']),
-                    'round': int(pos['round'])
+                    'round': int(pos['round']),
+                    'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
                 }
             else:
                 current_snapshot[snap_key] = {
                     'shares': int(pos['shares']),
                     'buy_price': float(pos['buy_price']),
                     'amount': float(pos['amount']),
-                    'round': int(pos['round'])
+                    'round': int(pos['round']),
+                    'mode': str(pos.get('mode') or 'SF'),
                 }
         st.session_state.positions_snapshot = current_snapshot
         
@@ -1369,7 +1371,8 @@ def show_daily_recommendation():
                         'shares': int(pos['shares']),
                         'buy_price': float(pos['buy_price']),
                         'amount': float(pos['amount']),
-                        'round': int(pos['round'])
+                        'round': int(pos['round']),
+                        'mode': str(pos.get('mode') or 'SF'),
                     }
                 st.session_state.positions_snapshot = new_snapshot
                 if st.session_state.get('active_preset'):
@@ -1662,7 +1665,8 @@ def show_daily_recommendation():
                                 'shares': int(pos['shares']),
                                 'buy_price': float(pos['buy_price']),
                                 'amount': float(pos['amount']),
-                                'round': int(pos['round'])
+                                'round': int(pos['round']),
+                                'mode': str(pos.get('mode') or 'SF'),
                             }
                         st.session_state.positions_snapshot = current_snapshot
                         gh_ok = True
