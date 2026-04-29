@@ -451,6 +451,13 @@ if 'jeh2_preset' not in st.session_state:
         ],
         'position_edits': {}  # 포지션 수정 정보 저장
     }
+if 'kmw2_preset' not in st.session_state:
+    st.session_state.kmw2_preset = {
+        'initial_capital': 67612.0,
+        'session_start_date': "2026-04-29",
+        'seed_increases': [],
+        'position_edits': {}
+    }
 
 # 배포 테스트 - 버전 1.5 - FORCE REDEPLOY
 import time
@@ -564,8 +571,8 @@ def show_mobile_settings():
         max_value=datetime.now()
     )
     
-    # 프리셋 불러오기 버튼 (가로 1줄, 4열)
-    pr_col1, pr_col2, pr_col3, pr_col4 = st.columns(4)
+    # 프리셋 불러오기 버튼 (가로 1줄, 5열)
+    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5 = st.columns(5)
     with pr_col1:
         if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000", use_container_width=True):
             kmw = st.session_state.kmw_preset
@@ -595,17 +602,17 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with pr_col3:
-        if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음", use_container_width=True):
-            jsd = st.session_state.jsd_preset
-            st.session_state.initial_capital = jsd['initial_capital']
-            st.session_state.session_start_date = jsd['session_start_date']
-            st.session_state.seed_increases = jsd['seed_increases'].copy()
-            if 'position_edits' in jsd and jsd['position_edits']:
-                st.session_state.position_edits = jsd['position_edits'].copy()
+        if st.button("KMW2", help="초기설정: 67612달러, 시작일 2026/04/29", use_container_width=True):
+            kmw2 = st.session_state.kmw2_preset
+            st.session_state.initial_capital = kmw2['initial_capital']
+            st.session_state.session_start_date = kmw2['session_start_date']
+            st.session_state.seed_increases = kmw2['seed_increases'].copy()
+            if 'position_edits' in kmw2 and kmw2['position_edits']:
+                st.session_state.position_edits = kmw2['position_edits'].copy()
             else:
                 st.session_state.position_edits = {}
-            st.session_state.active_preset = "JSD"
-            st.session_state.positions_snapshot = load_preset_snapshot("JSD")
+            st.session_state.active_preset = "KMW2"
+            st.session_state.positions_snapshot = load_preset_snapshot("KMW2")
             st.session_state.trader = None
             st.rerun()
     with pr_col4:
@@ -622,6 +629,20 @@ def show_mobile_settings():
             st.session_state.positions_snapshot = load_preset_snapshot("JEH2")
             st.session_state.trader = None
             st.rerun()
+    with pr_col5:
+        if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음", use_container_width=True):
+            jsd = st.session_state.jsd_preset
+            st.session_state.initial_capital = jsd['initial_capital']
+            st.session_state.session_start_date = jsd['session_start_date']
+            st.session_state.seed_increases = jsd['seed_increases'].copy()
+            if 'position_edits' in jsd and jsd['position_edits']:
+                st.session_state.position_edits = jsd['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            st.session_state.active_preset = "JSD"
+            st.session_state.positions_snapshot = load_preset_snapshot("JSD")
+            st.session_state.trader = None
+            st.rerun()
     
     # 프리셋별 총자산 현황
     with st.expander("📊 프리셋별 총자산 현황"):
@@ -631,6 +652,7 @@ def show_mobile_settings():
                 "JEH": st.session_state.jeh_preset,
                 "JSD": st.session_state.jsd_preset,
                 "JEH2": st.session_state.jeh2_preset,
+                "KMW2": st.session_state.kmw2_preset,
             }
             totals = {}
             with st.spinner("프리셋별 총자산 계산 중..."):

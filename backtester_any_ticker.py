@@ -236,11 +236,13 @@ class AnyTickerQuantTrader(SOXLQuantTrader):
             sf_config: SF 모드 설정
             ag_config: AG 모드 설정
         """
-        self.ticker = ticker.upper()  # 티커를 대문자로 변환
+        self._target_ticker = ticker.upper()  # 실제 백테스트할 티커 보존
         # super().__init__ 내부에서 RSI 업데이트 시 get_stock_data가 호출되므로,
         # 부모 __init__ 호출 전에 원본 메서드를 미리 바인딩해둠
         self._original_get_stock_data = SOXLQuantTrader.get_stock_data.__get__(self, type(self))
         super().__init__(initial_capital, sf_config, ag_config)
+        # 부모 __init__에서 self.ticker = "SOXL"로 덮어쓰므로, 이후에 다시 복원
+        self.ticker = self._target_ticker
     
     def get_stock_data(self, symbol: str, period: str = "1mo"):
         """
@@ -270,12 +272,18 @@ def main():
     
     # 백테스팅 기간 입력 받기
     default_start_date = "2011-01-01"
-    default_end_date = "2025-12-07"
-    
+
+    # 종료일 기본값: 가장 최근 거래일 (오늘이 거래일이면 오늘, 아니면 직전 거래일)
+    _today = datetime.now()
+    _d = _today
+    while _d.weekday() >= 5:  # 주말이면 하루씩 앞으로
+        _d -= timedelta(days=1)
+    default_end_date = _d.strftime("%Y-%m-%d")
+
     print(f"\n📅 백테스팅 기간 설정")
-    print(f"   기본값: {default_start_date} ~ {default_end_date}")
+    print(f"   기본값: {default_start_date} ~ {default_end_date} (오늘 기준 최근 거래일)")
     print(f"   (엔터를 누르면 기본값 사용)")
-    
+
     # 시작일 입력
     start_date_input = input(f"\n   시작일을 입력하세요 (YYYY-MM-DD, 기본값: {default_start_date}): ").strip()
     if not start_date_input:
@@ -285,11 +293,12 @@ def main():
             print(f"❌ 잘못된 날짜 형식입니다. YYYY-MM-DD 형식으로 입력해주세요.")
             return
         start_date = start_date_input
-    
-    # 종료일 입력
+
+    # 종료일 입력 (엔터 → 최근 거래일 자동 사용)
     end_date_input = input(f"   종료일을 입력하세요 (YYYY-MM-DD, 기본값: {default_end_date}): ").strip()
     if not end_date_input:
         end_date = default_end_date
+        print(f"   → 종료일 자동 설정: {end_date}")
     else:
         if not validate_date(end_date_input):
             print(f"❌ 잘못된 날짜 형식입니다. YYYY-MM-DD 형식으로 입력해주세요.")
@@ -411,12 +420,19 @@ def main():
     else:
         actual_start_date = backtest_result['start_date']
         actual_end_date = backtest_result['end_date']
-    
+
+    # 입력 시작일과 실제 데이터 시작일 차이 경고
+    if actual_start_date != start_date:
+        print(f"\n⚠️  [주의] 입력한 시작일({start_date})에 {ticker} 데이터가 없습니다.")
+        print(f"   실제 데이터 시작일: {actual_start_date}")
+        print(f"   → 백테스팅은 {actual_start_date}부터 실행되었습니다.")
+
     # 결과 출력
     print("\n" + "=" * 60)
     print(f"📊 백테스팅 결과 ({ticker})")
     print("=" * 60)
-    print(f"기간: {actual_start_date} ~ {actual_end_date}")
+    print(f"입력 기간:  {start_date} ~ {end_date}")
+    print(f"실제 기간:  {actual_start_date} ~ {actual_end_date}")
     print(f"거래일수: {backtest_result['trading_days']}일")
     print(f"초기자본: ${backtest_result['initial_capital']:,.0f}")
     print(f"최종자산: ${backtest_result['final_value']:,.0f}")
