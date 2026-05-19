@@ -36,6 +36,13 @@
       "amount": 3119.4198608398438,
       "round": 2,
       "mode": "AG"
+    },
+    "3_2026-05-18": {
+      "shares": 36,
+      "buy_price": 151.75,
+      "amount": 5463.0,
+      "round": 3,
+      "mode": "AG"
     }
   },
   "JSD": {
