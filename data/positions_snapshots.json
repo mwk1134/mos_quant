@@ -13,6 +13,13 @@
       "amount": 7716.459655761719,
       "round": 2,
       "mode": "AG"
+    },
+    "3_2026-05-18": {
+      "shares": 92,
+      "buy_price": 151.75,
+      "amount": 13961.0,
+      "round": 3,
+      "mode": "AG"
     }
   },
   "JEH": {
