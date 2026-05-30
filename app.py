@@ -1784,7 +1784,7 @@ def show_daily_recommendation():
                             }
                         st.session_state.positions_snapshot = current_snapshot
                         gh_ok = True
-                        if st.session_state.get('active_preset') and _is_market_trading_day():
+                        if st.session_state.get('active_preset'):
                             gh_ok, _ = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
                         
                         st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
