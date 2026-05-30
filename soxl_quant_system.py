@@ -3613,13 +3613,16 @@ class SOXLQuantTrader:
                     prev_prev_prev_week_friday_str = prev_prev_prev_week_friday.strftime('%Y-%m-%d')
                     
                     # 전전주의 모드 확인
-                    prev_prev_week_mode = "SF"  # 기본값
+                    # 시작 모드는 check_backtest_starting_state()에서 재귀적으로 계산된 값이다.
+                    # 여기서 임의로 SF를 기본값으로 두면 스냅샷 이후 재개 첫 주의 매수 모드가
+                    # AG에서 SF로 뒤집혀 회차별 비중이 잘못 적용될 수 있다.
+                    prev_prev_week_mode = current_mode
                     if prev_prev_week_friday_str in week_modes:
                         prev_prev_week_mode = week_modes[prev_prev_week_friday_str]
                         print(f"🔍 전전주 모드 (저장된 값 사용): {prev_prev_week_friday_str} = {prev_prev_week_mode}")
                     else:
                         # 전전주의 모드를 계산하기 위해 전전전주의 모드 확인
-                        prev_prev_prev_week_mode = "SF"  # 기본값
+                        prev_prev_prev_week_mode = current_mode
                         if prev_prev_prev_week_friday_str in week_modes:
                             prev_prev_prev_week_mode = week_modes[prev_prev_prev_week_friday_str]
                             print(f"🔍 전전전주 모드 (저장된 값 사용): {prev_prev_prev_week_friday_str} = {prev_prev_prev_week_mode}")
