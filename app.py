@@ -339,14 +339,16 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         _, new_sha = _gh_load_all_snapshots()
         st.session_state._gh_snapshot_sha = new_sha
         st.session_state._gh_snapshot_all = all_data
-        # 로컬 파일도 동기화 (다음 로드 시 일치)
-        try:
-            local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(local_path, "w", encoding="utf-8") as f:
-                json.dump(all_data, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+    # GitHub 저장 실패 여부와 무관하게 로컬 스냅샷은 항상 최신화한다.
+    # 앱은 로컬 스냅샷을 우선 로드하므로 실제 체결 수량이 다음 실행 때 보존된다.
+    try:
+        local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump(all_data, f, ensure_ascii=False, indent=2)
+        st.session_state._gh_snapshot_all = all_data
+    except Exception:
+        pass
     return ok, err
 
 def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
@@ -1057,19 +1059,8 @@ def show_daily_recommendation():
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
-        # 스냅샷 최신일 이후 매수된 포지션에 매수추천 수량 적용 (스냅샷 기반 시뮬레이션에서도 보정)
-        if snapshot:
-            snapshot_dates = [sk.split('_', 1)[1] for sk in snapshot.keys() if '_' in sk]
-            max_snap_date = max(snapshot_dates) if snapshot_dates else ""
-            _rec = st.session_state.trader.get_daily_recommendation(skip_simulate=True, preserve_snapshot_shares=True)
-            next_round = _rec.get('next_buy_round') if "error" not in _rec else None
-            next_amount = _rec.get('next_buy_amount', 0) if "error" not in _rec else 0
-            for pos in st.session_state.trader.positions:
-                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
-                if buy_date_str > max_snap_date and next_round == pos.get('round') and next_amount > 0 and pos.get('buy_price', 0) > 0:
-                    rec_shares = max(1, int(next_amount / pos['buy_price']))
-                    pos['shares'] = rec_shares
-                    pos['amount'] = rec_shares * pos['buy_price']
+        # 체결된 포지션 수량은 스냅샷/시뮬레이션의 shares 값을 원천값으로 사용한다.
+        # 금액/가격으로 다시 산출하면 추천 수량과 매도 표시 수량이 어긋날 수 있다.
         
         # 같은 날짜 포지션 중복 제거 (3/12 등 중복 표시 버그 대응)
         _deduplicate_positions_by_date(st.session_state.trader, snapshot or {})
