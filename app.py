@@ -274,7 +274,7 @@ def _load_snapshot_fallback(preset_name: str) -> dict:
     """GitHub 실패 시 raw URL 또는 로컬 파일에서 로드"""
     try:
         # raw URL (인증 불필요)
-        url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_GH_SNAPSHOT_PATH}"
+        url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_GH_SNAPSHOT_PATH}?ts={int(datetime.now().timestamp())}"
         resp = _requests.get(url, timeout=5)
         if resp.status_code == 200:
             data = json.loads(resp.text)
@@ -293,21 +293,9 @@ def _load_snapshot_fallback(preset_name: str) -> dict:
     return {}
 
 def load_preset_snapshot(preset_name: str) -> dict:
-    """특정 프리셋의 스냅샷 로드. 로컬 파일 우선(수량 정확도 보장), 없으면 GitHub/raw fallback"""
-    # 로컬 파일 우선: GitHub에 잘못 저장된 데이터가 있어도 로컬의 올바른 수량 사용
-    local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
-    if local_path.exists():
-        try:
-            with open(local_path, "r", encoding="utf-8") as f:
-                local_data = json.load(f)
-            result = local_data.get(preset_name, {})
-            if result and isinstance(result, dict) and any("_" in k for k in result.keys()):
-                # 유효한 스냅샷 형식 (1_2026-02-26 등)
-                st.session_state._gh_snapshot_all = local_data
-                return result
-        except Exception:
-            pass
-    # 로컬 없거나 실패 시 GitHub → raw → 로컬 fallback
+    """특정 프리셋의 스냅샷 로드. GitHub를 원천으로 사용하고 로컬은 네트워크 실패 시 fallback."""
+    # Streamlit 서버의 로컬 파일은 이전 실행에서 자동 저장된 값이 남을 수 있다.
+    # 먼저 GitHub의 영구 스냅샷을 읽어 stale 로컬 캐시가 실제 수량을 덮지 못하게 한다.
     all_data, sha = _gh_load_all_snapshots()
     st.session_state._gh_snapshot_sha = sha
     st.session_state._gh_snapshot_all = all_data
