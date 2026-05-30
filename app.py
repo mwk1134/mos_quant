@@ -315,6 +315,27 @@ def _is_market_trading_day() -> bool:
     et_now = trader.get_us_eastern_now()
     return trader.is_trading_day(et_now)
 
+def _snapshot_max_date(snapshot: dict) -> str:
+    """스냅샷 키에서 가장 최신 매수일(YYYY-MM-DD)을 반환."""
+    if not snapshot:
+        return ""
+    dates = []
+    for key in snapshot.keys():
+        if "_" not in key:
+            continue
+        _, date_str = key.split("_", 1)
+        if len(date_str) == 10:
+            dates.append(date_str)
+    return max(dates) if dates else ""
+
+def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) -> bool:
+    """거래일이거나 확정 종가 반영으로 스냅샷이 새 날짜까지 진행됐으면 자동 저장."""
+    if not current_snapshot:
+        return False
+    if _is_market_trading_day():
+        return True
+    return _snapshot_max_date(current_snapshot) > _snapshot_max_date(previous_snapshot or {})
+
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
     all_data = getattr(st.session_state, '_gh_snapshot_all', None)
@@ -327,8 +348,8 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         _, new_sha = _gh_load_all_snapshots()
         st.session_state._gh_snapshot_sha = new_sha
         st.session_state._gh_snapshot_all = all_data
-    # GitHub 저장 실패 여부와 무관하게 로컬 스냅샷은 항상 최신화한다.
-    # 앱은 로컬 스냅샷을 우선 로드하므로 실제 체결 수량이 다음 실행 때 보존된다.
+    # GitHub 저장 실패 여부와 무관하게 로컬 스냅샷도 최신화한다.
+    # 로컬 파일은 네트워크 실패 시 fallback으로 사용된다.
     try:
         local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
         local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1131,10 +1152,15 @@ def show_daily_recommendation():
                 }
         st.session_state.positions_snapshot = current_snapshot
         
-        # 포지션이 있으면 GitHub에 영구 저장 (거래일일 때만 - 주말/휴장일에는 자동 저장 안 함)
+        # 포지션이 있으면 GitHub에 영구 저장.
+        # 주말/휴장일이어도 새 확정 거래일 포지션이 생겼으면 저장한다.
         # 매도처리된 포지션은 positions에서 제외되므로 current_snapshot에 자동 반영됨
         st.session_state._gh_save_result = None
-        if current_snapshot and st.session_state.get('active_preset') and _is_market_trading_day():
+        if (
+            current_snapshot
+            and st.session_state.get('active_preset')
+            and _should_auto_save_snapshot(snapshot, current_snapshot)
+        ):
             ok, err = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
             st.session_state._gh_save_result = (ok, err)
     
