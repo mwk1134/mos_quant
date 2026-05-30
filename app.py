@@ -332,9 +332,99 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
     """거래일이거나 확정 종가 반영으로 스냅샷이 새 날짜까지 진행됐으면 자동 저장."""
     if not current_snapshot:
         return False
+    if current_snapshot == (previous_snapshot or {}):
+        return False
     if _is_market_trading_day():
         return True
     return _snapshot_max_date(current_snapshot) > _snapshot_max_date(previous_snapshot or {})
+
+def get_preset_configs() -> dict:
+    """저장된 전체 프리셋 설정을 반환."""
+    return {
+        "KMW": st.session_state.kmw_preset,
+        "JEH": st.session_state.jeh_preset,
+        "KMW2": st.session_state.kmw2_preset,
+        "JEH2": st.session_state.jeh2_preset,
+        "JSD": st.session_state.jsd_preset,
+    }
+
+def _build_snapshot_from_positions(trader: SOXLQuantTrader, previous_snapshot: dict) -> dict:
+    """트레이더 보유 포지션을 저장용 스냅샷으로 변환. 기존 저장 수량은 우선 보존."""
+    current_snapshot = {}
+    for pos in trader.positions:
+        buy_date = pos['buy_date']
+        buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
+        snap_key = f"{pos['round']}_{buy_date_str}"
+        saved = previous_snapshot.get(snap_key) if previous_snapshot else None
+        if not saved and previous_snapshot:
+            for sk, sv in previous_snapshot.items():
+                if sk.endswith(f"_{buy_date_str}"):
+                    saved = sv
+                    break
+        if saved:
+            current_snapshot[snap_key] = {
+                'shares': int(saved['shares']),
+                'buy_price': float(pos['buy_price']),
+                'amount': float(saved['shares']) * float(pos['buy_price']),
+                'round': int(pos['round']),
+                'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
+            }
+        else:
+            current_snapshot[snap_key] = {
+                'shares': int(pos['shares']),
+                'buy_price': float(pos['buy_price']),
+                'amount': float(pos['amount']),
+                'round': int(pos['round']),
+                'mode': str(pos.get('mode') or 'SF'),
+            }
+    return current_snapshot
+
+def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
+    """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
+    temp_trader = SOXLQuantTrader(
+        initial_capital=preset['initial_capital'],
+        sf_config=st.session_state.get('sf_config'),
+        ag_config=st.session_state.get('ag_config')
+    )
+    temp_trader.session_start_date = preset.get('session_start_date')
+    temp_trader.set_seed_increases(preset.get('seed_increases') or [])
+    if st.session_state.get('test_today_override'):
+        temp_trader.set_test_today(st.session_state.test_today_override)
+    temp_trader.clear_cache()
+
+    start_date = preset.get('session_start_date')
+    if previous_snapshot:
+        sim_result = temp_trader.simulate_from_snapshot_to_today(previous_snapshot, start_date, quiet=True)
+    else:
+        sim_result = temp_trader.simulate_from_start_to_today(start_date, quiet=True)
+    if sim_result and "error" in sim_result:
+        return None, sim_result["error"]
+
+    return _build_snapshot_from_positions(temp_trader, previous_snapshot or {}), None
+
+def auto_save_all_preset_snapshots() -> list:
+    """모든 프리셋을 순회해 새 확정 거래일 스냅샷이 있으면 저장."""
+    results = []
+    for preset_name, preset in get_preset_configs().items():
+        try:
+            previous_snapshot = load_preset_snapshot(preset_name)
+            current_snapshot, err = _simulate_preset_snapshot(preset_name, preset, previous_snapshot)
+            if err:
+                results.append({"preset": preset_name, "status": "error", "message": err})
+                continue
+            if not _should_auto_save_snapshot(previous_snapshot, current_snapshot):
+                results.append({"preset": preset_name, "status": "skipped"})
+                continue
+            ok, save_err = save_preset_snapshot(preset_name, current_snapshot)
+            results.append({
+                "preset": preset_name,
+                "status": "saved" if ok else "save_error",
+                "message": save_err,
+                "max_date": _snapshot_max_date(current_snapshot),
+            })
+        except Exception as e:
+            results.append({"preset": preset_name, "status": "error", "message": str(e)})
+    return results
 
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
@@ -658,13 +748,7 @@ def show_mobile_settings():
     # 프리셋별 총자산 현황
     with st.expander("📊 프리셋별 총자산 현황"):
         if st.button("🔄 총자산 확인", key="preset_totals_btn"):
-            preset_configs = {
-                "KMW": st.session_state.kmw_preset,
-                "JEH": st.session_state.jeh_preset,
-                "JSD": st.session_state.jsd_preset,
-                "JEH2": st.session_state.jeh2_preset,
-                "KMW2": st.session_state.kmw2_preset,
-            }
+            preset_configs = get_preset_configs()
             totals = {}
             with st.spinner("프리셋별 총자산 계산 중..."):
                 for name, preset in preset_configs.items():
@@ -1163,6 +1247,9 @@ def show_daily_recommendation():
         ):
             ok, err = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
             st.session_state._gh_save_result = (ok, err)
+
+        if st.session_state.get('active_preset'):
+            st.session_state._all_preset_snapshot_save_result = auto_save_all_preset_snapshots()
     
     if "error" in recommendation:
         st.error(f"추천 생성 실패: {recommendation['error']}")
