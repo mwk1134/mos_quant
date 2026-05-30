@@ -745,45 +745,6 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     
-    # 프리셋별 총자산 현황
-    with st.expander("📊 프리셋별 총자산 현황"):
-        if st.button("🔄 총자산 확인", key="preset_totals_btn"):
-            preset_configs = get_preset_configs()
-            totals = {}
-            with st.spinner("프리셋별 총자산 계산 중..."):
-                for name, preset in preset_configs.items():
-                    try:
-                        t = SOXLQuantTrader(
-                            initial_capital=preset['initial_capital'],
-                            sf_config=st.session_state.sf_config,
-                            ag_config=st.session_state.ag_config
-                        )
-                        for si in preset.get('seed_increases', []):
-                            t.add_seed_increase(si['date'], si['amount'], f"시드증액 {si['date']}")
-                        snap = load_preset_snapshot(name)
-                        start = preset['session_start_date']
-                        if snap:
-                            t.simulate_from_snapshot_to_today(snap, start, quiet=True)
-                        else:
-                            t.simulate_from_start_to_today(start, quiet=True)
-                        soxl_data = t.get_stock_data("SOXL", "1mo")
-                        price = soxl_data.iloc[-1]['Close'] if soxl_data is not None and len(soxl_data) > 0 else 0
-                        pos_val = sum(p["shares"] * price for p in t.positions)
-                        totals[name] = t.available_cash + pos_val
-                    except Exception:
-                        totals[name] = None
-            st.session_state._preset_totals = totals
-        if '_preset_totals' in st.session_state:
-            cols = st.columns(4)
-            for i, (name, val) in enumerate(st.session_state._preset_totals.items()):
-                with cols[i]:
-                    if val is not None:
-                        st.metric(name, f"${val:,.0f}")
-                    else:
-                        st.metric(name, "—")
-        else:
-            st.caption("💡 위 '총자산 확인' 버튼을 눌러 프리셋별 총자산을 확인하세요.")
-    
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
         st.session_state.session_start_date = new_start_date
@@ -1615,6 +1576,8 @@ def show_daily_recommendation():
     st.subheader("💼 포트폴리오 현황")
     
     portfolio = recommendation['portfolio']
+    mdd_info = st.session_state.trader.calculate_mdd(sim_result.get('daily_records', [])) if isinstance(sim_result, dict) else {}
+    mdd_percent = float(mdd_info.get('mdd_percent', 0.0) or 0.0)
     total_shares = sum(p.get('shares', 0) for p in st.session_state.trader.positions)
     
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -1637,7 +1600,7 @@ def show_daily_recommendation():
         )
     
     with col5:
-        st.metric("💵 총 자산", f"${portfolio['total_portfolio_value']:,.0f}")
+        st.metric("💵 총 자산", f"${portfolio['total_portfolio_value']:,.0f}", f"MDD {mdd_percent:.2f}%")
     
     # 보유 포지션 상세
     if st.session_state.trader.positions:
