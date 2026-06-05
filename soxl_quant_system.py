@@ -3848,6 +3848,13 @@ class SOXLQuantTrader:
                 buy_price_executed = 0
                 buy_quantity = 0
                 buy_amount = 0
+
+                if from_snapshot:
+                    total_shares_for_buy_base = sum(pos["shares"] for pos in self.positions)
+                    total_assets_for_buy_base = self.available_cash + (total_shares_for_buy_base * current_price)
+                    if total_assets_for_buy_base > 0:
+                        self.current_investment_capital = total_assets_for_buy_base
+
                 current_round_before_buy = self.current_round  # 매수 전 회차 저장
                 
                 if self.can_buy_next_round():
