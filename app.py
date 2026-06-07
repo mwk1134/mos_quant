@@ -486,6 +486,73 @@ def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
     for idx in sorted(to_remove, reverse=True):
         trader.positions.pop(idx)
 
+def _build_portfolio_mdd_records(
+    sim_result: dict,
+    portfolio: dict,
+    snapshot: dict,
+    current_date: str,
+    positions: list = None,
+) -> list:
+    """Build MDD records for the live portfolio card, including snapshot baseline and current value."""
+    records = []
+    baseline_assets = None
+    baseline_date = None
+
+    if isinstance(snapshot, dict) and snapshot:
+        snapshot_entries = [
+            item for key, item in snapshot.items()
+            if key != "available_cash" and isinstance(item, dict)
+        ]
+        snapshot_dates = [
+            key.split("_", 1)[1]
+            for key in snapshot.keys()
+            if key != "available_cash" and "_" in key and len(key.split("_", 1)) == 2
+        ]
+        if snapshot_entries and snapshot_dates:
+            baseline_assets = (
+                float(portfolio.get("available_cash", 0.0) or 0.0)
+                + sum(float(item.get("amount", 0.0) or 0.0) for item in snapshot_entries)
+            )
+            baseline_date = max(snapshot_dates)
+
+    if baseline_assets is None:
+        invested = float(portfolio.get("total_invested", 0.0) or 0.0)
+        if invested > 0:
+            baseline_assets = float(portfolio.get("available_cash", 0.0) or 0.0) + invested
+            if positions:
+                position_dates = []
+                for pos in positions:
+                    buy_date = pos.get("buy_date") if isinstance(pos, dict) else None
+                    if hasattr(buy_date, "strftime"):
+                        position_dates.append(buy_date.strftime("%Y-%m-%d"))
+                    elif buy_date:
+                        position_dates.append(str(buy_date))
+                baseline_date = max(position_dates) if position_dates else current_date
+            else:
+                baseline_date = current_date
+
+    if baseline_assets and baseline_assets > 0:
+        records.append({
+            "date": baseline_date or current_date or datetime.now().strftime("%Y-%m-%d"),
+            "total_assets": baseline_assets,
+            "source": "portfolio_cost_baseline",
+        })
+
+    if isinstance(sim_result, dict):
+        for record in sim_result.get("daily_records", []) or []:
+            if isinstance(record, dict) and "total_assets" in record:
+                records.append(record)
+
+    current_assets = float(portfolio.get("total_portfolio_value", 0.0) or 0.0)
+    if current_assets > 0:
+        records.append({
+            "date": current_date or datetime.now().strftime("%Y-%m-%d"),
+            "total_assets": current_assets,
+            "source": "current_portfolio",
+        })
+
+    return records
+
 # 세션 상태 초기화
 if 'trader' not in st.session_state:
     st.session_state.trader = None
@@ -1576,7 +1643,14 @@ def show_daily_recommendation():
     st.subheader("💼 포트폴리오 현황")
     
     portfolio = recommendation['portfolio']
-    mdd_info = st.session_state.trader.calculate_mdd(sim_result.get('daily_records', [])) if isinstance(sim_result, dict) else {}
+    mdd_records = _build_portfolio_mdd_records(
+        sim_result,
+        portfolio,
+        st.session_state.get('positions_snapshot', {}),
+        recommendation.get('date', ''),
+        st.session_state.trader.positions,
+    )
+    mdd_info = st.session_state.trader.calculate_mdd(mdd_records)
     mdd_percent = float(mdd_info.get('mdd_percent', 0.0) or 0.0)
     total_shares = sum(p.get('shares', 0) for p in st.session_state.trader.positions)
     
