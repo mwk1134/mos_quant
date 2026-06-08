@@ -1415,7 +1415,7 @@ def show_daily_recommendation():
                 f"📐 계산식: 투자원금(갱신 기준) \\${inv_base:,.0f} × 비중 {buy_ratio_pct:.1f}% "
                 f"(×{ratio_dec:.4f}) = \\${calc_amt:,.0f}"
             )
-            shares = round(recommendation['next_buy_amount'] / recommendation['buy_price'])
+            shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
             
             # 예수금 부족 시 안내
@@ -1450,7 +1450,7 @@ def show_daily_recommendation():
             # 기본값: 추천 회차/가격/수량
             default_round = recommendation.get('next_buy_round') or st.session_state.trader.current_round
             default_buy_price = recommendation.get('buy_price', 0.0)
-            default_shares = max(1, round(recommendation.get('next_buy_amount', 0) / default_buy_price)) if default_buy_price > 0 else 1
+            default_shares = max(1, int(recommendation.get('next_buy_amount', 0) / default_buy_price)) if default_buy_price > 0 else 1
             
             confirm_date = st.date_input(
                 "체결일",

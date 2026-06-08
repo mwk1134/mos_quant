@@ -1936,8 +1936,8 @@ class SOXLQuantTrader:
         # 1회시드 금액 계산
         target_amount = self.calculate_position_size(self.current_round)
         
-        # 목표가 기준으로 매수할 수량 계산 (round: 반올림으로 실제 체결 수량과 일치율 향상)
-        target_shares = round(target_amount / target_price)  # 목표가 기준 수량
+        # 목표가 기준 매수 수량은 정수 주식만 주문하므로 소수점은 절삭한다.
+        target_shares = int(target_amount / target_price)
         
         if target_shares <= 0:
             return False
