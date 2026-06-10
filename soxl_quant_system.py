@@ -1128,6 +1128,36 @@ class SOXLQuantTrader:
                                 }
                                 
                                 df = pd.DataFrame(df_data)
+                                meta = result.get('meta', {}) or {}
+
+                                # Yahoo가 최신 일봉의 OHLCV는 내려주면서 Close만 null로 두는 경우가 있다.
+                                # 정규장 종료 가격이 meta에 있으면 해당 최신 일봉 Close로 보정한다.
+                                try:
+                                    if len(df) > 0 and pd.isna(df.iloc[-1]['Close']):
+                                        latest_idx = df.index[-1]
+                                        latest_date = df.loc[latest_idx, 'Date'].date()
+                                        regular_price = meta.get('regularMarketPrice')
+                                        regular_time = meta.get('regularMarketTime')
+                                        gmtoffset = int(meta.get('gmtoffset', 0) or 0)
+                                        regular_dt_et = None
+                                        if regular_time:
+                                            regular_dt_et = datetime.utcfromtimestamp(int(regular_time)) + timedelta(seconds=gmtoffset)
+
+                                        is_prior_bar = latest_date < self.get_today_date().date()
+                                        is_regular_close_tick = (
+                                            regular_dt_et is not None
+                                            and regular_dt_et.date() == latest_date
+                                            and (regular_dt_et.hour > 16 or (regular_dt_et.hour == 16 and regular_dt_et.minute >= 0))
+                                        )
+
+                                        if regular_price is not None and (is_prior_bar or is_regular_close_tick):
+                                            df.loc[latest_idx, 'Close'] = float(regular_price)
+                                            adjclose_data = result.get('indicators', {}).get('adjclose', [])
+                                            if adjclose_data and adjclose_data[0].get('adjclose'):
+                                                adjclose_data[0]['adjclose'][-1] = float(regular_price)
+                                            print(f"✅ [자동 보정] {symbol} {latest_date.strftime('%Y-%m-%d')} Close=meta.regularMarketPrice ${float(regular_price):.2f}")
+                                except Exception as e:
+                                    print(f"⚠️ {symbol} 최신 Close 자동 보정 실패: {e}")
                                 
                                 # 수동 데이터 보정 적용 (Yahoo Finance API가 제공하지 않는 날짜)
                                 # SOXL만 보정 적용 (symbol별로 분리)
