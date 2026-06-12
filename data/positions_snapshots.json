@@ -15,20 +15,6 @@
       "amount": 1838.9000854492188,
       "round": 1,
       "mode": "AG"
-    },
-    "2_2026-06-09": {
-      "shares": 17,
-      "buy_price": 201.68,
-      "amount": 3428.56,
-      "round": 2,
-      "mode": "SF"
-    },
-    "3_2026-06-10": {
-      "shares": 33,
-      "buy_price": 180.65,
-      "amount": 5961.45,
-      "round": 3,
-      "mode": "SF"
     }
   },
   "KMW2": {
