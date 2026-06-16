@@ -1,0 +1,2501 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import json
+import os
+import sys
+import io
+from contextlib import redirect_stdout
+from pathlib import Path
+import plotly.graph_objects as go
+import requests as _requests
+import base64
+
+# Force redeploy - version 1.1
+import plotly.express as px
+from plotly.subplots import make_subplots
+
+# ensure local mos_quant modules take precedence
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+
+# 기존 SOXLQuantTrader 클래스 import
+from soxl_quant_system import SOXLQuantTrader as BaseSOXLQuantTrader
+
+
+class SOXLQuantTrader(BaseSOXLQuantTrader):
+    """Web app wrapper with safer date handling for app_test.py."""
+
+    def get_latest_trading_day(self) -> datetime:
+        """Return the latest completed US trading day, including weekends/holidays."""
+        candidate = self.get_today_date()
+        if not self.is_regular_session_closed_now():
+            candidate -= timedelta(days=1)
+
+        while self.is_market_closed(candidate):
+            candidate -= timedelta(days=1)
+
+        print(f"📊 최신 확정 거래일: {candidate.strftime('%Y-%m-%d')}")
+        return candidate
+
+
+def _secret_or_env(name: str, default: str = "") -> str:
+    """Read a Streamlit secret first, then an environment variable."""
+    try:
+        value = st.secrets.get(name, "")
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    return os.environ.get(name, default)
+
+# 페이지 설정
+st.set_page_config(
+    page_title="SOXL 퀀트투자 시스템",
+    page_icon="📈",
+    layout="wide"
+)
+
+# 커스텀 CSS - 모바일 최적화
+st.markdown("""
+<style>
+    /* 메인 헤더 */
+    .main-header {
+        font-size: 2rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        margin-bottom: 1.5rem;
+    }
+    
+    /* 모바일에서 헤더 크기 조정 */
+    @media (max-width: 768px) {
+        .main-header {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+    }
+    
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 0.8rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #1f77b4;
+        margin-bottom: 0.5rem;
+    }
+    
+    .success-card {
+        background-color: #d4edda;
+        border-left-color: #28a745;
+    }
+    
+    .warning-card {
+        background-color: #fff3cd;
+        border-left-color: #ffc107;
+    }
+    
+    .danger-card {
+        background-color: #f8d7da;
+        border-left-color: #dc3545;
+    }
+    
+    .mode-sf {
+        color: #28a745;
+        font-weight: bold;
+    }
+    
+    .mode-ag {
+        color: #ff8c00;
+        font-weight: bold;
+    }
+    
+    /* 모바일 설정 패널 */
+    .mobile-settings-panel {
+        margin-bottom: 1rem;
+    }
+    
+    /* 모바일에서 빈 입력 필드 숨기기 */
+    @media (max-width: 768px) {
+        /* number_input의 빈 라벨 숨기기 */
+        .stNumberInput > div > div > div > label {
+            display: none !important;
+        }
+        
+        /* date_input의 빈 라벨 숨기기 */
+        .stDateInput > div > div > div > label {
+            display: none !important;
+        }
+        
+        /* 빈 div 요소들 숨기기 */
+        div[data-testid="stNumberInput"] > div > div > div:empty,
+        div[data-testid="stDateInput"] > div > div > div:empty {
+            display: none !important;
+        }
+    }
+    
+    /* 사이드바 완전히 숨기기 (모든 화면) */
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
+    
+    /* 메인 컨텐츠 전체 너비 사용 */
+    .main .block-container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+        max-width: 100%;
+    }
+    
+    /* 모바일 최적화 */
+    @media (max-width: 768px) {
+        /* 메트릭 카드 크기 조정 */
+        .metric-card {
+            padding: 0.6rem;
+            font-size: 0.9rem;
+        }
+        
+        /* Metric 글씨 크기 조정 (날짜, RSI, 현재가) */
+        [data-testid="stMetric"] {
+            font-size: 0.85rem !important;
+        }
+        
+        [data-testid="stMetric"] > div {
+            font-size: 0.85rem !important;
+        }
+        
+        [data-testid="stMetric"] > div > div > div {
+            font-size: 0.9rem !important;
+        }
+        
+        [data-testid="stMetric"] > div > div > div > div {
+            font-size: 1.1rem !important;
+        }
+        
+        /* 버튼 크기 조정 */
+        .stButton > button {
+            width: 100%;
+            height: 3rem;
+            font-size: 1rem;
+        }
+        
+        /* 탭 크기 조정 */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.5rem;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            height: 2.5rem;
+            font-size: 0.9rem;
+        }
+        
+        /* 데이터프레임 스크롤 최적화 */
+        .stDataFrame {
+            font-size: 0.8rem;
+        }
+        
+        /* 메인 컨텐츠 전체 너비 사용 */
+        .main .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+        
+        /* 로딩 스피너 최적화 */
+        .stSpinner {
+            margin: 2rem auto;
+        }
+        
+        /* 폼 최적화 */
+        .stForm {
+            margin-bottom: 1rem;
+        }
+    }
+    
+    /* 매우 작은 화면 (스마트폰 세로) */
+    @media (max-width: 480px) {
+        .main-header {
+            font-size: 1.2rem;
+        }
+        
+        .metric-card {
+            padding: 0.4rem;
+            font-size: 0.8rem;
+        }
+        
+        .stTabs [data-baseweb="tab"] {
+            height: 2rem;
+            font-size: 0.8rem;
+            padding: 0.2rem 0.4rem;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- GitHub API 기반 스냅샷 영구 저장 ---
+_GH_REPO = "mwk1134/mos_quant"
+_GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
+
+def _gh_token() -> str:
+    """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
+    try:
+        return st.secrets["GITHUB_TOKEN"]
+    except Exception:
+        return os.environ.get("GITHUB_TOKEN", "")
+
+def _gh_headers():
+    token = _gh_token()
+    if not token:
+        return None
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+def _gh_load_all_snapshots() -> tuple:
+    """GitHub에서 전체 스냅샷 JSON 로드. (data_dict, sha) 반환"""
+    headers = _gh_headers()
+    if not headers:
+        return {}, None
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_SNAPSHOT_PATH}"
+        resp = _requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            info = resp.json()
+            content = base64.b64decode(info["content"]).decode("utf-8")
+            return json.loads(content), info["sha"]
+        return {}, None
+    except Exception as e:
+        print(f"⚠️ GitHub 스냅샷 로드 실패: {e}")
+        return {}, None
+
+def _gh_save_all_snapshots(data: dict, sha: str = None) -> tuple:
+    """GitHub에 전체 스냅샷 JSON 저장. (성공여부, 에러메시지) 반환"""
+    headers = _gh_headers()
+    if not headers:
+        return False, "GITHUB_TOKEN이 설정되지 않았습니다. Streamlit Secrets에 추가해주세요."
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{_GH_SNAPSHOT_PATH}"
+        # sha가 없으면 GET으로 현재 파일 정보 조회 (업데이트 시 필수)
+        if not sha:
+            get_resp = _requests.get(url, headers=headers, timeout=10)
+            if get_resp.status_code == 200:
+                sha = get_resp.json().get("sha")
+        content_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        body = {
+            "message": f"snapshot update {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "content": base64.b64encode(content_bytes).decode("ascii"),
+        }
+        if sha:
+            body["sha"] = sha
+        resp = _requests.put(url, headers=headers, json=body, timeout=10)
+        if resp.status_code in (200, 201):
+            return True, ""
+        err = resp.json() if resp.text else {}
+        msg = err.get("message", resp.text[:200])
+        return False, f"GitHub API 오류 ({resp.status_code}): {msg}"
+    except Exception as e:
+        return False, str(e)
+
+def _load_snapshot_fallback(preset_name: str) -> dict:
+    """GitHub 실패 시 raw URL 또는 로컬 파일에서 로드"""
+    try:
+        # raw URL (인증 불필요)
+        url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_GH_SNAPSHOT_PATH}?ts={int(datetime.now().timestamp())}"
+        resp = _requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            data = json.loads(resp.text)
+            return data.get(preset_name, {})
+    except Exception:
+        pass
+    try:
+        # 로컬 파일
+        path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get(preset_name, {})
+    except Exception:
+        pass
+    return {}
+
+def load_preset_snapshot(preset_name: str) -> dict:
+    """특정 프리셋의 스냅샷 로드. GitHub를 원천으로 사용하고 로컬은 네트워크 실패 시 fallback."""
+    # Streamlit 서버의 로컬 파일은 이전 실행에서 자동 저장된 값이 남을 수 있다.
+    # 먼저 GitHub의 영구 스냅샷을 읽어 stale 로컬 캐시가 실제 수량을 덮지 못하게 한다.
+    all_data, sha = _gh_load_all_snapshots()
+    st.session_state._gh_snapshot_sha = sha
+    st.session_state._gh_snapshot_all = all_data
+    result = all_data.get(preset_name, {})
+    if not result:
+        result = _load_snapshot_fallback(preset_name)
+        if result:
+            all_data[preset_name] = result
+            st.session_state._gh_snapshot_all = all_data
+    return result
+
+def _is_market_trading_day() -> bool:
+    """미국 시장이 거래일인지 확인 (주말/휴장일이면 False). 스냅샷 저장 시 사용."""
+    trader = st.session_state.get('trader')
+    if not trader:
+        return False
+    et_now = trader.get_us_eastern_now()
+    return trader.is_trading_day(et_now)
+
+def _snapshot_max_date(snapshot: dict) -> str:
+    """스냅샷 키에서 가장 최신 매수일(YYYY-MM-DD)을 반환."""
+    if not snapshot:
+        return ""
+    dates = []
+    for key in snapshot.keys():
+        if "_" not in key:
+            continue
+        _, date_str = key.split("_", 1)
+        if len(date_str) == 10:
+            dates.append(date_str)
+    return max(dates) if dates else ""
+
+def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) -> bool:
+    """거래일이거나 확정 종가 반영으로 스냅샷이 새 날짜까지 진행됐으면 자동 저장."""
+    if not current_snapshot:
+        return False
+    if current_snapshot == (previous_snapshot or {}):
+        return False
+    if _is_market_trading_day():
+        return True
+    return _snapshot_max_date(current_snapshot) > _snapshot_max_date(previous_snapshot or {})
+
+def get_preset_configs() -> dict:
+    """저장된 전체 프리셋 설정을 반환."""
+    return {
+        "KMW": st.session_state.kmw_preset,
+        "JEH": st.session_state.jeh_preset,
+        "KMW2": st.session_state.kmw2_preset,
+        "JEH2": st.session_state.jeh2_preset,
+        "JSD": st.session_state.jsd_preset,
+    }
+
+def _build_snapshot_from_positions(trader: SOXLQuantTrader, previous_snapshot: dict) -> dict:
+    """트레이더 보유 포지션을 저장용 스냅샷으로 변환. 기존 저장 수량은 우선 보존."""
+    current_snapshot = {}
+    for pos in trader.positions:
+        buy_date = pos['buy_date']
+        buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
+        snap_key = f"{pos['round']}_{buy_date_str}"
+        saved = previous_snapshot.get(snap_key) if previous_snapshot else None
+        if not saved and previous_snapshot:
+            for sk, sv in previous_snapshot.items():
+                if sk.endswith(f"_{buy_date_str}"):
+                    saved = sv
+                    break
+        if saved:
+            current_snapshot[snap_key] = {
+                'shares': int(saved['shares']),
+                'buy_price': float(pos['buy_price']),
+                'amount': float(saved['shares']) * float(pos['buy_price']),
+                'round': int(pos['round']),
+                'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
+            }
+        else:
+            current_snapshot[snap_key] = {
+                'shares': int(pos['shares']),
+                'buy_price': float(pos['buy_price']),
+                'amount': float(pos['amount']),
+                'round': int(pos['round']),
+                'mode': str(pos.get('mode') or 'SF'),
+            }
+    return current_snapshot
+
+def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
+    """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
+    temp_trader = SOXLQuantTrader(
+        initial_capital=preset['initial_capital'],
+        sf_config=st.session_state.get('sf_config'),
+        ag_config=st.session_state.get('ag_config')
+    )
+    temp_trader.session_start_date = preset.get('session_start_date')
+    temp_trader.set_seed_increases(preset.get('seed_increases') or [])
+    if st.session_state.get('test_today_override'):
+        temp_trader.set_test_today(st.session_state.test_today_override)
+    temp_trader.clear_cache()
+
+    start_date = preset.get('session_start_date')
+    if previous_snapshot:
+        sim_result = temp_trader.simulate_from_snapshot_to_today(previous_snapshot, start_date, quiet=True)
+    else:
+        sim_result = temp_trader.simulate_from_start_to_today(start_date, quiet=True)
+    if sim_result and "error" in sim_result:
+        return None, sim_result["error"]
+
+    return _build_snapshot_from_positions(temp_trader, previous_snapshot or {}), None
+
+def auto_save_all_preset_snapshots() -> list:
+    """모든 프리셋을 순회해 새 확정 거래일 스냅샷이 있으면 저장."""
+    results = []
+    for preset_name, preset in get_preset_configs().items():
+        try:
+            previous_snapshot = load_preset_snapshot(preset_name)
+            current_snapshot, err = _simulate_preset_snapshot(preset_name, preset, previous_snapshot)
+            if err:
+                results.append({"preset": preset_name, "status": "error", "message": err})
+                continue
+            if not _should_auto_save_snapshot(previous_snapshot, current_snapshot):
+                results.append({"preset": preset_name, "status": "skipped"})
+                continue
+            ok, save_err = save_preset_snapshot(preset_name, current_snapshot)
+            results.append({
+                "preset": preset_name,
+                "status": "saved" if ok else "save_error",
+                "message": save_err,
+                "max_date": _snapshot_max_date(current_snapshot),
+            })
+        except Exception as e:
+            results.append({"preset": preset_name, "status": "error", "message": str(e)})
+    return results
+
+def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
+    """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
+    # Always merge into the latest remote copy before saving. This avoids overwriting
+    # other presets with stale session data when multiple devices/sessions are open.
+    all_data, sha = _gh_load_all_snapshots()
+    if not all_data:
+        all_data = getattr(st.session_state, '_gh_snapshot_all', None) or {}
+        sha = getattr(st.session_state, '_gh_snapshot_sha', None)
+    all_data[preset_name] = snapshot
+    ok, err = _gh_save_all_snapshots(all_data, sha)
+    if not ok and "GitHub API 오류 (409)" in err:
+        latest_data, latest_sha = _gh_load_all_snapshots()
+        latest_data[preset_name] = snapshot
+        all_data = latest_data
+        ok, err = _gh_save_all_snapshots(all_data, latest_sha)
+    if ok:
+        _, new_sha = _gh_load_all_snapshots()
+        st.session_state._gh_snapshot_sha = new_sha
+        st.session_state._gh_snapshot_all = all_data
+    # Only write local fallback after a confirmed remote save, or when no GitHub token
+    # exists and this app is being used as a local-only test app.
+    if ok or not _gh_headers():
+        try:
+            local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(all_data, f, ensure_ascii=False, indent=2)
+            st.session_state._gh_snapshot_all = all_data
+        except Exception:
+            pass
+    return ok, err
+
+
+def clear_runtime_snapshot(reason: str = "") -> None:
+    """Clear only in-memory derived state. Never persist an empty snapshot."""
+    st.session_state.positions_snapshot = {}
+    st.session_state.trader = None
+    st.session_state._gh_save_result = None
+    st.session_state._pending_active_snapshot = None
+    if reason:
+        st.session_state._runtime_snapshot_notice = reason
+
+
+def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
+    """같은 매수일에 여러 포지션이 있으면 하나만 유지 (하루 1매수 원칙). 스냅샷에 있으면 그 값 사용."""
+    from collections import defaultdict
+    by_date = defaultdict(list)
+    for idx, pos in enumerate(trader.positions):
+        buy_date = pos.get('buy_date')
+        if buy_date is None:
+            continue
+        date_str = buy_date.strftime('%Y-%m-%d') if hasattr(buy_date, 'strftime') else str(buy_date)
+        by_date[date_str].append((idx, pos))
+    
+    to_remove = []
+    cash_adjustment = 0.0
+    for date_str, group in by_date.items():
+        if len(group) <= 1:
+            continue
+        group.sort(key=lambda x: x[1]['round'])
+        keep_idx, keep_pos = group[0]
+        snap_key = f"{keep_pos['round']}_{date_str}"
+        saved = snapshot.get(snap_key)
+        if not saved:
+            for sk, sv in snapshot.items():
+                if sk.endswith(f"_{date_str}"):
+                    saved = sv
+                    break
+        if saved:
+            old_amount = float(keep_pos.get('amount', 0) or 0)
+            keep_pos['shares'] = int(saved['shares'])
+            keep_pos['buy_price'] = float(saved['buy_price'])
+            keep_pos['amount'] = keep_pos['shares'] * keep_pos['buy_price']
+            if 'round' in saved:
+                keep_pos['round'] = int(saved['round'])
+            cash_adjustment += old_amount - float(keep_pos.get('amount', 0) or 0)
+        for idx, removed_pos in group[1:]:
+            to_remove.append(idx)
+            cash_adjustment += float(removed_pos.get('amount', 0) or 0)
+    
+    for idx in sorted(to_remove, reverse=True):
+        trader.positions.pop(idx)
+    if cash_adjustment:
+        trader.available_cash += cash_adjustment
+        if trader.available_cash < 0:
+            trader.available_cash = 0.0
+
+def _build_portfolio_mdd_records(
+    sim_result: dict,
+    portfolio: dict,
+    snapshot: dict,
+    current_date: str,
+    positions: list = None,
+) -> list:
+    """Build MDD records for the live portfolio card, including snapshot baseline and current value."""
+    records = []
+    baseline_assets = None
+    baseline_date = None
+
+    if isinstance(snapshot, dict) and snapshot:
+        snapshot_entries = [
+            item for key, item in snapshot.items()
+            if key != "available_cash" and isinstance(item, dict)
+        ]
+        snapshot_dates = [
+            key.split("_", 1)[1]
+            for key in snapshot.keys()
+            if key != "available_cash" and "_" in key and len(key.split("_", 1)) == 2
+        ]
+        if snapshot_entries and snapshot_dates:
+            baseline_assets = (
+                float(portfolio.get("available_cash", 0.0) or 0.0)
+                + sum(float(item.get("amount", 0.0) or 0.0) for item in snapshot_entries)
+            )
+            baseline_date = max(snapshot_dates)
+
+    if baseline_assets is None:
+        invested = float(portfolio.get("total_invested", 0.0) or 0.0)
+        if invested > 0:
+            baseline_assets = float(portfolio.get("available_cash", 0.0) or 0.0) + invested
+            if positions:
+                position_dates = []
+                for pos in positions:
+                    buy_date = pos.get("buy_date") if isinstance(pos, dict) else None
+                    if hasattr(buy_date, "strftime"):
+                        position_dates.append(buy_date.strftime("%Y-%m-%d"))
+                    elif buy_date:
+                        position_dates.append(str(buy_date))
+                baseline_date = max(position_dates) if position_dates else current_date
+            else:
+                baseline_date = current_date
+
+    if baseline_assets and baseline_assets > 0:
+        records.append({
+            "date": baseline_date or current_date or datetime.now().strftime("%Y-%m-%d"),
+            "total_assets": baseline_assets,
+            "source": "portfolio_cost_baseline",
+        })
+
+    if isinstance(sim_result, dict):
+        for record in sim_result.get("daily_records", []) or []:
+            if isinstance(record, dict) and "total_assets" in record:
+                records.append(record)
+
+    current_assets = float(portfolio.get("total_portfolio_value", 0.0) or 0.0)
+    if current_assets > 0:
+        records.append({
+            "date": current_date or datetime.now().strftime("%Y-%m-%d"),
+            "total_assets": current_assets,
+            "source": "current_portfolio",
+        })
+
+    return records
+
+# 세션 상태 초기화
+if 'trader' not in st.session_state:
+    st.session_state.trader = None
+if 'initial_capital' not in st.session_state:
+    st.session_state.initial_capital = 9000
+if 'session_start_date' not in st.session_state:
+    st.session_state.session_start_date = "2025-08-27"  # 기본값 설정
+if 'test_today_override' not in st.session_state:
+    st.session_state.test_today_override = datetime.now().strftime('%Y-%m-%d')  # 초기값: 오늘 날짜
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'position_edits' not in st.session_state:
+    st.session_state.position_edits = {}  # {position_index: {'shares': int, 'buy_price': float}}
+if 'positions_snapshot' not in st.session_state:
+    st.session_state.positions_snapshot = {}
+if 'sf_config' not in st.session_state:
+    st.session_state.sf_config = {
+        "buy_threshold": 3.5,
+        "sell_threshold": 1.1,
+        "max_hold_days": 35,
+        "split_count": 7,
+        "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
+    }
+if 'ag_config' not in st.session_state:
+    st.session_state.ag_config = {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 7,
+        "split_count": 8,
+        "split_ratios": [0.062, 0.134, 0.118, 0.148, 0.150, 0.182, 0.186, 0.020]
+    }
+if 'active_preset' not in st.session_state:
+    st.session_state.active_preset = None
+if 'kmw_preset' not in st.session_state:
+    st.session_state.kmw_preset = {
+        'initial_capital': 9000.0,
+        'session_start_date': "2025-08-27",
+        'seed_increases': [{"date": "2025-10-21", "amount": 31000.0}],
+        'position_edits': {}  # 포지션 수정 정보 저장
+    }
+if 'jsd_preset' not in st.session_state:
+    st.session_state.jsd_preset = {
+        'initial_capital': 17300.0,
+        'session_start_date': "2025-10-30",
+        'seed_increases': [],
+        'position_edits': {}  # 포지션 수정 정보 저장
+    }
+if 'jeh_preset' not in st.session_state:
+    st.session_state.jeh_preset = {
+        'initial_capital': 2793.0,
+        'session_start_date': "2025-10-30",
+        'seed_increases': [
+            {"date": "2025-12-22", "amount": 13499.0},
+            {"date": "2026-01-15", "amount": 2035.0}
+        ],
+        'position_edits': {}  # 포지션 수정 정보 저장
+    }
+if 'jeh2_preset' not in st.session_state:
+    st.session_state.jeh2_preset = {
+        'initial_capital': 2704.0,
+        'session_start_date': "2025-12-22",
+        'seed_increases': [
+            {"date": "2026-01-15", "amount": 678.0}
+        ],
+        'position_edits': {}  # 포지션 수정 정보 저장
+    }
+if 'kmw2_preset' not in st.session_state:
+    st.session_state.kmw2_preset = {
+        'initial_capital': 67612.0,
+        'session_start_date': "2026-04-29",
+        'seed_increases': [],
+        'position_edits': {}
+    }
+
+# app_test.py: production-like test app. Debug deploy banners are intentionally disabled.
+
+def login_page():
+    """로그인 페이지 - 모바일 최적화"""
+    # 간단한 헤더
+    st.markdown("# 🔐 MOSxMOS 퀀트투자 시스템")
+    st.markdown("### 로그인하여 시스템에 접속하세요")
+
+    configured_username = _secret_or_env("APP_USERNAME")
+    configured_password = _secret_or_env("APP_PASSWORD")
+    if not configured_username or not configured_password:
+        st.error("APP_USERNAME / APP_PASSWORD가 설정되지 않았습니다.")
+        st.caption("Streamlit Secrets 또는 환경변수에 로그인 정보를 설정한 뒤 다시 실행하세요.")
+        return
+    
+    with st.form("login_form"):
+        st.markdown("### 🔑 로그인")
+        
+        username = st.text_input("사용자 ID", placeholder="사용자 ID를 입력하세요")
+        password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
+        
+        submitted = st.form_submit_button("로그인", use_container_width=True)
+        
+        if submitted:
+            if username == configured_username and password == configured_password:
+                st.session_state.authenticated = True
+                st.success("✅ 로그인 성공!")
+                st.rerun()
+            else:
+                st.error("❌ 잘못된 사용자 ID 또는 비밀번호입니다.")
+    
+
+def initialize_trader():
+    """트레이더 초기화 - 오류 처리 강화"""
+    if st.session_state.trader is None:
+        try:
+            with st.spinner('MOS 퀀트투자 시스템 초기화 중...'):
+                # 사용자 지정 파라미터 가져오기 (없으면 None = 기본값 사용)
+                sf_config = st.session_state.get('sf_config')
+                ag_config = st.session_state.get('ag_config')
+                
+                st.session_state.trader = SOXLQuantTrader(
+                    initial_capital=st.session_state.initial_capital,
+                    sf_config=sf_config,
+                    ag_config=ag_config
+                )
+                if st.session_state.test_today_override:
+                    st.session_state.trader.set_test_today(st.session_state.test_today_override)
+                
+                # 시드증액은 아래 set_seed_increases로 매 호출 동기화
+                
+                # RSI 참조 데이터 자동 업데이트 체크 (웹앱 실행 시마다)
+                try:
+                    if not st.session_state.trader.check_and_update_rsi_data():
+                        # 최신 데이터가 아니면 자동으로 업데이트
+                        with st.spinner('RSI 참조 데이터 업데이트 중...'):
+                            if st.session_state.trader.update_rsi_reference_file():
+                                st.success("✅ RSI 참조 데이터가 최신 상태로 업데이트되었습니다.")
+                            else:
+                                st.warning("⚠️ RSI 참조 데이터 업데이트에 실패했습니다. 기존 데이터를 사용합니다.")
+                except Exception as e:
+                    # RSI 업데이트 실패해도 웹앱은 계속 진행
+                    st.warning(f"⚠️ RSI 데이터 확인 중 오류 발생 (무시하고 계속 진행): {str(e)[:100]}")
+        except Exception as e:
+            st.error(f"시스템 초기화 실패: {str(e)}")
+            st.info("페이지를 새로고침해주세요.")
+            if st.button("🔄 새로고침"):
+                st.rerun()
+    # 트레이더 재생성 없이 세션에서 시드만 바뀐 경우에도 시뮬에 반영
+    if st.session_state.trader is not None:
+        try:
+            st.session_state.trader.set_seed_increases(st.session_state.get("seed_increases") or [])
+        except Exception:
+            pass
+
+
+def show_mobile_settings():
+    """모바일용 설정 패널"""
+    st.markdown("""
+    <div class="mobile-settings-panel">
+    """, unsafe_allow_html=True)
+    
+    # 투자원금 설정
+    initial_capital = st.number_input(
+        "💰 초기 투자금 (달러)",
+        min_value=1000.0,
+        max_value=1000000.0,
+        value=float(st.session_state.initial_capital),
+        step=1000.0,
+        format="%.0f"
+    )
+    
+    if initial_capital != st.session_state.initial_capital:
+        st.session_state.initial_capital = initial_capital
+        clear_runtime_snapshot("초기 투자금 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
+        st.rerun()  # 즉시 새로고침
+    
+    # 시작일 설정
+    # session_state에 값이 있으면 사용, 없으면 기본값
+    default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
+    
+    # 날짜 입력
+    session_start_date = st.date_input(
+        "📅 투자 시작일",
+        value=default_start_date,
+        max_value=datetime.now()
+    )
+    
+    # 프리셋 불러오기 버튼 (가로 1줄, 5열)
+    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5 = st.columns(5)
+    with pr_col1:
+        if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000", use_container_width=True):
+            kmw = st.session_state.kmw_preset
+            st.session_state.initial_capital = kmw['initial_capital']
+            st.session_state.session_start_date = kmw['session_start_date']
+            st.session_state.seed_increases = kmw['seed_increases'].copy()
+            if 'position_edits' in kmw and kmw['position_edits']:
+                st.session_state.position_edits = kmw['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            st.session_state.active_preset = "KMW"
+            st.session_state.positions_snapshot = load_preset_snapshot("KMW")
+            st.session_state.trader = None
+            st.rerun()
+    with pr_col2:
+        if st.button("JEH", help="초기설정: 2793달러, 시작일 2025/10/30, 2025/12/22 +13,499, 2026/01/15 +2,035", use_container_width=True):
+            jeh = st.session_state.jeh_preset
+            st.session_state.initial_capital = jeh['initial_capital']
+            st.session_state.session_start_date = jeh['session_start_date']
+            st.session_state.seed_increases = jeh['seed_increases'].copy()
+            if 'position_edits' in jeh and jeh['position_edits']:
+                st.session_state.position_edits = jeh['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            st.session_state.active_preset = "JEH"
+            st.session_state.positions_snapshot = load_preset_snapshot("JEH")
+            st.session_state.trader = None
+            st.rerun()
+    with pr_col3:
+        if st.button("KMW2", help="초기설정: 67612달러, 시작일 2026/04/29", use_container_width=True):
+            kmw2 = st.session_state.kmw2_preset
+            st.session_state.initial_capital = kmw2['initial_capital']
+            st.session_state.session_start_date = kmw2['session_start_date']
+            st.session_state.seed_increases = kmw2['seed_increases'].copy()
+            if 'position_edits' in kmw2 and kmw2['position_edits']:
+                st.session_state.position_edits = kmw2['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            st.session_state.active_preset = "KMW2"
+            st.session_state.positions_snapshot = load_preset_snapshot("KMW2")
+            st.session_state.trader = None
+            st.rerun()
+    with pr_col4:
+        if st.button("JEH2", help="초기설정: 2704달러, 시작일 2025/12/22, 2026/01/15 +678", use_container_width=True):
+            jeh2 = st.session_state.jeh2_preset
+            st.session_state.initial_capital = jeh2['initial_capital']
+            st.session_state.session_start_date = jeh2['session_start_date']
+            st.session_state.seed_increases = jeh2['seed_increases'].copy()
+            if 'position_edits' in jeh2 and jeh2['position_edits']:
+                st.session_state.position_edits = jeh2['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            st.session_state.active_preset = "JEH2"
+            st.session_state.positions_snapshot = load_preset_snapshot("JEH2")
+            st.session_state.trader = None
+            st.rerun()
+    with pr_col5:
+        if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음", use_container_width=True):
+            jsd = st.session_state.jsd_preset
+            st.session_state.initial_capital = jsd['initial_capital']
+            st.session_state.session_start_date = jsd['session_start_date']
+            st.session_state.seed_increases = jsd['seed_increases'].copy()
+            if 'position_edits' in jsd and jsd['position_edits']:
+                st.session_state.position_edits = jsd['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            st.session_state.active_preset = "JSD"
+            st.session_state.positions_snapshot = load_preset_snapshot("JSD")
+            st.session_state.trader = None
+            st.rerun()
+    
+    new_start_date = session_start_date.strftime('%Y-%m-%d')
+    if new_start_date != st.session_state.session_start_date:
+        st.session_state.session_start_date = new_start_date
+        clear_runtime_snapshot("투자 시작일 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
+        st.rerun()  # 즉시 새로고침
+    
+    # 시드증액 설정
+    st.subheader("💰 시드증액")
+    
+    # 시드증액 목록 표시
+    if 'seed_increases' not in st.session_state:
+        st.session_state.seed_increases = []
+    
+    if st.session_state.seed_increases:
+        st.write("**등록된 시드증액/인출:**")
+        for i, seed in enumerate(st.session_state.seed_increases):
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                st.write(f"📅 {seed['date']}")
+            with col2:
+                if seed['amount'] > 0:
+                    st.write(f"💰 +${seed['amount']:,.0f}")
+                else:
+                    st.write(f"🔴 -${abs(seed['amount']):,.0f}")
+            with col3:
+                if st.button("🗑️", key=f"delete_seed_{i}"):
+                    st.session_state.seed_increases.pop(i)
+                    clear_runtime_snapshot("시드증액/인출 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
+                    st.rerun()
+    
+    # 시드증액 추가
+    col1, col2 = st.columns(2)
+    with col1:
+        seed_date = st.date_input(
+            "📅 시드증액 날짜",
+            value=datetime.now().date(),
+            max_value=datetime.now().date(),
+            key="seed_date"
+        )
+    with col2:
+        seed_amount = st.number_input(
+            "💰 증액/인출 금액 (달러)",
+            min_value=-1000000.0,
+            max_value=1000000.0,
+            value=31000.0,
+            step=1000.0,
+            format="%.0f",
+            help="양수: 시드증액, 음수: 시드인출",
+            key="seed_amount"
+        )
+
+    if st.button("➕ 시드증액/인출 추가", use_container_width=True):
+        if seed_amount != 0:
+            seed_increase = {
+                "date": seed_date.strftime('%Y-%m-%d'),
+                "amount": seed_amount
+            }
+            st.session_state.seed_increases.append(seed_increase)
+            clear_runtime_snapshot("시드증액/인출 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
+            if seed_amount > 0:
+                st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
+            else:
+                st.warning(f"⚠️ 시드인출이 추가되었습니다: {seed_increase['date']} - ${abs(seed_amount):,.0f}")
+            st.rerun()
+        else:
+            st.error("❌ 금액을 입력해주세요. (0은 불가)")
+    
+    # 설정 변경 안내
+    if st.session_state.initial_capital != 9000 or st.session_state.session_start_date != "2025-08-27":
+        st.info("💡 설정이 변경되었습니다. 대시보드가 업데이트됩니다.")
+    
+    st.markdown("""
+    </div>
+    """, unsafe_allow_html=True)
+
+def main():
+    # app_test.py는 로컬/테스트용이므로 로그인 없이 바로 진입한다.
+    st.session_state.authenticated = True
+    
+    # 메인 헤더
+    st.markdown('<div class="main-header">📈 SOXL 퀀트투자 시스템</div>', unsafe_allow_html=True)
+
+    runtime_notice = st.session_state.pop('_runtime_snapshot_notice', None)
+    if runtime_notice:
+        st.info(runtime_notice)
+    
+    # 실시간 시간 표시 (한국시간)
+    from datetime import datetime, timezone, timedelta
+    
+    # 한국시간 (UTC+9)
+    korea_tz = timezone(timedelta(hours=9))
+    korea_time = datetime.now(korea_tz)
+    st.info(f"🕐 한국시간: {korea_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    
+    # 설정 패널 (모든 화면)
+    show_mobile_settings()
+    
+    # 트레이더 초기화
+    initialize_trader()
+    
+    # st.tabs는 숨겨진 탭의 코드도 전부 실행하므로, 선택된 화면만 실행되는 radio 내비게이션을 사용한다.
+    page = st.radio(
+        "메뉴",
+        ["📊 오늘의 매매", "📈 백테스팅", "⚙️ 설정"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="active_page",
+    )
+
+    if page == "📊 오늘의 매매":
+        show_daily_recommendation()
+    elif page == "📈 백테스팅":
+        show_backtest()
+    else:
+        show_advanced_settings()
+
+def show_dashboard():
+    """대시보드 페이지"""
+    st.header("🏠 대시보드")
+    
+    if not st.session_state.trader:
+        st.error("시스템이 초기화되지 않았습니다.")
+        return
+    
+    # 시뮬레이션 실행하여 현재 상태 업데이트
+    # 테스트 날짜 오버라이드 고려
+    today_for_calc = datetime.now()
+    if st.session_state.trader and st.session_state.trader.test_today_override:
+        today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+    start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
+    
+    with st.spinner('현재 상태 계산 중...'):
+        # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
+        st.session_state.trader.clear_cache()
+        
+        # 디버깅: 최신 거래일 확인
+        latest_trading_day = st.session_state.trader.get_latest_trading_day()
+        st.info(f"🔄 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
+        
+        # 스냅샷 있으면 스냅샷 기반 시뮬레이션 (스냅샷에 없는 회차 생성 안 함)
+        snapshot = st.session_state.get('positions_snapshot', {})
+        if snapshot:
+            sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=False)
+        else:
+            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=False)
+        st.session_state.sim_result = sim_result  # 로그 표시를 위해 저장
+        if "error" in sim_result:
+            st.error(f"시뮬레이션 실패: {sim_result['error']}")
+            return
+    
+    # 현재 상태 요약
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "💰 투자원금",
+            f"${st.session_state.initial_capital:,.0f}",
+            delta=None
+        )
+    
+    with col2:
+        if st.session_state.trader.current_mode:
+            mode_display = "안전모드" if st.session_state.trader.current_mode == "SF" else "공세모드"
+            st.metric(
+                "🎯 현재 모드",
+                mode_display
+            )
+        else:
+            st.metric("🎯 현재 모드", "미설정")
+    
+    with col3:
+        st.metric(
+            "📦 보유 포지션",
+            f"{len(st.session_state.trader.positions)}개"
+        )
+    
+    with col4:
+        st.metric(
+            "💵 현금잔고",
+            f"${st.session_state.trader.available_cash:,.0f}"
+        )
+    
+    # 최근 거래일 정보
+    st.subheader("📅 최근 시장 정보")
+    latest_trading_day = st.session_state.trader.get_latest_trading_day()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info(f"📅 최근 거래일: {latest_trading_day.strftime('%Y-%m-%d (%A)')}")
+    
+    with col2:
+        is_market_closed = st.session_state.trader.is_market_closed(datetime.now())
+        if is_market_closed:
+            st.warning("🚫 현재 시장 휴장")
+        else:
+            st.success("✅ 현재 시장 개장")
+    
+    # 10/10일 매수 조건 확인 정보 표시
+    if latest_trading_day.strftime('%Y-%m-%d') == '2025-10-10':
+        st.subheader("🔍 10/10일 매수 조건 확인")
+        
+        # SOXL 데이터 가져오기
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
+        if soxl_data is not None and len(soxl_data) > 0:
+            # 디버깅: 데이터 범위 확인
+            st.info(f"📊 SOXL 데이터 범위: {soxl_data.index[0].strftime('%Y-%m-%d')} ~ {soxl_data.index[-1].strftime('%Y-%m-%d')}")
+            st.info(f"📊 총 데이터 수: {len(soxl_data)}개")
+            
+            # 최근 5개 날짜 표시
+            recent_dates = soxl_data.index[-5:].strftime('%Y-%m-%d').tolist()
+            st.info(f"📊 최근 5개 거래일: {', '.join(recent_dates)}")
+            
+            # 10/9일(전일)과 10/10일 데이터 찾기
+            prev_date_str = '2025-10-09'
+            target_date_str = '2025-10-10'
+            prev_date = pd.to_datetime(prev_date_str)
+            target_date = pd.to_datetime(target_date_str)
+            
+            # 전일(10/9) 종가 찾기
+            prev_close = None
+            if prev_date in soxl_data.index:
+                prev_close = soxl_data.loc[prev_date, 'Close']
+            else:
+                for idx in soxl_data.index:
+                    if idx.strftime('%Y-%m-%d') == prev_date_str:
+                        prev_close = soxl_data.loc[idx, 'Close']
+                        break
+            
+            # 당일(10/10) 종가 찾기
+            daily_close = None
+            if target_date in soxl_data.index:
+                daily_close = soxl_data.loc[target_date, 'Close']
+            else:
+                for idx in soxl_data.index:
+                    if idx.strftime('%Y-%m-%d') == target_date_str:
+                        daily_close = soxl_data.loc[idx, 'Close']
+                        break
+            
+            if prev_close is not None and daily_close is not None:
+                # 현재 모드와 설정 가져오기
+                current_config = st.session_state.trader.sf_config if st.session_state.trader.current_mode == "SF" else st.session_state.trader.ag_config
+                # 매수가는 전일 종가 기준으로 계산
+                buy_price = prev_close * (1 + current_config["buy_threshold"] / 100)
+                
+                # 매수 조건 확인
+                can_buy = st.session_state.trader.can_buy_next_round()
+                buy_condition = buy_price > daily_close
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.info(f"📊 10/9일 종가: ${prev_close:.2f}")
+                with col2:
+                    st.info(f"📊 10/10일 종가: ${daily_close:.2f}")
+                with col3:
+                    st.info(f"💰 매수가: ${buy_price:.2f}")
+                with col4:
+                    if buy_condition:
+                        st.success(f"✅ 매수조건: True")
+                    else:
+                        st.error(f"❌ 매수조건: False")
+                
+                # 추가 정보
+                st.info(f"🔍 매수 가능 여부: {can_buy}")
+                st.info(f"📦 현재 회차: {st.session_state.trader.current_round}")
+                st.info(f"💵 현금잔고: ${st.session_state.trader.available_cash:,.0f}")
+            elif prev_close is None:
+                st.warning("⚠️ 10/9일(전일) 데이터를 찾을 수 없습니다.")
+            elif daily_close is None:
+                st.warning("⚠️ 10/10일(당일) 데이터를 찾을 수 없습니다.")
+    
+
+def show_daily_recommendation():
+    """일일 매매 추천 페이지"""
+    st.header("📊 일일 매매 추천")
+    
+    if not st.session_state.trader:
+        st.error("시스템이 초기화되지 않았습니다.")
+        return
+    
+    # 매 실행 시 스냅샷 로드 (로컬 우선 → GitHub fallback). preset 선택 시 수량 정확도 보장
+    if st.session_state.get('active_preset'):
+        st.session_state.positions_snapshot = load_preset_snapshot(st.session_state.active_preset)
+        # 이중 안전장치: 로드 결과가 비어있으면 로컬 파일에서 직접 로드
+        if not st.session_state.positions_snapshot:
+            try:
+                path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+                if path.exists():
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    st.session_state.positions_snapshot = data.get(st.session_state.active_preset, {})
+            except Exception:
+                pass
+    
+    # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
+    # 테스트 날짜 오버라이드 고려
+    today_for_calc = datetime.now()
+    if st.session_state.trader and st.session_state.trader.test_today_override:
+        today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+    start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
+    
+    with st.spinner('현재 상태 계산 중...'):
+        # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
+        st.session_state.trader.clear_cache()
+        
+        # 디버깅: 최신 거래일 확인
+        latest_trading_day = st.session_state.trader.get_latest_trading_day()
+        st.info(f"🔄 일일 추천 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
+        
+        # 스냅샷이 있으면 스냅샷 기반 시뮬레이션 (스냅샷에 없는 회차는 생성되지 않음)
+        # 스냅샷이 없으면 기존처럼 처음부터 시뮬레이션
+        snapshot = st.session_state.get('positions_snapshot', {})
+        if snapshot:
+            sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=True)
+        else:
+            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+        if "error" in sim_result:
+            st.error(f"시뮬레이션 실패: {sim_result['error']}")
+            return
+        
+        # 체결된 포지션 수량은 스냅샷/시뮬레이션의 shares 값을 원천값으로 사용한다.
+        # 금액/가격으로 다시 산출하면 추천 수량과 매도 표시 수량이 어긋날 수 있다.
+        
+        # 같은 날짜 포지션 중복 제거 (3/12 등 중복 표시 버그 대응)
+        _deduplicate_positions_by_date(st.session_state.trader, snapshot or {})
+        
+        # 스냅샷 수량을 포지션에 명시 적용 (매도추천 리스트 수량이 스냅샷과 일치하도록)
+        if snapshot:
+            for pos in st.session_state.trader.positions:
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                snap_key = f"{pos['round']}_{buy_date_str}"
+                saved = snapshot.get(snap_key)
+                if not saved:
+                    for sk, sv in snapshot.items():
+                        if sk.endswith(f"_{buy_date_str}"):
+                            saved = sv
+                            break
+                if saved:
+                    pos['shares'] = int(saved['shares'])
+                    pos['buy_price'] = float(saved['buy_price'])
+                    pos['amount'] = pos['shares'] * pos['buy_price']
+        
+        # [수정] 스냅샷 적용 후 current_round 재계산 (보유 N개 → N+1회차, 보유 0 → 1회차)
+        if st.session_state.trader.positions:
+            st.session_state.trader.current_round = len(st.session_state.trader.positions) + 1
+        else:
+            st.session_state.trader.current_round = 1
+        
+        # 시뮬레이션 후 수동 편집 포지션 복원 (스냅샷보다 우선)
+        if 'position_edits' in st.session_state and st.session_state.position_edits:
+            for pos_idx, pos in enumerate(st.session_state.trader.positions):
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                
+                for position_key, edit_info in st.session_state.position_edits.items():
+                    key_parts = position_key.split('_')
+                    if len(key_parts) >= 2:
+                        key_round = int(key_parts[0])
+                        key_date = key_parts[1]
+                        
+                        if pos['round'] == key_round and buy_date_str == key_date:
+                            st.session_state.trader.update_position(
+                                pos_idx,
+                                edit_info['shares'],
+                                edit_info['buy_price']
+                            )
+                            break
+        
+        # 일일 추천 생성 (이미 simulate+스냅샷복원+병합 완료했으므로 skip_simulate=True)
+        # 스냅샷 있으면 preserve_snapshot_shares=True로 모드 재검증 시 수량 덮어쓰기 방지
+        recommendation = st.session_state.trader.get_daily_recommendation(
+            skip_simulate=True, preserve_snapshot_shares=bool(snapshot)
+        )
+        
+        # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
+        # preset일 때: 원본 스냅샷의 수량 유지 (시뮬레이션 결과로 덮어쓰지 않음)
+        current_snapshot = {}
+        for pos in st.session_state.trader.positions:
+            buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+            snap_key = f"{pos['round']}_{buy_date_str}"
+            # preset 스냅샷에 있으면 원본 수량 유지, 없으면 시뮬레이션 결과 사용 (스냅샷 이후 신규 매수)
+            saved = snapshot.get(snap_key) if snapshot else None
+            if not saved and snapshot:
+                for sk, sv in snapshot.items():
+                    if sk.endswith(f"_{buy_date_str}"):
+                        saved = sv
+                        break
+            if saved:
+                current_snapshot[snap_key] = {
+                    'shares': int(saved['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(saved['shares']) * float(pos['buy_price']),
+                    'round': int(pos['round']),
+                    'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
+                }
+            else:
+                current_snapshot[snap_key] = {
+                    'shares': int(pos['shares']),
+                    'buy_price': float(pos['buy_price']),
+                    'amount': float(pos['amount']),
+                    'round': int(pos['round']),
+                    'mode': str(pos.get('mode') or 'SF'),
+                }
+        st.session_state.positions_snapshot = current_snapshot
+        
+        # 계산으로 달라진 스냅샷은 자동 저장하지 않는다. 영구 저장은 체결 확인,
+        # 포지션 수정, 또는 아래의 명시적 저장 버튼을 통해서만 수행한다.
+        st.session_state._gh_save_result = None
+        st.session_state._pending_active_snapshot = None
+        if (
+            current_snapshot
+            and st.session_state.get('active_preset')
+            and _should_auto_save_snapshot(snapshot, current_snapshot)
+        ):
+            st.session_state._pending_active_snapshot = current_snapshot
+            st.session_state._gh_save_result = ("pending", "계산 결과가 기존 스냅샷과 다릅니다. 자동 저장하지 않았습니다.")
+    
+    if "error" in recommendation:
+        st.error(f"추천 생성 실패: {recommendation['error']}")
+        return
+    
+    # 데이터 경고 표시 (Close가 None인 날짜들)
+    if hasattr(st.session_state.trader, '_data_warnings') and st.session_state.trader._data_warnings:
+        unique_warnings = list(set(st.session_state.trader._data_warnings))
+        if unique_warnings:
+            st.warning(f"⚠️ **데이터 경고**: 다음 날짜들의 Close 값이 None이어서 제거되었습니다: {', '.join(sorted(unique_warnings))}")
+            st.info("💡 수동 보정이 필요할 수 있습니다. `soxl_quant_system.py`의 `manual_corrections` 딕셔너리에 추가하세요.")
+    
+    # 최근 10일 SOXL 종가 데이터 확인 (원본 API 응답 기준)
+    try:
+        # SOXL 데이터를 가져와서 API 응답에서 누락된 날짜 확인
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
+        
+        # 원본 API 응답에서 Close가 None이었던 날짜 확인 (수동 보정 포함)
+        if hasattr(st.session_state.trader, '_api_missing_close_dates'):
+            api_missing = st.session_state.trader._api_missing_close_dates.get("SOXL", [])
+            if api_missing:
+                # 최근 10일 내의 날짜만 필터링
+                today = datetime.now().date()
+                recent_missing = []
+                for date_str in api_missing:
+                    try:
+                        date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                        if (today - date_obj).days <= 10:
+                            recent_missing.append(date_str)
+                    except:
+                        pass
+                
+                if recent_missing:
+                    # 수동 보정 정보 가져오기
+                    manual_corrections_info = {}
+                    if hasattr(st.session_state.trader, '_manual_corrections_info'):
+                        manual_corrections_info = st.session_state.trader._manual_corrections_info.get("SOXL", {})
+                    
+                    # 원본 API 값 정보 가져오기
+                    api_original_values = {}
+                    if hasattr(st.session_state.trader, '_api_original_values'):
+                        api_original_values = st.session_state.trader._api_original_values.get("SOXL", {})
+                    
+                    # 경고 메시지 생성
+                    warning_lines = []
+                    for date_str in sorted(recent_missing):
+                        original_value = api_original_values.get(date_str)
+                        correction_info = manual_corrections_info.get(date_str)
+                        
+                        if correction_info:
+                            # 수동 보정이 적용된 경우
+                            corrected_close = correction_info.get('corrected_close')
+                            if original_value is None:
+                                warning_lines.append(f"- **{date_str}**: API 값 없음 → 수동 보정: ${corrected_close:.2f}")
+                            else:
+                                warning_lines.append(f"- **{date_str}**: API 값 ${original_value:.2f} → 수동 보정: ${corrected_close:.2f}")
+                        else:
+                            # 수동 보정이 없는 경우
+                            if original_value is None:
+                                warning_lines.append(f"- **{date_str}**: API 값 없음")
+                            else:
+                                warning_lines.append(f"- **{date_str}**: API 값 ${original_value:.2f} (제거됨)")
+                    
+                    st.warning("⚠️ **최근 10일 SOXL 종가 데이터 확인**:")
+                    for line in warning_lines:
+                        st.markdown(line)
+                    st.info("💡 수동 보정이 적용된 날짜는 거래가 없었거나 데이터 제공 오류일 수 있습니다.")
+    except Exception as e:
+        st.warning(f"⚠️ 최근 10일 SOXL 종가 데이터 확인 중 오류 발생: {str(e)}")
+    
+    # 데이터 기준 상태 표시
+    data_last = recommendation.get('data_last_date', '')
+    basis_date = recommendation.get('basis_date', '')
+    market_closed = recommendation.get('market_closed', True)
+    market_status = "장 마감" if market_closed else "장중"
+    market_icon = "🔴" if not market_closed else "🟢"
+    status_text = f"{market_icon} 미국시장: **{market_status}** · 확정종가: **{data_last}**까지 반영 · 매수/매도 추천: **{basis_date} 종가** 기준"
+    st.info(status_text)
+    
+    # GitHub 스냅샷 저장 결과 표시
+    save_result = st.session_state.get('_gh_save_result')
+    if save_result is not None:
+        ok, err = save_result
+        if ok == "pending":
+            st.warning(f"⚠️ {err}")
+            st.caption("실제 체결/청산을 반영하려면 아래 버튼으로 현재 계산 스냅샷을 명시적으로 저장하세요.")
+            if st.button("💾 현재 계산 스냅샷 저장", key="save_pending_active_snapshot", use_container_width=True):
+                pending_snapshot = st.session_state.get('_pending_active_snapshot') or {}
+                if pending_snapshot and st.session_state.get('active_preset'):
+                    gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, pending_snapshot)
+                    st.session_state._gh_save_result = (gh_ok, gh_err)
+                    if gh_ok:
+                        st.session_state._pending_active_snapshot = None
+                    st.rerun()
+        elif ok:
+            st.success("✅ 포지션 스냅샷이 GitHub에 저장되었습니다. (PC/폰 동기화)")
+        else:
+            st.error(f"❌ GitHub 스냅샷 저장 실패: {err}")
+            st.caption("Streamlit Cloud → Settings → Secrets에 GITHUB_TOKEN이 있는지 확인해주세요.")
+
+    # 기본 정보 - 모바일 최적화
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.metric("📅 날짜", recommendation['date'])
+        mode_name = "안전모드" if recommendation['mode'] == "SF" else "공세모드"
+        mode_class = "mode-sf" if recommendation['mode'] == "SF" else "mode-ag"
+        st.markdown(f"<div class='{mode_class}'>🎯 모드: {recommendation['mode']} ({mode_name})</div>", unsafe_allow_html=True)
+        
+    with col2:
+        one_week_rsi = recommendation.get('qqq_one_week_ago_rsi')
+        two_weeks_rsi = recommendation.get('qqq_two_weeks_ago_rsi')
+        if one_week_rsi is not None:
+            if two_weeks_rsi is not None:
+                st.metric("📊 QQQ 주간 RSI", f"1주전: {one_week_rsi:.2f} | 2주전: {two_weeks_rsi:.2f}")
+            else:
+                st.metric("📊 QQQ 주간 RSI", f"1주전: {one_week_rsi:.2f}")
+        else:
+            st.metric("📊 QQQ 주간 RSI", "계산 불가")
+        st.metric("💰 SOXL 현재가", f"${recommendation['soxl_current_price']:.2f}")
+    
+    # 매매 추천
+    st.subheader("📋 오늘의 매매 추천")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("🟢 매수 추천")
+        # 잔여 예수금 표시
+        available_cash = recommendation['portfolio']['available_cash']
+        st.metric("💵 잔여 예수금", f"${available_cash:,.0f}")
+        
+        if recommendation['can_buy']:
+            buy_round = recommendation['next_buy_round']
+            # 현재 모드의 split_ratios에서 해당 회차 비중(%) 가져오기
+            current_config = st.session_state.trader.get_current_config()
+            split_ratios = current_config.get("split_ratios", [])
+            buy_ratio_pct = split_ratios[buy_round - 1] * 100 if buy_round <= len(split_ratios) else 0
+            st.success(f"✅ 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
+            st.info(f"💰 매수가: \\${recommendation['buy_price']:.2f} (LOC 주문)")
+            st.info(f"💵 매수금액: \\${recommendation['next_buy_amount']:,.0f}")
+            inv_base = float(st.session_state.trader.current_investment_capital)
+            ratio_dec = float(split_ratios[buy_round - 1]) if buy_round <= len(split_ratios) else 0.0
+            calc_amt = inv_base * ratio_dec
+            st.caption(
+                f"📐 계산식: 투자원금(갱신 기준) \\${inv_base:,.0f} × 비중 {buy_ratio_pct:.1f}% "
+                f"(×{ratio_dec:.4f}) = \\${calc_amt:,.0f}"
+            )
+            shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
+            st.info(f"📦 매수주식수: {shares}주")
+            
+            # 예수금 부족 시 안내
+            if available_cash < recommendation['next_buy_amount']:
+                possible_shares = int(available_cash / recommendation['buy_price'])
+                possible_amount = possible_shares * recommendation['buy_price']
+                st.warning(f"⚠️ 예수금 부족: 목표 금액 \\${recommendation['next_buy_amount']:,.0f} 대비 예수금 \\${available_cash:,.0f} 부족")
+                st.info(f"💡 가능한 매수: {possible_shares}주 (약 \\${possible_amount:,.0f})")
+            
+            # 장중 주문 가이드(현재가가 존재하는 경우 간단 안내)
+            current_price = recommendation.get('soxl_current_price')
+            if current_price:
+                if current_price >= recommendation['buy_price']:
+                    st.caption("현재가가 매수가 이상입니다. 즉시 체결 원하면 지정가/시장가, 또는 슬리피지 제한을 원하면 스톱-리밋(Stop=매수가, Limit≈매수가×1.002) 고려")
+                else:
+                    st.caption("현재가가 매수가 미만입니다. 당일 유효(DAY) 지정가로 매수가를 걸어두면 터치 시 체결")
+        else:
+            if st.session_state.trader.current_round > st.session_state.trader.get_current_config()["split_count"]:
+                st.warning("🔴 매수 불가: 모든 분할매수 완료")
+            else:
+                st.warning("🔴 매수 불가: 시드 부족")
+                if available_cash > 0:
+                    st.info(f"💡 잔여 예수금: \\${available_cash:,.0f} (목표 금액 \\${recommendation['next_buy_amount']:,.0f} 미만)")
+        
+        # ── 매수 체결 완료 확인 ──────────────────────────────────────────
+        # 스냅샷 기반 시뮬레이션은 새 매수를 자동 생성하지 않으므로,
+        # 실제 체결 후 이 버튼으로 스냅샷에 직접 반영해야 합니다.
+        snapshot_for_btn = st.session_state.get('positions_snapshot', {})
+        with st.expander("✅ 매수 체결 완료 확인 (스냅샷 반영)", expanded=False):
+            st.caption("실제로 매수 체결하셨나요? 아래에서 확인하면 스냅샷에 저장됩니다.")
+            
+            # 기본값: 추천 회차/가격/수량
+            default_round = recommendation.get('next_buy_round') or st.session_state.trader.current_round
+            default_buy_price = recommendation.get('buy_price', 0.0)
+            default_shares = max(1, int(recommendation.get('next_buy_amount', 0) / default_buy_price)) if default_buy_price > 0 else 1
+            
+            confirm_date = st.date_input(
+                "체결일",
+                value=datetime.now().date(),
+                key="confirm_buy_date"
+            )
+            confirm_round = st.number_input(
+                "회차",
+                min_value=1,
+                value=int(default_round),
+                step=1,
+                key="confirm_buy_round"
+            )
+            confirm_price = st.number_input(
+                "체결가 ($)",
+                min_value=0.01,
+                value=float(default_buy_price) if default_buy_price > 0 else 1.0,
+                step=0.01,
+                format="%.2f",
+                key="confirm_buy_price"
+            )
+            confirm_shares = st.number_input(
+                "체결 수량 (주)",
+                min_value=1,
+                value=int(default_shares),
+                step=1,
+                key="confirm_buy_shares"
+            )
+            confirm_amount = confirm_shares * confirm_price
+            st.write(f"**투자금액: ${confirm_amount:,.0f}**")
+            
+            if st.button("✅ 체결 확인 (스냅샷 저장)", key="confirm_buy_btn", use_container_width=True):
+                buy_date_dt = datetime.combine(confirm_date, datetime.min.time())
+                buy_date_str = confirm_date.strftime('%Y-%m-%d')
+                snap_key = f"{int(confirm_round)}_{buy_date_str}"
+                
+                # 같은 회차/체결일이 이미 있으면 입력값으로 갱신하고, 없으면 새로 추가한다.
+                existing_pos = None
+                for pos in st.session_state.trader.positions:
+                    pos_date = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
+                    if pos.get('round') == int(confirm_round) and pos_date == buy_date_str:
+                        existing_pos = pos
+                        break
+
+                if existing_pos is not None:
+                    existing_pos.update({
+                        "buy_price": float(confirm_price),
+                        "shares": int(confirm_shares),
+                        "amount": float(confirm_amount),
+                        "mode": recommendation.get('mode', existing_pos.get('mode') or st.session_state.trader.current_mode or 'SF')
+                    })
+                else:
+                    new_pos = {
+                        "round": int(confirm_round),
+                        "buy_date": buy_date_dt,
+                        "buy_price": float(confirm_price),
+                        "shares": int(confirm_shares),
+                        "amount": float(confirm_amount),
+                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF')
+                    }
+                    st.session_state.trader.positions.append(new_pos)
+                
+                # 스냅샷 재구성 및 저장
+                new_snapshot = {}
+                for pos in st.session_state.trader.positions:
+                    bd = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
+                    sk = f"{pos['round']}_{bd}"
+                    new_snapshot[sk] = {
+                        'shares': int(pos['shares']),
+                        'buy_price': float(pos['buy_price']),
+                        'amount': float(pos['amount']),
+                        'round': int(pos['round']),
+                        'mode': str(pos.get('mode') or 'SF'),
+                    }
+                st.session_state.positions_snapshot = new_snapshot
+                if st.session_state.get('active_preset'):
+                    gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
+                    if gh_ok:
+                        st.success(f"✅ {int(confirm_round)}회차 매수 체결이 스냅샷에 저장되었습니다!")
+                    else:
+                        st.warning(f"⚠️ GitHub 저장 실패: {gh_err}")
+                        st.success(f"✅ 세션에는 저장되었습니다. (GitHub 미반영)")
+                else:
+                    st.success(f"✅ {int(confirm_round)}회차 매수 체결이 세션 스냅샷에 저장되었습니다.")
+                st.session_state.trader.clear_cache()
+                st.rerun()
+    
+    with col2:
+        st.subheader("🔴 매도 추천")
+        
+        # 디버깅: 모든 포지션의 매도 조건 확인 정보 표시
+        if 'sell_debug_info' in recommendation and recommendation['sell_debug_info']:
+            with st.expander("🔍 매도 조건 확인 (디버깅)", expanded=False):
+                st.write(f"**보유 포지션 {len(recommendation['sell_debug_info'])}개 확인**")
+                for debug_info in recommendation['sell_debug_info']:
+                    mode_name = "안전모드" if debug_info['mode'] == 'SF' else "공세모드" if debug_info['mode'] == 'AG' else "N/A"
+                    mode_color = "#28A745" if debug_info['mode'] == 'SF' else "#FF8C00" if debug_info['mode'] == 'AG' else "#6c757d"
+                    
+                    # 매도 여부에 따른 아이콘
+                    sell_icon = "✅" if debug_info['will_sell'] else "⏳"
+                    sell_status = "매도 추천" if debug_info['will_sell'] else "보유 중"
+                    
+                    st.markdown(f"---")
+                    st.markdown(f"**{sell_icon} {debug_info['round']}회차** - {sell_status}")
+                    st.markdown(f"- **매수일**: {debug_info['buy_date']}")
+                    st.markdown(f"- **모드**: <span style='color: {mode_color}; font-weight: bold;'>{debug_info['mode']} ({mode_name})</span>", unsafe_allow_html=True)
+                    st.markdown(f"- **매수가**: \\${debug_info['buy_price']:.2f}")
+                    st.markdown(f"- **매도목표가**: \\${debug_info['target_sell_price']:.2f}")
+                    st.markdown(f"- **현재 종가**: \\${debug_info['current_close']:.2f}")
+                    
+                    # 목표가 도달 여부
+                    if debug_info['meets_target_price']:
+                        st.success(f"✅ 목표가 도달: \\${debug_info['current_close']:.2f} >= \\${debug_info['target_sell_price']:.2f}")
+                    else:
+                        price_diff = debug_info['target_sell_price'] - debug_info['current_close']
+                        price_diff_pct = (price_diff / debug_info['current_close']) * 100
+                        st.info(f"⏳ 목표가 미도달: \\${debug_info['current_close']:.2f} < \\${debug_info['target_sell_price']:.2f} (차이: \\${price_diff:.2f}, {price_diff_pct:+.2f}%)")
+                    
+                    # 손절예정일 확인
+                    if debug_info['meets_stop_loss_date']:
+                        st.error(f"⚠️ 손절예정일 경과: {debug_info['current_date']} >= {debug_info['stop_loss_date']}")
+                    else:
+                        st.info(f"📅 손절예정일: {debug_info['stop_loss_date']} (현재: {debug_info['current_date']})")
+                    
+                    st.markdown(f"- **보유기간**: {debug_info['hold_days']}일 / 최대 {debug_info['max_hold_days']}일")
+                    
+                    if debug_info['will_sell']:
+                        st.success(f"**매도 사유**: {debug_info['sell_reason']}")
+        
+        # 매도 추천 리스트 표시 (모든 보유 포지션)
+        if recommendation['sell_recommendations']:
+            st.info(f"📋 매도 추천: {len(recommendation['sell_recommendations'])}건")
+            st.caption("💡 매수추천 수량과 다르면 포지션 수정으로 실제 체결 수량을 반영해주세요.")
+            
+            for sell_info in recommendation['sell_recommendations']:
+                pos = sell_info['position']
+                buy_date = pos.get('buy_date')
+                if isinstance(buy_date, pd.Timestamp):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    buy_date_dt = buy_date.to_pydatetime() if hasattr(buy_date, 'to_pydatetime') else datetime.combine(buy_date.date(), datetime.min.time())
+                elif isinstance(buy_date, datetime):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    buy_date_dt = buy_date
+                elif hasattr(buy_date, "strftime"):
+                    buy_date_str = buy_date.strftime('%Y-%m-%d')
+                    buy_date_dt = buy_date
+                else:
+                    buy_date_str = str(buy_date) if buy_date else "-"
+                    buy_date_dt = None
+                
+                buy_price = pos.get('buy_price')
+                buy_price_text = f"\\${buy_price:.2f}" if isinstance(buy_price, (int, float)) else "-"
+                mode = pos.get('mode', 'SF')
+                mode_name = "안전모드" if mode == "SF" else "공세모드"
+                
+                # 손절 예정일 계산
+                config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+                stop_loss_date = ""
+                if buy_date_dt:
+                    stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
+                
+                # 매도 목표가 계산
+                target_sell_price = buy_price * (1 + config['sell_threshold'] / 100)
+                current_price = recommendation['soxl_current_price']
+                price_diff = target_sell_price - current_price
+                price_diff_pct = (price_diff / current_price) * 100
+                
+                # 레이아웃: 좌측 주요 정보, 우측 매수 정보
+                col1, col2 = st.columns([3, 2])
+                with col1:
+                    # 매도 수량을 정수로 명시적 변환 (소수점 처리)
+                    sell_shares = int(pos['shares']) if isinstance(pos['shares'], (int, float)) else pos['shares']
+                    
+                    # 해당 회차의 비중(%) 가져오기
+                    pos_split_ratios = config.get("split_ratios", [])
+                    pos_ratio_pct = pos_split_ratios[pos['round'] - 1] * 100 if pos['round'] <= len(pos_split_ratios) else 0
+                    
+                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%): {sell_shares}주 (목표가 \\${target_sell_price:.2f}, 현재 \\${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    
+                    # 모드 색상 설정 (AG: 주황색, SF: 초록색)
+                    mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색
+                    mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
+                    # 손절예정일 빨간색으로 표시 (날짜까지 포함)
+                    stop_loss_display = stop_loss_date if stop_loss_date else "-"
+                    stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
+                    st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
+                    # 손절예정일 도달 시 주의 문구
+                    if sell_info.get('will_sell', False) and '손절예정일' in sell_info.get('reason', ''):
+                        st.error("⚠️ **손절예정일입니다.** 당일 매도가 필요합니다.")
+                with col2:
+                    st.caption(f"매수체결일: {buy_date_str}")
+                    st.caption(f"매수가: {buy_price_text}")
+        
+        # 매도 추천 리스트가 비어있고 보유 포지션도 없으면 안내
+        if not recommendation.get('sell_recommendations') and not st.session_state.trader.positions:
+            st.info("🟡 매도 추천 없음")
+    
+    # 포트폴리오 현황
+    st.subheader("💼 포트폴리오 현황")
+    
+    portfolio = recommendation['portfolio']
+    mdd_records = _build_portfolio_mdd_records(
+        sim_result,
+        portfolio,
+        st.session_state.get('positions_snapshot', {}),
+        recommendation.get('date', ''),
+        st.session_state.trader.positions,
+    )
+    mdd_info = st.session_state.trader.calculate_mdd(mdd_records)
+    mdd_percent = float(mdd_info.get('mdd_percent', 0.0) or 0.0)
+    total_shares = sum(p.get('shares', 0) for p in st.session_state.trader.positions)
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("📦 보유 포지션", f"{portfolio['positions_count']}개")
+    
+    with col2:
+        st.metric("📊 총 보유 주식수", f"{total_shares:,}주")
+    
+    with col3:
+        st.metric("💰 투자원금", f"${portfolio['total_invested']:,.0f}")
+    
+    with col4:
+        unrealized_pnl_rate = (portfolio['unrealized_pnl']/portfolio['total_invested']*100) if portfolio['total_invested'] > 0 else 0
+        st.metric(
+            "📈 평가손익", 
+            f"${portfolio['unrealized_pnl']:,.0f}",
+            f"{unrealized_pnl_rate:+.2f}%"
+        )
+    
+    with col5:
+        st.metric("💵 총 자산", f"${portfolio['total_portfolio_value']:,.0f}", f"MDD {mdd_percent:.2f}%")
+    
+    # 보유 포지션 상세
+    if st.session_state.trader.positions:
+        st.subheader("📊 보유 포지션 상세")
+        
+        positions_data = []
+        for pos in st.session_state.trader.positions:
+            # 테스트 날짜 오버라이드 고려
+            today_for_hold_days = datetime.now()
+            if st.session_state.trader and st.session_state.trader.test_today_override:
+                today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+            hold_days = (today_for_hold_days - pos['buy_date']).days
+            current_value = pos['shares'] * recommendation['soxl_current_price']
+            pnl = current_value - pos['amount']
+            pnl_rate = (pnl / pos['amount']) * 100
+            
+            # 매수체결일 포맷팅
+            buy_date = pos['buy_date']
+            if isinstance(buy_date, pd.Timestamp):
+                buy_date_str = buy_date.strftime('%Y-%m-%d')
+            elif isinstance(buy_date, datetime):
+                buy_date_str = buy_date.strftime('%Y-%m-%d')
+            else:
+                buy_date_str = str(buy_date)
+            
+            # 모드 정보
+            mode = pos.get('mode', 'SF')
+            mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
+            
+            # 매도 목표가 계산
+            position_config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+            target_sell_price = pos['buy_price'] * (1 + position_config['sell_threshold'] / 100)
+            
+            positions_data.append({
+                "회차": pos['round'],
+                "매수체결일": buy_date_str,
+                "모드": mode_name,
+                "주식수": pos['shares'],
+                "매수가": f"${pos['buy_price']:.2f}",
+                "매도목표가": f"${target_sell_price:.2f}",
+                "보유일": f"{hold_days}일",
+                "평가금액": f"${current_value:,.0f}",
+                "손익": f"${pnl:,.0f}",
+                "수익률": f"{pnl_rate:+.2f}%"
+            })
+        
+        df_positions = pd.DataFrame(positions_data)
+        st.dataframe(df_positions, use_container_width=True)
+        
+        # 포지션 수정 섹션
+        st.subheader("✏️ 포지션 수정")
+        st.caption("💡 실제 주문 수량이 추천과 다를 경우 수정하세요")
+        
+        # 수정할 포지션 선택 (인덱스 기반, 매수일과 회차로 구분)
+        if st.session_state.trader.positions:
+            position_options = []
+            for idx, pos in enumerate(st.session_state.trader.positions):
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                position_label = f"{pos['round']}회차 - {buy_date_str} - {pos['shares']}주 @ ${pos['buy_price']:.2f}"
+                position_options.append((idx, position_label))
+            
+            if position_options:
+                selected_option = st.selectbox(
+                    "수정할 포지션 선택",
+                    options=range(len(position_options)),
+                    format_func=lambda x: position_options[x][1],
+                    key="position_edit_select"
+                )
+                selected_position_index = selected_option
+                selected_position = st.session_state.trader.positions[selected_position_index]
+            
+            if selected_position:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.info(f"**현재 정보**")
+                    buy_date_str = selected_position['buy_date'].strftime('%Y-%m-%d') if isinstance(selected_position['buy_date'], (datetime, pd.Timestamp)) else str(selected_position['buy_date'])
+                    st.write(f"회차: {selected_position['round']}회차")
+                    st.write(f"매수일: {buy_date_str}")
+                    st.write(f"주식수: {selected_position['shares']}주")
+                    st.write(f"매수가: ${selected_position['buy_price']:.2f}")
+                    st.write(f"투자금액: ${selected_position['amount']:,.0f}")
+                
+                with col2:
+                    st.info(f"**수정 정보**")
+                    new_shares = st.number_input(
+                        "주식수",
+                        min_value=1,
+                        value=int(selected_position['shares']),
+                        step=1,
+                        key=f"edit_shares_{selected_position_index}"
+                    )
+                    new_buy_price = st.number_input(
+                        "매수가 ($)",
+                        min_value=0.01,
+                        value=float(selected_position['buy_price']),
+                        step=0.01,
+                        format="%.2f",
+                        key=f"edit_price_{selected_position_index}"
+                    )
+                    new_amount = new_shares * new_buy_price
+                    st.write(f"**새 투자금액: ${new_amount:,.0f}**")
+                    
+                    # 차액 계산
+                    amount_diff = selected_position['amount'] - new_amount
+                    if amount_diff > 0:
+                        st.success(f"예수금 증가: ${amount_diff:,.0f}")
+                    elif amount_diff < 0:
+                        st.warning(f"예수금 감소: ${abs(amount_diff):,.0f}")
+                    else:
+                        st.info("변동 없음")
+                
+                # 수정 버튼
+                if st.button("✅ 포지션 수정", key=f"apply_edit_{selected_position_index}", use_container_width=True):
+                    success = st.session_state.trader.update_position(
+                        selected_position_index,
+                        new_shares,
+                        new_buy_price
+                    )
+                    if success:
+                        # 수정된 포지션 정보를 session_state에 저장 (시뮬레이션 후 복원용)
+                        if 'position_edits' not in st.session_state:
+                            st.session_state.position_edits = {}
+                        
+                        # 현재 포지션의 고유 식별자 생성 (회차 + 매수일만 사용, 매가는 제외)
+                        buy_date_str = selected_position['buy_date'].strftime('%Y-%m-%d') if isinstance(selected_position['buy_date'], (datetime, pd.Timestamp)) else str(selected_position['buy_date'])
+                        position_key = f"{selected_position['round']}_{buy_date_str}"
+                        st.session_state.position_edits[position_key] = {
+                            'shares': new_shares,
+                            'buy_price': new_buy_price
+                        }
+                        
+                        # 스냅샷을 trader.positions 기준으로 재구성 후 GitHub에 영구 저장 (실제 체결 수량 반영)
+                        current_snapshot = {}
+                        for pos in st.session_state.trader.positions:
+                            p_buy_date = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                            snap_key = f"{pos['round']}_{p_buy_date}"
+                            current_snapshot[snap_key] = {
+                                'shares': int(pos['shares']),
+                                'buy_price': float(pos['buy_price']),
+                                'amount': float(pos['amount']),
+                                'round': int(pos['round']),
+                                'mode': str(pos.get('mode') or 'SF'),
+                            }
+                        st.session_state.positions_snapshot = current_snapshot
+                        gh_ok = True
+                        if st.session_state.get('active_preset'):
+                            gh_ok, _ = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
+                        
+                        st.success(f"✅ {selected_position['round']}회차 포지션이 수정되었습니다!")
+                        if not gh_ok:
+                            st.warning("⚠️ GitHub 저장 실패. Secrets에 GITHUB_TOKEN을 확인해주세요.")
+                        st.session_state.trader.clear_cache()  # 캐시 초기화
+                        st.rerun()
+                    else:
+                        st.error("❌ 포지션 수정 실패: 예수금이 부족합니다.")
+
+def show_portfolio():
+    """포트폴리오 페이지"""
+    st.header("💼 포트폴리오 현황")
+    
+    if not st.session_state.trader:
+        st.error("시스템이 초기화되지 않았습니다.")
+        return
+    
+    # 시뮬레이션 실행 - 투자시작일 기준으로 재계산
+    # 테스트 날짜 오버라이드 고려
+    today_for_calc = datetime.now()
+    if st.session_state.trader and st.session_state.trader.test_today_override:
+        today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+    start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
+    
+    with st.spinner('포트폴리오 현황 계산 중...'):
+        # 캐시 클리어하여 항상 최신 상태로 시뮬레이션
+        st.session_state.trader.clear_cache()
+        
+        # 디버깅: 최신 거래일 확인
+        latest_trading_day = st.session_state.trader.get_latest_trading_day()
+        st.info(f"🔄 포트폴리오 시뮬레이션 범위: {start_date} ~ {latest_trading_day.strftime('%Y-%m-%d')}")
+        
+        # 스냅샷 있으면 스냅샷 기반 시뮬레이션 (스냅샷에 없는 회차 생성 안 함)
+        snapshot = st.session_state.get('positions_snapshot', {})
+        if snapshot:
+            sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=True)
+        else:
+            sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
+            
+        if "error" in sim_result:
+            st.error(f"시뮬레이션 실패: {sim_result['error']}")
+            return
+            
+        # 스냅샷 수량을 포지션에 명시 적용 (매도추천 리스트 수량이 스냅샷과 일치하도록)
+        if snapshot:
+            for pos in st.session_state.trader.positions:
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                snap_key = f"{pos['round']}_{buy_date_str}"
+                saved = snapshot.get(snap_key)
+                if not saved:
+                    for sk, sv in snapshot.items():
+                        if sk.endswith(f"_{buy_date_str}"):
+                            saved = sv
+                            break
+                if saved:
+                    pos['shares'] = int(saved['shares'])
+                    pos['buy_price'] = float(saved['buy_price'])
+                    pos['amount'] = pos['shares'] * pos['buy_price']
+                    
+        # 시뮬레이션 후 수동 편집 포지션 복원 (세션 유지 중인 편집 상태)
+        if 'position_edits' in st.session_state and st.session_state.position_edits:
+            for pos_idx, pos in enumerate(st.session_state.trader.positions):
+                buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
+                
+                for position_key, edit_info in st.session_state.position_edits.items():
+                    key_parts = position_key.split('_')
+                    if len(key_parts) >= 2:
+                        key_round = int(key_parts[0])
+                        key_date = key_parts[1]
+                        
+                        if pos['round'] == key_round and buy_date_str == key_date:
+                            st.session_state.trader.update_position(
+                                pos_idx,
+                                edit_info['shares'],
+                                edit_info['buy_price']
+                            )
+                            break
+    
+    # 포트폴리오 요약
+    total_shares = sum(p.get("shares", 0) for p in st.session_state.trader.positions)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("💰 초기자본", f"${st.session_state.initial_capital:,.0f}")
+    
+    with col2:
+        total_invested = sum([pos["amount"] for pos in st.session_state.trader.positions])
+        st.metric("💵 투자원금", f"${total_invested:,.0f}")
+    
+    with col3:
+        st.metric("📊 총 보유 주식수", f"{total_shares:,}주")
+    
+    with col4:
+        st.metric("💵 현금잔고", f"${st.session_state.trader.available_cash:,.0f}")
+    
+    with col5:
+        # SOXL 현재가 가져오기
+        soxl_data = st.session_state.trader.get_stock_data("SOXL", "1mo")
+        if soxl_data is not None and len(soxl_data) > 0:
+            current_price = soxl_data.iloc[-1]['Close']
+            total_position_value = sum([pos["shares"] * current_price for pos in st.session_state.trader.positions])
+            total_assets = st.session_state.trader.available_cash + total_position_value
+            total_return = ((total_assets - st.session_state.initial_capital) / st.session_state.initial_capital) * 100
+            
+            st.metric(
+                "📈 총 수익률",
+                f"{total_return:+.2f}%",
+                f"${total_assets - st.session_state.initial_capital:+.0f}"
+            )
+    
+    # 보유 포지션
+    if st.session_state.trader.positions:
+        st.subheader("📦 보유 포지션")
+        
+        positions_data = []
+        for pos in st.session_state.trader.positions:
+            # 테스트 날짜 오버라이드 고려
+            today_for_hold_days = datetime.now()
+            if st.session_state.trader and st.session_state.trader.test_today_override:
+                today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
+            hold_days = (today_for_hold_days - pos['buy_date']).days
+            current_value = pos['shares'] * current_price if 'current_price' in locals() else pos['amount']
+            pnl = current_value - pos['amount']
+            pnl_rate = (pnl / pos['amount']) * 100
+            
+            positions_data.append({
+                "회차": pos['round'],
+                "매수일": pos['buy_date'].strftime('%Y-%m-%d'),
+                "주식수": pos['shares'],
+                "매수가": f"${pos['buy_price']:.2f}",
+                "보유일": f"{hold_days}일",
+                "현재가": f"${current_price:.2f}" if 'current_price' in locals() else "N/A",
+                "평가금액": f"${current_value:,.0f}",
+                "손익": f"${pnl:,.0f}",
+                "수익률": f"{pnl_rate:+.2f}%",
+                "모드": pos.get('mode', 'N/A')
+            })
+        
+        df_positions = pd.DataFrame(positions_data)
+        # 모바일에서 더 나은 표시를 위해 컬럼 너비 조정
+        st.dataframe(
+            df_positions, 
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # 포지션별 수익률 차트 - 모바일 최적화
+        if len(positions_data) > 1:
+            fig = px.bar(
+                df_positions, 
+                x='회차', 
+                y='수익률',
+                title='포지션별 수익률',
+                color='수익률',
+                color_continuous_scale=['red', 'yellow', 'green']
+            )
+            fig.update_layout(
+                yaxis_title="수익률 (%)",
+                height=400  # 모바일에서 적절한 높이
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("현재 보유 포지션이 없습니다.")
+    
+    # 자산 구성 비율
+    if st.session_state.trader.positions and 'current_price' in locals():
+        st.subheader("📊 자산 구성")
+        
+        total_position_value = sum([pos["shares"] * current_price for pos in st.session_state.trader.positions])
+        total_assets = st.session_state.trader.available_cash + total_position_value
+        
+        # 파이 차트 데이터
+        labels = ['현금', '주식']
+        values = [st.session_state.trader.available_cash, total_position_value]
+        colors = ['#FFA500', '#32CD32']
+        
+        fig = go.Figure(data=[go.Pie(labels=labels, values=values, marker_colors=colors)])
+        fig.update_layout(title="자산 구성 비율")
+        st.plotly_chart(fig, use_container_width=True)
+
+def show_backtest():
+    """백테스팅 페이지"""
+    st.header("📈 백테스팅")
+    
+    if not st.session_state.trader:
+        st.error("시스템이 초기화되지 않았습니다.")
+        return
+    
+    # 백테스팅 설정
+    col1, col2 = st.columns(2)
+    
+    # 세션 상태 초기화
+    if 'backtest_start_date' not in st.session_state:
+        st.session_state.backtest_start_date = datetime.now() - timedelta(days=365)
+    if 'backtest_end_date' not in st.session_state:
+        st.session_state.backtest_end_date = datetime.now()
+    
+    with col1:
+        start_date = st.date_input(
+            "시작 날짜",
+            value=st.session_state.backtest_start_date,
+            min_value=datetime(2011, 1, 1),
+            max_value=datetime.now(),
+            key="backtest_start_date_input"
+        )
+        if start_date != st.session_state.backtest_start_date:
+            st.session_state.backtest_start_date = start_date
+    
+    with col2:
+        end_date = st.date_input(
+            "종료 날짜",
+            value=st.session_state.backtest_end_date,
+            max_value=datetime.now(),
+            key="backtest_end_date_input"
+        )
+        if end_date != st.session_state.backtest_end_date:
+            st.session_state.backtest_end_date = end_date
+    
+    # 백테스팅 실행
+    if st.button("🚀 백테스팅 실행", use_container_width=True):
+        with st.spinner('백테스팅 실행 중...'):
+            backtest_result = st.session_state.trader.run_backtest(
+                start_date.strftime('%Y-%m-%d'),
+                end_date.strftime('%Y-%m-%d')
+            )
+        
+        if "error" in backtest_result:
+            st.session_state.backtest_result = None
+            st.session_state.backtest_error = backtest_result['error']
+        else:
+            # 결과를 session_state에 저장 (페이지 새로고침 후에도 유지)
+            st.session_state.backtest_result = backtest_result
+            st.session_state.backtest_error = None
+            st.session_state.backtest_start_date_saved = start_date.strftime('%Y-%m-%d')
+            st.session_state.backtest_end_date_saved = end_date.strftime('%Y-%m-%d')
+        
+        # 페이지 새로고침 없이 결과 표시를 위해 rerun 호출하지 않음
+        # (버튼 클릭 시 자동으로 페이지가 새로고침됨)
+    
+    # 에러 표시
+    if 'backtest_error' in st.session_state and st.session_state.backtest_error:
+        st.error(f"백테스팅 실패: {st.session_state.backtest_error}")
+    
+    # 백테스팅 결과 표시
+    if 'backtest_result' in st.session_state and st.session_state.backtest_result:
+        backtest_result = st.session_state.backtest_result
+        
+        # 결과 표시
+        st.success("✅ 백테스팅 완료!")
+        
+        # 요약 결과
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("💰 초기자본", f"${backtest_result['initial_capital']:,.0f}")
+        
+        with col2:
+            st.metric("💰 최종자산", f"${backtest_result['final_value']:,.0f}")
+        
+        with col3:
+            st.metric("📈 총수익률", f"{backtest_result['total_return']:+.2f}%")
+        
+        with col4:
+            st.metric("📦 최종포지션", f"{backtest_result['final_positions']}개")
+        
+        # MDD 계산
+        mdd_info = st.session_state.trader.calculate_mdd(backtest_result['daily_records'])
+        
+        st.subheader("⚠️ 리스크 지표")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("📉 MDD", f"{mdd_info.get('mdd_percent', 0.0):.2f}%")
+        
+        with col2:
+            st.metric("📅 MDD 발생일", mdd_info.get('mdd_date', ''))
+        
+        with col3:
+            st.metric("💰 최저자산", f"${mdd_info.get('mdd_value', 0.0):,.0f}")
+        
+        # 자산 변화 차트
+        if backtest_result['daily_records']:
+            st.subheader("📊 자산 변화")
+            
+            df_backtest = pd.DataFrame(backtest_result['daily_records'])
+            
+            # 날짜 파싱 - ISO 형식 (YYYY-MM-DD)으로 간단하게 처리
+            df_backtest['date'] = pd.to_datetime(df_backtest['date'], errors='coerce')
+            
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df_backtest['date'],
+                y=df_backtest['total_assets'],
+                mode='lines',
+                name='총 자산',
+                line=dict(color='blue', width=2)
+            ))
+            
+            fig.update_layout(
+                title="자산 변화 추이",
+                xaxis_title="날짜",
+                yaxis_title="자산 ($)",
+                hovermode='x unified'
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # 상세 거래 내역
+            st.subheader("📋 상세 거래 내역")
+            
+            # 매수/매도 내역만 필터링
+            df_trades = df_backtest[
+                (df_backtest['buy_executed_price'] > 0) | 
+                (df_backtest['sell_executed_price'] > 0)
+            ].copy()
+            
+            if not df_trades.empty:
+                # 필요한 컬럼만 선택
+                display_columns = [
+                    'date', 'week', 'rsi', 'mode', 'current_round',
+                    'buy_executed_price', 'buy_quantity', 'buy_amount',
+                    'sell_executed_price', 'realized_pnl'
+                ]
+                
+                df_display = df_trades[display_columns].copy()
+                df_display.columns = [
+                    '날짜', '주차', 'RSI', '모드', '회차',
+                    '매수가', '수량', '매수금액',
+                    '매도가', '실현손익'
+                ]
+                
+                # 날짜 컬럼을 문자열로 변환하여 표시
+                df_display['날짜'] = df_display['날짜'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '')
+                
+                # 숫자 포맷팅
+                for col in ['매수가', '매도가']:
+                    df_display[col] = df_display[col].apply(lambda x: f"${x:.2f}" if x > 0 else "")
+                
+                for col in ['매수금액', '실현손익']:
+                    df_display[col] = df_display[col].apply(lambda x: f"${x:,.0f}" if x != 0 else "")
+                
+                st.dataframe(df_display, use_container_width=True)
+            else:
+                st.info("거래 내역이 없습니다.")
+        
+        # 엑셀 다운로드
+        if st.button("📥 엑셀 파일 생성", key="generate_excel"):
+            with st.spinner('엑셀 파일 생성 중...'):
+                # 임시 파일명 생성
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                temp_filename = f"SOXL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx"
+                
+                # 엑셀 파일 생성
+                result_filename = st.session_state.trader.export_backtest_to_excel(backtest_result, temp_filename)
+                
+                if result_filename and os.path.exists(result_filename):
+                    # 파일을 메모리로 읽기
+                    with open(result_filename, 'rb') as f:
+                        excel_data = f.read()
+                    
+                    # 임시 파일 삭제
+                    try:
+                        os.remove(result_filename)
+                    except:
+                        pass
+                    
+                    # 다운로드 버튼 표시
+                    st.download_button(
+                        label="💾 엑셀 파일 다운로드",
+                        data=excel_data,
+                        file_name=f"SOXL_백테스팅_{backtest_result['start_date']}_{timestamp}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_excel"
+                    )
+                    st.success("✅ 엑셀 파일이 준비되었습니다. 위 버튼을 클릭하여 다운로드하세요.")
+                else:
+                    st.error("❌ 엑셀 파일 생성에 실패했습니다.")
+
+def show_advanced_settings():
+    """고급 설정 페이지"""
+    st.header("⚙️ 고급 설정")
+    
+    if not st.session_state.trader:
+        st.error("시스템이 초기화되지 않았습니다.")
+        return
+    
+    # RSI 참조 데이터 관리
+    st.subheader("📊 RSI 참조 데이터")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔄 RSI 데이터 업데이트"):
+            with st.spinner('RSI 데이터 업데이트 중...'):
+                success = st.session_state.trader.update_rsi_reference_file()
+                if success:
+                    st.success("✅ RSI 데이터 업데이트 완료")
+                else:
+                    st.error("❌ RSI 데이터 업데이트 실패")
+    
+    with col2:
+        if st.button("📋 RSI 데이터 상태 확인"):
+            with st.spinner('RSI 데이터 상태 확인 중...'):
+                is_up_to_date = st.session_state.trader.check_and_update_rsi_data()
+                if is_up_to_date:
+                    st.success("✅ RSI 데이터가 최신 상태입니다")
+                else:
+                    st.warning("⚠️ RSI 데이터 업데이트가 필요합니다")
+    
+    # 모드 설정 확인 및 수정
+    st.subheader("🎯 모드 설정")
+    
+    # 기본값 정의
+    default_sf_config = {
+        "buy_threshold": 3.5,
+        "sell_threshold": 1.1,
+        "max_hold_days": 35,
+        "split_count": 7,
+        "split_ratios": [0.049, 0.127, 0.230, 0.257, 0.028, 0.169, 0.140]
+    }
+    
+    default_ag_config = {
+        "buy_threshold": 3.6,
+        "sell_threshold": 3.5,
+        "max_hold_days": 7,
+        "split_count": 8,
+        "split_ratios": [0.062, 0.134, 0.118, 0.148, 0.150, 0.182, 0.186, 0.020]
+    }
+    
+    # session_state에 파라미터 저장 (초기화)
+    if 'sf_config' not in st.session_state:
+        st.session_state.sf_config = default_sf_config.copy()
+    if 'ag_config' not in st.session_state:
+        st.session_state.ag_config = default_ag_config.copy()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("SF 모드 (안전모드)")
+        
+        # SF 모드 파라미터 편집
+        sf_config = st.session_state.sf_config
+        
+        sf_buy_threshold = st.number_input(
+            "매수 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(sf_config.get("buy_threshold", 3.5)),
+            step=0.1,
+            key="sf_buy_threshold"
+        )
+        
+        sf_sell_threshold = st.number_input(
+            "매도 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(sf_config.get("sell_threshold", 1.1)),
+            step=0.1,
+            key="sf_sell_threshold"
+        )
+        
+        sf_max_hold_days = st.number_input(
+            "최대 보유일수",
+            min_value=1,
+            max_value=365,
+            value=int(sf_config.get("max_hold_days", 30)),
+            step=1,
+            key="sf_max_hold_days"
+        )
+        
+        sf_split_count = st.number_input(
+            "분할매수 횟수",
+            min_value=1,
+            max_value=20,
+            value=int(sf_config.get("split_count", 7)),
+            step=1,
+            key="sf_split_count"
+        )
+        
+        # 분할 비율 입력
+        st.write("**분할 비율:**")
+        sf_split_ratios = []
+        split_count = int(sf_split_count)
+        
+        # 기존 비율이 있으면 사용, 없으면 기본값
+        existing_ratios = sf_config.get("split_ratios", default_sf_config["split_ratios"])
+        
+        for i in range(split_count):
+            default_ratio = existing_ratios[i] if i < len(existing_ratios) else (1.0 / split_count)
+            ratio = st.number_input(
+                f"회차 {i+1}",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(default_ratio),
+                step=0.001,
+                format="%.3f",
+                key=f"sf_split_ratio_{i}"
+            )
+            sf_split_ratios.append(ratio)
+        
+        # 비율 합이 1이 아니면 경고
+        ratio_sum = sum(sf_split_ratios)
+        if abs(ratio_sum - 1.0) > 0.01:
+            st.warning(f"⚠️ 분할 비율의 합이 {ratio_sum:.3f}입니다. 1.0이 되도록 조정해주세요.")
+        
+        # 파라미터 변경 감지 및 업데이트
+        new_sf_config = {
+            "buy_threshold": sf_buy_threshold,
+            "sell_threshold": sf_sell_threshold,
+            "max_hold_days": sf_max_hold_days,
+            "split_count": split_count,
+            "split_ratios": sf_split_ratios
+        }
+        
+        # 변경 감지 (딕셔너리 깊은 비교)
+        config_changed = (
+            new_sf_config["buy_threshold"] != sf_config.get("buy_threshold") or
+            new_sf_config["sell_threshold"] != sf_config.get("sell_threshold") or
+            new_sf_config["max_hold_days"] != sf_config.get("max_hold_days") or
+            new_sf_config["split_count"] != sf_config.get("split_count") or
+            len(new_sf_config["split_ratios"]) != len(sf_config.get("split_ratios", [])) or
+            any(abs(new_sf_config["split_ratios"][i] - sf_config.get("split_ratios", [])[i]) > 0.0001 
+                for i in range(min(len(new_sf_config["split_ratios"]), len(sf_config.get("split_ratios", [])))))
+        )
+        
+        if config_changed:
+            st.session_state.sf_config = new_sf_config
+            clear_runtime_snapshot("SF 모드 설정 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
+            st.rerun()  # 즉시 재실행하여 트레이더 재초기화
+    
+    with col2:
+        st.subheader("AG 모드 (공세모드)")
+        
+        # AG 모드 파라미터 편집
+        ag_config = st.session_state.ag_config
+        
+        ag_buy_threshold = st.number_input(
+            "매수 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(ag_config.get("buy_threshold", 3.6)),
+            step=0.1,
+            key="ag_buy_threshold"
+        )
+        
+        ag_sell_threshold = st.number_input(
+            "매도 임계값 (%)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(ag_config.get("sell_threshold", 3.5)),
+            step=0.1,
+            key="ag_sell_threshold"
+        )
+        
+        ag_max_hold_days = st.number_input(
+            "최대 보유일수",
+            min_value=1,
+            max_value=365,
+            value=int(ag_config.get("max_hold_days", 7)),
+            step=1,
+            key="ag_max_hold_days"
+        )
+        
+        ag_split_count = st.number_input(
+            "분할매수 횟수",
+            min_value=1,
+            max_value=20,
+            value=int(ag_config.get("split_count", 8)),
+            step=1,
+            key="ag_split_count"
+        )
+        
+        # 분할 비율 입력
+        st.write("**분할 비율:**")
+        ag_split_ratios = []
+        ag_split_count = int(ag_split_count)
+        
+        # 기존 비율이 있으면 사용, 없으면 기본값
+        existing_ag_ratios = ag_config.get("split_ratios", default_ag_config["split_ratios"])
+        
+        for i in range(ag_split_count):
+            default_ratio = existing_ag_ratios[i] if i < len(existing_ag_ratios) else (1.0 / ag_split_count)
+            ratio = st.number_input(
+                f"회차 {i+1}",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(default_ratio),
+                step=0.001,
+                format="%.3f",
+                key=f"ag_split_ratio_{i}"
+            )
+            ag_split_ratios.append(ratio)
+        
+        # 비율 합이 1이 아니면 경고
+        ag_ratio_sum = sum(ag_split_ratios)
+        if abs(ag_ratio_sum - 1.0) > 0.01:
+            st.warning(f"⚠️ 분할 비율의 합이 {ag_ratio_sum:.3f}입니다. 1.0이 되도록 조정해주세요.")
+        
+        # 파라미터 변경 감지 및 업데이트
+        new_ag_config = {
+            "buy_threshold": ag_buy_threshold,
+            "sell_threshold": ag_sell_threshold,
+            "max_hold_days": ag_max_hold_days,
+            "split_count": ag_split_count,
+            "split_ratios": ag_split_ratios
+        }
+        
+        # 변경 감지 (딕셔너리 깊은 비교)
+        ag_config_changed = (
+            new_ag_config["buy_threshold"] != ag_config.get("buy_threshold") or
+            new_ag_config["sell_threshold"] != ag_config.get("sell_threshold") or
+            new_ag_config["max_hold_days"] != ag_config.get("max_hold_days") or
+            new_ag_config["split_count"] != ag_config.get("split_count") or
+            len(new_ag_config["split_ratios"]) != len(ag_config.get("split_ratios", [])) or
+            any(abs(new_ag_config["split_ratios"][i] - ag_config.get("split_ratios", [])[i]) > 0.0001 
+                for i in range(min(len(new_ag_config["split_ratios"]), len(ag_config.get("split_ratios", [])))))
+        )
+        
+        if ag_config_changed:
+            st.session_state.ag_config = new_ag_config
+            clear_runtime_snapshot("AG 모드 설정 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
+            st.rerun()  # 즉시 재실행하여 트레이더 재초기화
+    
+    # 시스템 정보
+    st.subheader("ℹ️ 시스템 정보")
+    
+    # 트레이더가 초기화되지 않은 경우 체크
+    if not st.session_state.trader:
+        st.warning("⚠️ 시스템이 재초기화 중입니다. 잠시 후 새로고침해주세요.")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info(f"💰 초기 투자금: ${st.session_state.initial_capital:,.0f}")
+        st.info(f"💵 현재 투자원금: ${st.session_state.trader.current_investment_capital:,.0f}")
+        st.caption("💡 투자원금은 10거래일마다 총자산으로 자동 갱신됩니다")
+        st.info(f"📅 세션 시작일: {st.session_state.session_start_date}")
+        st.info(f"🎯 현재 모드: {st.session_state.trader.current_mode}")
+        st.info(f"📦 현재 회차: {st.session_state.trader.current_round}")
+    
+    with col2:
+        latest_trading_day = st.session_state.trader.get_latest_trading_day()
+        st.info(f"📅 최근 거래일: {latest_trading_day.strftime('%Y-%m-%d')}")
+        st.info(f"💵 현금잔고: ${st.session_state.trader.available_cash:,.0f}")
+        st.info(f"📦 보유 포지션: {len(st.session_state.trader.positions)}개")
+    
+    # 시스템 재시작
+    st.subheader("🔄 시스템 관리")
+    
+    if st.button("🔄 시스템 재시작", type="secondary"):
+        clear_runtime_snapshot("시스템 재시작으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
+        st.rerun()
+
+if __name__ == "__main__":
+    main()
