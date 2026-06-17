@@ -207,6 +207,7 @@ st.markdown("""
 # --- GitHub API 기반 스냅샷 영구 저장 ---
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
+_PRESET_CONFIGS_KEY = "_preset_configs"
 
 def _gh_token() -> str:
     """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
@@ -270,27 +271,42 @@ def _gh_save_all_snapshots(data: dict, sha: str = None) -> tuple:
     except Exception as e:
         return False, str(e)
 
-def _load_snapshot_fallback(preset_name: str) -> dict:
-    """GitHub 실패 시 raw URL 또는 로컬 파일에서 로드"""
-    try:
-        # raw URL (인증 불필요)
-        url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_GH_SNAPSHOT_PATH}?ts={int(datetime.now().timestamp())}"
-        resp = _requests.get(url, timeout=5)
-        if resp.status_code == 200:
-            data = json.loads(resp.text)
-            return data.get(preset_name, {})
-    except Exception:
-        pass
-    try:
-        # 로컬 파일
+def _load_all_snapshots_fallback(prefer_local: bool = False) -> dict:
+    """GitHub API 실패 시 raw URL 또는 로컬 파일에서 전체 스냅샷 JSON 로드."""
+    def load_local() -> dict:
         path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data.get(preset_name, {})
-    except Exception:
-        pass
+                return json.load(f)
+        return {}
+
+    def load_raw() -> dict:
+        url = f"https://raw.githubusercontent.com/{_GH_REPO}/main/{_GH_SNAPSHOT_PATH}?ts={int(datetime.now().timestamp())}"
+        resp = _requests.get(url, timeout=5)
+        if resp.status_code == 200:
+            return json.loads(resp.text)
+        return {}
+
+    loaders = (load_local, load_raw) if prefer_local else (load_raw, load_local)
+    for loader in loaders:
+        try:
+            data = loader()
+            if data:
+                return data
+        except Exception:
+            pass
     return {}
+
+def _write_local_all_snapshots(data: dict) -> None:
+    """로컬 fallback 파일에 전체 스냅샷 JSON 저장."""
+    local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(local_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def _load_snapshot_fallback(preset_name: str) -> dict:
+    """GitHub 실패 시 raw URL 또는 로컬 파일에서 로드"""
+    return _load_all_snapshots_fallback().get(preset_name, {})
 
 def load_preset_snapshot(preset_name: str) -> dict:
     """특정 프리셋의 스냅샷 로드. GitHub를 원천으로 사용하고 로컬은 네트워크 실패 시 fallback."""
@@ -441,13 +457,143 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     # GitHub 저장 실패 여부와 무관하게 로컬 스냅샷도 최신화한다.
     # 로컬 파일은 네트워크 실패 시 fallback으로 사용된다.
     try:
-        local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(local_path, "w", encoding="utf-8") as f:
-            json.dump(all_data, f, ensure_ascii=False, indent=2)
+        _write_local_all_snapshots(all_data)
         st.session_state._gh_snapshot_all = all_data
     except Exception:
         pass
+    return ok, err
+
+def _copy_seed_increases(seeds: list) -> list:
+    """시드증액 목록을 JSON 저장 가능한 형태로 복사."""
+    copied = []
+    for seed in seeds or []:
+        try:
+            item = {
+                "date": str(seed.get("date", "")),
+                "amount": float(seed.get("amount", 0) or 0),
+            }
+            if seed.get("description"):
+                item["description"] = str(seed.get("description"))
+            if item["date"]:
+                copied.append(item)
+        except Exception:
+            continue
+    return sorted(copied, key=lambda x: x["date"])
+
+def _normalize_preset_config(config: dict) -> dict:
+    """프리셋 설정을 저장/복원용으로 정규화."""
+    return {
+        "initial_capital": float(config.get("initial_capital", 0) or 0),
+        "session_start_date": str(config.get("session_start_date", "")),
+        "seed_increases": _copy_seed_increases(config.get("seed_increases") or []),
+        "position_edits": dict(config.get("position_edits") or {}),
+    }
+
+def _preset_state_key(preset_name: str) -> str:
+    return f"{preset_name.lower()}_preset"
+
+def load_persisted_preset_configs() -> dict:
+    """스냅샷 JSON의 _preset_configs에서 저장된 프리셋 설정 로드."""
+    all_data, sha = _gh_load_all_snapshots()
+    if all_data:
+        st.session_state._gh_snapshot_sha = sha
+        st.session_state._gh_snapshot_all = all_data
+    else:
+        all_data = _load_all_snapshots_fallback(prefer_local=not bool(_gh_headers()))
+    configs = all_data.get(_PRESET_CONFIGS_KEY, {})
+    return configs if isinstance(configs, dict) else {}
+
+def apply_persisted_preset_configs() -> None:
+    """앱 시작 시 저장된 프리셋 설정을 기본값 위에 덮어쓴다."""
+    if st.session_state.get("_preset_configs_loaded"):
+        return
+    persisted = load_persisted_preset_configs()
+    for preset_name, persisted_config in persisted.items():
+        key = _preset_state_key(preset_name)
+        if key not in st.session_state or not isinstance(persisted_config, dict):
+            continue
+        merged = dict(st.session_state[key])
+        for field in ("initial_capital", "session_start_date", "seed_increases", "position_edits"):
+            if field in persisted_config:
+                merged[field] = persisted_config[field]
+        st.session_state[key] = _normalize_preset_config(merged)
+    st.session_state._preset_configs_loaded = True
+
+def ensure_preset_seed_increase(preset_name: str, date: str, amount: float) -> None:
+    """특정 프리셋에 반드시 있어야 하는 시드증액을 현재 세션에도 반영."""
+    key = _preset_state_key(preset_name)
+    if key not in st.session_state:
+        return
+
+    def has_seed(seeds: list) -> bool:
+        return any(
+            str(seed.get("date")) == date and float(seed.get("amount", 0) or 0) == float(amount)
+            for seed in seeds or []
+        )
+
+    preset = dict(st.session_state[key])
+    seeds = _copy_seed_increases(preset.get("seed_increases") or [])
+    if not has_seed(seeds):
+        seeds.append({"date": date, "amount": float(amount)})
+        preset["seed_increases"] = _copy_seed_increases(seeds)
+        st.session_state[key] = _normalize_preset_config(preset)
+
+    if st.session_state.get("active_preset") == preset_name and "seed_increases" in st.session_state:
+        active_seeds = _copy_seed_increases(st.session_state.seed_increases)
+        if not has_seed(active_seeds):
+            active_seeds.append({"date": date, "amount": float(amount)})
+            st.session_state.seed_increases = _copy_seed_increases(active_seeds)
+
+def sync_active_preset_config_from_session() -> None:
+    """현재 UI의 투자 설정/시드증액을 활성 프리셋 dict에 반영."""
+    preset_name = st.session_state.get("active_preset")
+    if not preset_name:
+        return
+    key = _preset_state_key(preset_name)
+    if key not in st.session_state:
+        return
+    preset = dict(st.session_state[key])
+    preset["initial_capital"] = float(st.session_state.get("initial_capital", preset.get("initial_capital", 0)) or 0)
+    preset["session_start_date"] = str(st.session_state.get("session_start_date", preset.get("session_start_date", "")))
+    preset["seed_increases"] = _copy_seed_increases(st.session_state.get("seed_increases") or [])
+    if "position_edits" in st.session_state:
+        preset["position_edits"] = dict(st.session_state.position_edits or {})
+    st.session_state[key] = _normalize_preset_config(preset)
+
+def save_active_preset_config() -> tuple:
+    """활성 프리셋 설정을 스냅샷 JSON의 _preset_configs에 저장."""
+    preset_name = st.session_state.get("active_preset")
+    if not preset_name:
+        return True, ""
+    sync_active_preset_config_from_session()
+    key = _preset_state_key(preset_name)
+    if key not in st.session_state:
+        return False, f"알 수 없는 프리셋입니다: {preset_name}"
+
+    all_data, sha = _gh_load_all_snapshots()
+    if not all_data:
+        all_data = (
+            getattr(st.session_state, "_gh_snapshot_all", None)
+            or _load_all_snapshots_fallback(prefer_local=not bool(_gh_headers()))
+        )
+        sha = getattr(st.session_state, "_gh_snapshot_sha", None)
+
+    configs = all_data.get(_PRESET_CONFIGS_KEY, {})
+    if not isinstance(configs, dict):
+        configs = {}
+    configs[preset_name] = _normalize_preset_config(st.session_state[key])
+    all_data[_PRESET_CONFIGS_KEY] = configs
+
+    ok, err = _gh_save_all_snapshots(all_data, sha)
+    if ok:
+        _, new_sha = _gh_load_all_snapshots()
+        st.session_state._gh_snapshot_sha = new_sha
+    st.session_state._gh_snapshot_all = all_data
+    try:
+        _write_local_all_snapshots(all_data)
+    except Exception:
+        pass
+    st.session_state._preset_config_save_result = (ok, err)
     return ok, err
 
 def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
@@ -615,7 +761,8 @@ if 'jeh2_preset' not in st.session_state:
         'initial_capital': 2704.0,
         'session_start_date': "2025-12-22",
         'seed_increases': [
-            {"date": "2026-01-15", "amount": 678.0}
+            {"date": "2026-01-15", "amount": 678.0},
+            {"date": "2026-06-16", "amount": 600.0}
         ],
         'position_edits': {}  # 포지션 수정 정보 저장
     }
@@ -626,6 +773,9 @@ if 'kmw2_preset' not in st.session_state:
         'seed_increases': [],
         'position_edits': {}
     }
+
+apply_persisted_preset_configs()
+ensure_preset_seed_increase("JEH2", "2026-06-16", 600.0)
 
 # 배포 테스트 - 버전 1.5 - FORCE REDEPLOY
 import time
@@ -746,7 +896,7 @@ def show_mobile_settings():
             kmw = st.session_state.kmw_preset
             st.session_state.initial_capital = kmw['initial_capital']
             st.session_state.session_start_date = kmw['session_start_date']
-            st.session_state.seed_increases = kmw['seed_increases'].copy()
+            st.session_state.seed_increases = _copy_seed_increases(kmw['seed_increases'])
             if 'position_edits' in kmw and kmw['position_edits']:
                 st.session_state.position_edits = kmw['position_edits'].copy()
             else:
@@ -760,7 +910,7 @@ def show_mobile_settings():
             jeh = st.session_state.jeh_preset
             st.session_state.initial_capital = jeh['initial_capital']
             st.session_state.session_start_date = jeh['session_start_date']
-            st.session_state.seed_increases = jeh['seed_increases'].copy()
+            st.session_state.seed_increases = _copy_seed_increases(jeh['seed_increases'])
             if 'position_edits' in jeh and jeh['position_edits']:
                 st.session_state.position_edits = jeh['position_edits'].copy()
             else:
@@ -774,7 +924,7 @@ def show_mobile_settings():
             kmw2 = st.session_state.kmw2_preset
             st.session_state.initial_capital = kmw2['initial_capital']
             st.session_state.session_start_date = kmw2['session_start_date']
-            st.session_state.seed_increases = kmw2['seed_increases'].copy()
+            st.session_state.seed_increases = _copy_seed_increases(kmw2['seed_increases'])
             if 'position_edits' in kmw2 and kmw2['position_edits']:
                 st.session_state.position_edits = kmw2['position_edits'].copy()
             else:
@@ -784,11 +934,11 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with pr_col4:
-        if st.button("JEH2", help="초기설정: 2704달러, 시작일 2025/12/22, 2026/01/15 +678", use_container_width=True):
+        if st.button("JEH2", help="초기설정: 2704달러, 시작일 2025/12/22, 2026/01/15 +678, 2026/06/16 +600", use_container_width=True):
             jeh2 = st.session_state.jeh2_preset
             st.session_state.initial_capital = jeh2['initial_capital']
             st.session_state.session_start_date = jeh2['session_start_date']
-            st.session_state.seed_increases = jeh2['seed_increases'].copy()
+            st.session_state.seed_increases = _copy_seed_increases(jeh2['seed_increases'])
             if 'position_edits' in jeh2 and jeh2['position_edits']:
                 st.session_state.position_edits = jeh2['position_edits'].copy()
             else:
@@ -802,7 +952,7 @@ def show_mobile_settings():
             jsd = st.session_state.jsd_preset
             st.session_state.initial_capital = jsd['initial_capital']
             st.session_state.session_start_date = jsd['session_start_date']
-            st.session_state.seed_increases = jsd['seed_increases'].copy()
+            st.session_state.seed_increases = _copy_seed_increases(jsd['seed_increases'])
             if 'position_edits' in jsd and jsd['position_edits']:
                 st.session_state.position_edits = jsd['position_edits'].copy()
             else:
@@ -825,6 +975,14 @@ def show_mobile_settings():
     
     # 시드증액 설정
     st.subheader("💰 시드증액")
+
+    preset_config_save_result = st.session_state.get('_preset_config_save_result')
+    if preset_config_save_result is not None:
+        ok, err = preset_config_save_result
+        if ok:
+            st.success("✅ 시드증액 기록이 프리셋 설정에 저장되었습니다.")
+        else:
+            st.warning(f"⚠️ 시드증액 기록을 로컬 fallback에 저장했습니다. GitHub 저장 실패: {err}")
     
     # 시드증액 목록 표시
     if 'seed_increases' not in st.session_state:
@@ -844,9 +1002,10 @@ def show_mobile_settings():
             with col3:
                 if st.button("🗑️", key=f"delete_seed_{i}"):
                     st.session_state.seed_increases.pop(i)
-                    st.session_state.positions_snapshot = {}
                     if st.session_state.get('active_preset'):
-                        save_preset_snapshot(st.session_state.active_preset, {})
+                        sync_active_preset_config_from_session()
+                        save_active_preset_config()
+                    st.session_state.positions_snapshot = {}
                     st.session_state.trader = None
                     st.rerun()
     
@@ -878,9 +1037,10 @@ def show_mobile_settings():
                 "amount": seed_amount
             }
             st.session_state.seed_increases.append(seed_increase)
-            st.session_state.positions_snapshot = {}
             if st.session_state.get('active_preset'):
-                save_preset_snapshot(st.session_state.active_preset, {})
+                sync_active_preset_config_from_session()
+                save_active_preset_config()
+            st.session_state.positions_snapshot = {}
             st.session_state.trader = None  # 트레이더 재초기화
             if seed_amount > 0:
                 st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
