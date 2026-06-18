@@ -2116,6 +2116,193 @@ def format_optional_percent(value) -> str:
     return f"{float(value):+.2f}%" if value is not None else ""
 
 
+def format_money(value) -> str:
+    return f"${float(value):,.0f}" if value is not None else ""
+
+
+def format_signed_money(value) -> str:
+    return f"${float(value):+,.0f}" if value is not None else ""
+
+
+def count_backtest_trades(result: dict) -> tuple[int, int]:
+    if not result or not result.get('daily_records'):
+        return 0, 0
+    records = result.get('daily_records') or []
+    buys = sum(1 for record in records if float(record.get('buy_executed_price') or 0) > 0)
+    sells = sum(1 for record in records if float(record.get('sell_executed_price') or 0) > 0)
+    return buys, sells
+
+
+def build_strategy_metrics(result: dict) -> dict:
+    if not result:
+        return {}
+    records = result.get('daily_records') or []
+    mdd_info = st.session_state.trader.calculate_mdd(records)
+    buys, sells = count_backtest_trades(result)
+    initial_capital = float(result.get('initial_capital', 0) or 0)
+    seed_total = float(result.get('seed_increases_total', 0) or 0)
+    capital_basis = float(result.get('capital_basis', initial_capital + seed_total) or 0)
+    final_value = float(result.get('final_value', 0) or 0)
+    return {
+        "trading_days": int(result.get('trading_days', len(records)) or 0),
+        "initial_capital": initial_capital,
+        "seed_total": seed_total,
+        "capital_basis": capital_basis,
+        "final_value": final_value,
+        "profit_vs_initial": final_value - initial_capital,
+        "profit_vs_capital_basis": final_value - capital_basis,
+        "total_return": float(result.get('total_return', 0) or 0),
+        "return_on_capital_basis": float(result.get('total_return_on_capital_basis', result.get('total_return', 0)) or 0),
+        "mdd_percent": float(mdd_info.get('mdd_percent', 0) or 0),
+        "mdd_date": mdd_info.get('mdd_date', ''),
+        "mdd_value": float(mdd_info.get('mdd_value', 0) or 0),
+        "final_positions": int(result.get('final_positions', 0) or 0),
+        "buy_count": buys,
+        "sell_count": sells,
+    }
+
+
+def build_metrics_comparison_display(current_result: dict, pure_result: dict) -> pd.DataFrame:
+    current = build_strategy_metrics(current_result)
+    pure = build_strategy_metrics(pure_result)
+    if not current:
+        return pd.DataFrame()
+
+    rows = [
+        ("거래일수", "trading_days", "count"),
+        ("초기자본", "initial_capital", "money"),
+        ("시드증액 합계", "seed_total", "money"),
+        ("투입원금 합계", "capital_basis", "money"),
+        ("최종자산", "final_value", "money"),
+        ("손익(초기자본 대비)", "profit_vs_initial", "signed_money"),
+        ("손익(투입원금 대비)", "profit_vs_capital_basis", "signed_money"),
+        ("총수익률(초기자본 기준)", "total_return", "percent"),
+        ("총수익률(투입원금 기준)", "return_on_capital_basis", "percent"),
+        ("MDD", "mdd_percent", "mdd_percent"),
+        ("MDD 발생일", "mdd_date", "text"),
+        ("MDD 최저자산", "mdd_value", "money"),
+        ("최종포지션", "final_positions", "count"),
+        ("매수 체결 수", "buy_count", "count"),
+        ("매도 체결 수", "sell_count", "count"),
+    ]
+
+    def format_metric(value, metric_type: str) -> str:
+        if metric_type == "money":
+            return format_money(value)
+        if metric_type == "signed_money":
+            return format_signed_money(value)
+        if metric_type == "percent":
+            return f"{float(value):+.2f}%"
+        if metric_type == "mdd_percent":
+            return f"{float(value):.2f}%"
+        if metric_type == "count":
+            return f"{int(value):,}"
+        return str(value or "")
+
+    def raw_delta(metric_key: str):
+        if not pure:
+            return None
+        current_value = current.get(metric_key)
+        pure_value = pure.get(metric_key)
+        if isinstance(current_value, (int, float)) and isinstance(pure_value, (int, float)):
+            return current_value - pure_value
+        return None
+
+    comparison_rows = []
+    for label, key, metric_type in rows:
+        delta = raw_delta(key)
+        if metric_type in {"money", "signed_money"}:
+            delta_display = format_signed_money(delta) if delta is not None else ""
+        elif metric_type == "percent":
+            delta_display = f"{delta:+.2f}%p" if delta is not None else ""
+        elif metric_type == "mdd_percent":
+            delta_display = f"{delta:+.2f}%p" if delta is not None else ""
+        elif metric_type == "count":
+            delta_display = f"{int(delta):+,}" if delta is not None else ""
+        else:
+            delta_display = ""
+
+        comparison_rows.append({
+            "지표": label,
+            CURRENT_BACKTEST_LABEL: format_metric(current.get(key), metric_type),
+            PURE_BACKTEST_LABEL: format_metric(pure.get(key), metric_type) if pure else "",
+            "차이(변형-순정)": delta_display,
+        })
+
+    return pd.DataFrame(comparison_rows)
+
+
+def build_backtest_trade_display(result: dict) -> pd.DataFrame:
+    if not result or not result.get('daily_records'):
+        return pd.DataFrame()
+
+    df_records = pd.DataFrame(result['daily_records'])
+    df_records['date'] = pd.to_datetime(df_records['date'], errors='coerce')
+    df_trades = df_records[
+        (df_records['buy_executed_price'] > 0) |
+        (df_records['sell_executed_price'] > 0)
+    ].copy()
+    if df_trades.empty:
+        return pd.DataFrame()
+
+    display_columns = [
+        'date', 'week', 'rsi', 'mode', 'current_round',
+        'buy_executed_price', 'buy_quantity', 'buy_amount',
+        'sell_executed_price', 'realized_pnl', 'total_assets'
+    ]
+    df_display = df_trades[display_columns].copy()
+    df_display.columns = [
+        '날짜', '주차', 'RSI', '모드', '회차',
+        '매수가', '수량', '매수금액',
+        '매도가', '실현손익', '총자산'
+    ]
+    df_display['날짜'] = df_display['날짜'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '')
+
+    for col in ['매수가', '매도가']:
+        df_display[col] = df_display[col].apply(lambda x: f"${x:.2f}" if x > 0 else "")
+    for col in ['매수금액', '실현손익', '총자산']:
+        df_display[col] = df_display[col].apply(lambda x: f"${x:,.0f}" if x != 0 else "")
+
+    return df_display
+
+
+def build_daily_comparison_display(current_result: dict, pure_result: dict) -> pd.DataFrame:
+    if not current_result or not pure_result:
+        return pd.DataFrame()
+    if not current_result.get('daily_records') or not pure_result.get('daily_records'):
+        return pd.DataFrame()
+
+    current_df = pd.DataFrame(current_result['daily_records'])
+    pure_df = pd.DataFrame(pure_result['daily_records'])
+    needed_cols = ['date', 'total_assets', 'cash_balance', 'position_value', 'buy_amount', 'realized_pnl']
+    if any(col not in current_df.columns for col in needed_cols) or any(col not in pure_df.columns for col in needed_cols):
+        return pd.DataFrame()
+
+    current_df = current_df[needed_cols].copy()
+    pure_df = pure_df[needed_cols].copy()
+    current_df.columns = [
+        '날짜', '변형 총자산', '변형 현금', '변형 주식평가', '변형 매수금액', '변형 실현손익'
+    ]
+    pure_df.columns = [
+        '날짜', '순정 총자산', '순정 현금', '순정 주식평가', '순정 매수금액', '순정 실현손익'
+    ]
+
+    merged = pd.merge(current_df, pure_df, on='날짜', how='outer').sort_values('날짜')
+    merged['날짜'] = pd.to_datetime(merged['날짜'], errors='coerce')
+    merged['총자산 차이'] = merged['변형 총자산'].fillna(0) - merged['순정 총자산'].fillna(0)
+    merged['날짜'] = merged['날짜'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '')
+
+    money_cols = [
+        '변형 총자산', '순정 총자산', '총자산 차이',
+        '변형 현금', '순정 현금', '변형 주식평가', '순정 주식평가',
+        '변형 매수금액', '순정 매수금액', '변형 실현손익', '순정 실현손익'
+    ]
+    for col in money_cols:
+        merged[col] = merged[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
+
+    return merged
+
+
 def show_backtest():
     """백테스팅 페이지"""
     st.header("📈 백테스팅")
@@ -2264,26 +2451,10 @@ def show_backtest():
         with col3:
             st.metric("💰 최저자산", f"${mdd_info.get('mdd_value', 0.0):,.0f}")
 
-        comparison_rows = []
-        for strategy_name, result in [
-            (CURRENT_BACKTEST_LABEL, backtest_result),
-            (PURE_BACKTEST_LABEL, pure_backtest_result),
-        ]:
-            if not result:
-                continue
-            strategy_mdd = st.session_state.trader.calculate_mdd(result['daily_records'])
-            comparison_rows.append({
-                "매매법": strategy_name,
-                "최종자산": f"${result['final_value']:,.0f}",
-                "총수익률": f"{result['total_return']:+.2f}%",
-                "투입원금 기준 수익률": format_optional_percent(result.get('total_return_on_capital_basis')),
-                "MDD": f"{strategy_mdd.get('mdd_percent', 0.0):.2f}%",
-                "최종포지션": f"{result['final_positions']}개",
-            })
-
-        if comparison_rows:
-            st.subheader("📊 매매법 비교")
-            st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
+        df_metrics_comparison = build_metrics_comparison_display(backtest_result, pure_backtest_result)
+        if not df_metrics_comparison.empty:
+            st.subheader("📊 매매법 지표 비교")
+            st.dataframe(df_metrics_comparison, use_container_width=True, hide_index=True)
         
         # 자산 변화 차트
         if backtest_result['daily_records']:
@@ -2322,44 +2493,30 @@ def show_backtest():
             )
             
             st.plotly_chart(fig, use_container_width=True)
-            
-            # 상세 거래 내역
-            st.subheader(f"📋 상세 거래 내역 ({CURRENT_BACKTEST_LABEL})")
-            
-            # 매수/매도 내역만 필터링
-            df_trades = df_backtest[
-                (df_backtest['buy_executed_price'] > 0) | 
-                (df_backtest['sell_executed_price'] > 0)
-            ].copy()
-            
-            if not df_trades.empty:
-                # 필요한 컬럼만 선택
-                display_columns = [
-                    'date', 'week', 'rsi', 'mode', 'current_round',
-                    'buy_executed_price', 'buy_quantity', 'buy_amount',
-                    'sell_executed_price', 'realized_pnl'
-                ]
-                
-                df_display = df_trades[display_columns].copy()
-                df_display.columns = [
-                    '날짜', '주차', 'RSI', '모드', '회차',
-                    '매수가', '수량', '매수금액',
-                    '매도가', '실현손익'
-                ]
-                
-                # 날짜 컬럼을 문자열로 변환하여 표시
-                df_display['날짜'] = df_display['날짜'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '')
-                
-                # 숫자 포맷팅
-                for col in ['매수가', '매도가']:
-                    df_display[col] = df_display[col].apply(lambda x: f"${x:.2f}" if x > 0 else "")
-                
-                for col in ['매수금액', '실현손익']:
-                    df_display[col] = df_display[col].apply(lambda x: f"${x:,.0f}" if x != 0 else "")
-                
-                st.dataframe(df_display, use_container_width=True)
+
+            st.subheader("📋 일별 비교 데이터")
+            df_daily_comparison = build_daily_comparison_display(backtest_result, pure_backtest_result)
+            if not df_daily_comparison.empty:
+                st.dataframe(df_daily_comparison, use_container_width=True, hide_index=True)
             else:
-                st.info("거래 내역이 없습니다.")
+                st.info("두 매매법의 일별 비교 데이터가 없습니다.")
+
+            st.subheader("📋 상세 거래 내역")
+            current_trade_tab, pure_trade_tab = st.tabs([CURRENT_BACKTEST_LABEL, PURE_BACKTEST_LABEL])
+
+            with current_trade_tab:
+                df_display = build_backtest_trade_display(backtest_result)
+                if not df_display.empty:
+                    st.dataframe(df_display, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"{CURRENT_BACKTEST_LABEL} 거래 내역이 없습니다.")
+
+            with pure_trade_tab:
+                df_pure_display = build_backtest_trade_display(pure_backtest_result)
+                if not df_pure_display.empty:
+                    st.dataframe(df_pure_display, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"{PURE_BACKTEST_LABEL} 거래 내역이 없습니다.")
         
         # 엑셀 다운로드
         if st.button("📥 엑셀 파일 생성", key="generate_excel"):
