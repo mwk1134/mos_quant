@@ -2046,6 +2046,76 @@ def show_portfolio():
         fig.update_layout(title="자산 구성 비율")
         st.plotly_chart(fig, use_container_width=True)
 
+CURRENT_BACKTEST_LABEL = "동파 변형-공격형"
+PURE_BACKTEST_LABEL = "동파 순정"
+
+
+def make_equal_split_config(config: dict) -> dict:
+    """Keep thresholds/hold rules and change only split ratios to equal weights."""
+    equal_config = dict(config or {})
+    split_count = int(equal_config.get("split_count") or len(equal_config.get("split_ratios") or []) or 1)
+    split_count = max(1, split_count)
+    equal_config["split_count"] = split_count
+    equal_config["split_ratios"] = [1.0 / split_count] * split_count
+    return equal_config
+
+
+def run_backtest_variant(start_date_str: str, end_date_str: str, sf_config: dict, ag_config: dict) -> dict:
+    """Run a backtest with isolated trader state so the live page state is not mutated."""
+    variant_trader = SOXLQuantTrader(
+        initial_capital=float(st.session_state.get('initial_capital', 0) or 0),
+        sf_config=sf_config,
+        ag_config=ag_config
+    )
+    variant_trader.session_start_date = start_date_str
+    variant_trader.set_seed_increases(st.session_state.get('seed_increases') or [])
+    if st.session_state.trader and st.session_state.trader.test_today_override:
+        variant_trader.set_test_today(st.session_state.trader.test_today_override)
+    variant_trader.clear_cache()
+    return variant_trader.run_backtest(start_date_str, end_date_str)
+
+
+def run_backtest_comparison(start_date_str: str, end_date_str: str) -> tuple[dict, dict]:
+    current_result = run_backtest_variant(
+        start_date_str,
+        end_date_str,
+        st.session_state.get('sf_config'),
+        st.session_state.get('ag_config')
+    )
+
+    pure_result = run_backtest_variant(
+        start_date_str,
+        end_date_str,
+        make_equal_split_config(st.session_state.get('sf_config')),
+        make_equal_split_config(st.session_state.get('ag_config'))
+    )
+    return current_result, pure_result
+
+
+def store_backtest_comparison(current_result: dict, pure_result: dict, start_date_str: str, end_date_str: str) -> None:
+    if "error" in current_result:
+        st.session_state.backtest_result = None
+        st.session_state.backtest_error = current_result['error']
+    else:
+        current_result["strategy_name"] = CURRENT_BACKTEST_LABEL
+        st.session_state.backtest_result = current_result
+        st.session_state.backtest_error = None
+        st.session_state.backtest_start_date_saved = start_date_str
+        st.session_state.backtest_end_date_saved = end_date_str
+
+    if "error" in pure_result:
+        st.session_state.backtest_pure_result = None
+        st.session_state.backtest_pure_error = pure_result['error']
+    else:
+        pure_result["strategy_name"] = PURE_BACKTEST_LABEL
+        st.session_state.backtest_pure_result = pure_result
+        st.session_state.backtest_pure_error = None
+
+
+def format_optional_percent(value) -> str:
+    return f"{float(value):+.2f}%" if value is not None else ""
+
+
 def show_backtest():
     """백테스팅 페이지"""
     st.header("📈 백테스팅")
@@ -2082,33 +2152,26 @@ def show_backtest():
         "seed_increases": st.session_state.get('seed_increases') or [],
         "sf_config": st.session_state.get('sf_config') or {},
         "ag_config": st.session_state.get('ag_config') or {},
+        "comparison": "current_vs_equal_split_v1",
     }, sort_keys=True, ensure_ascii=True)
 
     if st.session_state.get('auto_backtest_key') != auto_backtest_key:
         try:
             with st.spinner('현재 프리셋 기준으로 오늘까지 백테스팅 계산 중...'):
-                auto_trader = SOXLQuantTrader(
-                    initial_capital=float(st.session_state.get('initial_capital', 0) or 0),
-                    sf_config=st.session_state.get('sf_config'),
-                    ag_config=st.session_state.get('ag_config')
+                backtest_result, pure_backtest_result = run_backtest_comparison(
+                    auto_start_date_str,
+                    auto_end_date_str
                 )
-                auto_trader.session_start_date = auto_start_date_str
-                auto_trader.set_seed_increases(st.session_state.get('seed_increases') or [])
-                if st.session_state.trader.test_today_override:
-                    auto_trader.set_test_today(st.session_state.trader.test_today_override)
-                auto_trader.clear_cache()
-                backtest_result = auto_trader.run_backtest(auto_start_date_str, auto_end_date_str)
         except Exception as e:
             backtest_result = {"error": str(e)}
+            pure_backtest_result = {"error": str(e)}
 
-        if "error" in backtest_result:
-            st.session_state.backtest_result = None
-            st.session_state.backtest_error = backtest_result['error']
-        else:
-            st.session_state.backtest_result = backtest_result
-            st.session_state.backtest_error = None
-            st.session_state.backtest_start_date_saved = auto_start_date_str
-            st.session_state.backtest_end_date_saved = auto_end_date_str
+        store_backtest_comparison(
+            backtest_result,
+            pure_backtest_result,
+            auto_start_date_str,
+            auto_end_date_str
+        )
         st.session_state.auto_backtest_key = auto_backtest_key
 
     preset_label = st.session_state.get('active_preset') or "CUSTOM"
@@ -2141,36 +2204,37 @@ def show_backtest():
     # 백테스팅 실행
     if st.button("🚀 백테스팅 실행", use_container_width=True):
         with st.spinner('백테스팅 실행 중...'):
-            backtest_result = st.session_state.trader.run_backtest(
+            backtest_result, pure_backtest_result = run_backtest_comparison(
                 start_date.strftime('%Y-%m-%d'),
                 end_date.strftime('%Y-%m-%d')
             )
-        
-        if "error" in backtest_result:
-            st.session_state.backtest_result = None
-            st.session_state.backtest_error = backtest_result['error']
-        else:
-            # 결과를 session_state에 저장 (페이지 새로고침 후에도 유지)
-            st.session_state.backtest_result = backtest_result
-            st.session_state.backtest_error = None
-            st.session_state.backtest_start_date_saved = start_date.strftime('%Y-%m-%d')
-            st.session_state.backtest_end_date_saved = end_date.strftime('%Y-%m-%d')
+        store_backtest_comparison(
+            backtest_result,
+            pure_backtest_result,
+            start_date.strftime('%Y-%m-%d'),
+            end_date.strftime('%Y-%m-%d')
+        )
         
         # 페이지 새로고침 없이 결과 표시를 위해 rerun 호출하지 않음
         # (버튼 클릭 시 자동으로 페이지가 새로고침됨)
     
     # 에러 표시
     if 'backtest_error' in st.session_state and st.session_state.backtest_error:
-        st.error(f"백테스팅 실패: {st.session_state.backtest_error}")
+        st.error(f"{CURRENT_BACKTEST_LABEL} 백테스팅 실패: {st.session_state.backtest_error}")
+    if 'backtest_pure_error' in st.session_state and st.session_state.backtest_pure_error:
+        st.warning(f"{PURE_BACKTEST_LABEL} 백테스팅 실패: {st.session_state.backtest_pure_error}")
     
     # 백테스팅 결과 표시
     if 'backtest_result' in st.session_state and st.session_state.backtest_result:
         backtest_result = st.session_state.backtest_result
+        pure_backtest_result = st.session_state.get('backtest_pure_result')
         
         # 결과 표시
         st.success("✅ 백테스팅 완료!")
+        st.caption(f"현재 매매법: {CURRENT_BACKTEST_LABEL} / 비교 매매법: {PURE_BACKTEST_LABEL} (SF·AG 분할비중 동등분할)")
         
         # 요약 결과
+        st.subheader(f"📌 {CURRENT_BACKTEST_LABEL} 요약")
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -2199,6 +2263,27 @@ def show_backtest():
         
         with col3:
             st.metric("💰 최저자산", f"${mdd_info.get('mdd_value', 0.0):,.0f}")
+
+        comparison_rows = []
+        for strategy_name, result in [
+            (CURRENT_BACKTEST_LABEL, backtest_result),
+            (PURE_BACKTEST_LABEL, pure_backtest_result),
+        ]:
+            if not result:
+                continue
+            strategy_mdd = st.session_state.trader.calculate_mdd(result['daily_records'])
+            comparison_rows.append({
+                "매매법": strategy_name,
+                "최종자산": f"${result['final_value']:,.0f}",
+                "총수익률": f"{result['total_return']:+.2f}%",
+                "투입원금 기준 수익률": format_optional_percent(result.get('total_return_on_capital_basis')),
+                "MDD": f"{strategy_mdd.get('mdd_percent', 0.0):.2f}%",
+                "최종포지션": f"{result['final_positions']}개",
+            })
+
+        if comparison_rows:
+            st.subheader("📊 매매법 비교")
+            st.dataframe(pd.DataFrame(comparison_rows), use_container_width=True, hide_index=True)
         
         # 자산 변화 차트
         if backtest_result['daily_records']:
@@ -2214,12 +2299,23 @@ def show_backtest():
                 x=df_backtest['date'],
                 y=df_backtest['total_assets'],
                 mode='lines',
-                name='총 자산',
+                name=CURRENT_BACKTEST_LABEL,
                 line=dict(color='blue', width=2)
             ))
+
+            if pure_backtest_result and pure_backtest_result.get('daily_records'):
+                df_pure_backtest = pd.DataFrame(pure_backtest_result['daily_records'])
+                df_pure_backtest['date'] = pd.to_datetime(df_pure_backtest['date'], errors='coerce')
+                fig.add_trace(go.Scatter(
+                    x=df_pure_backtest['date'],
+                    y=df_pure_backtest['total_assets'],
+                    mode='lines',
+                    name=PURE_BACKTEST_LABEL,
+                    line=dict(color='orange', width=2)
+                ))
             
             fig.update_layout(
-                title="자산 변화 추이",
+                title="자산 변화 추이: 동파 변형-공격형 vs 동파 순정",
                 xaxis_title="날짜",
                 yaxis_title="자산 ($)",
                 hovermode='x unified'
@@ -2228,7 +2324,7 @@ def show_backtest():
             st.plotly_chart(fig, use_container_width=True)
             
             # 상세 거래 내역
-            st.subheader("📋 상세 거래 내역")
+            st.subheader(f"📋 상세 거래 내역 ({CURRENT_BACKTEST_LABEL})")
             
             # 매수/매도 내역만 필터링
             df_trades = df_backtest[
