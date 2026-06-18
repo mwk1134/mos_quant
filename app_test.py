@@ -41,6 +41,37 @@ class SOXLQuantTrader(BaseSOXLQuantTrader):
         return candidate
 
 
+class MovingAverageV11BacktestTrader(SOXLQuantTrader):
+    """Backtest variant: use V1.1 thresholds only when SOXL 5 > 20 > 60 MA."""
+
+    def _is_soxl_bull_alignment(self, soxl_history: pd.DataFrame) -> bool:
+        if soxl_history is None or len(soxl_history) < 60 or "Close" not in soxl_history.columns:
+            return False
+        close = soxl_history["Close"].dropna()
+        if len(close) < 60:
+            return False
+        ma5 = close.rolling(window=5).mean().iloc[-1]
+        ma20 = close.rolling(window=20).mean().iloc[-1]
+        ma60 = close.rolling(window=60).mean().iloc[-1]
+        return bool(pd.notna(ma5) and pd.notna(ma20) and pd.notna(ma60) and ma5 > ma20 > ma60)
+
+    def get_mode_config(self, mode: str, current_date: datetime = None, soxl_history: pd.DataFrame = None) -> dict:
+        config = super().get_mode_config(mode, current_date, soxl_history).copy()
+        if self._is_soxl_bull_alignment(soxl_history):
+            if mode == "SF":
+                config["buy_threshold"] = 6.25
+                config["sell_threshold"] = 1.5
+                config["max_hold_days"] = 35
+            else:
+                config["buy_threshold"] = 15.25
+                config["sell_threshold"] = 6.8
+                config["max_hold_days"] = 7
+            config["strategy_name"] = "정배열 V1.1"
+        else:
+            config["strategy_name"] = "동파 변형-공격형"
+        return config
+
+
 def _secret_or_env(name: str, default: str = "") -> str:
     """Read a Streamlit secret first, then an environment variable."""
     try:
@@ -2048,6 +2079,7 @@ def show_portfolio():
 
 CURRENT_BACKTEST_LABEL = "동파 변형-공격형"
 PURE_BACKTEST_LABEL = "동파 순정"
+MA_V11_BACKTEST_LABEL = "동파변형-정배열V1.1"
 
 
 def make_equal_split_config(config: dict) -> dict:
@@ -2060,9 +2092,15 @@ def make_equal_split_config(config: dict) -> dict:
     return equal_config
 
 
-def run_backtest_variant(start_date_str: str, end_date_str: str, sf_config: dict, ag_config: dict) -> dict:
+def run_backtest_variant(
+    start_date_str: str,
+    end_date_str: str,
+    sf_config: dict,
+    ag_config: dict,
+    trader_cls=SOXLQuantTrader
+) -> dict:
     """Run a backtest with isolated trader state so the live page state is not mutated."""
-    variant_trader = SOXLQuantTrader(
+    variant_trader = trader_cls(
         initial_capital=float(st.session_state.get('initial_capital', 0) or 0),
         sf_config=sf_config,
         ag_config=ag_config
@@ -2075,7 +2113,7 @@ def run_backtest_variant(start_date_str: str, end_date_str: str, sf_config: dict
     return variant_trader.run_backtest(start_date_str, end_date_str)
 
 
-def run_backtest_comparison(start_date_str: str, end_date_str: str) -> tuple[dict, dict]:
+def run_backtest_comparison(start_date_str: str, end_date_str: str) -> tuple[dict, dict, dict]:
     current_result = run_backtest_variant(
         start_date_str,
         end_date_str,
@@ -2089,10 +2127,28 @@ def run_backtest_comparison(start_date_str: str, end_date_str: str) -> tuple[dic
         make_equal_split_config(st.session_state.get('sf_config')),
         make_equal_split_config(st.session_state.get('ag_config'))
     )
-    return current_result, pure_result
+
+    ma_v11_result = run_backtest_variant(
+        start_date_str,
+        end_date_str,
+        st.session_state.get('sf_config'),
+        st.session_state.get('ag_config'),
+        MovingAverageV11BacktestTrader
+    )
+    return current_result, pure_result, ma_v11_result
 
 
-def store_backtest_comparison(current_result: dict, pure_result: dict, start_date_str: str, end_date_str: str) -> None:
+def store_single_backtest_result(result: dict, result_key: str, error_key: str, strategy_name: str) -> None:
+    if "error" in result:
+        st.session_state[result_key] = None
+        st.session_state[error_key] = result['error']
+    else:
+        result["strategy_name"] = strategy_name
+        st.session_state[result_key] = result
+        st.session_state[error_key] = None
+
+
+def store_backtest_comparison(current_result: dict, pure_result: dict, ma_v11_result: dict, start_date_str: str, end_date_str: str) -> None:
     if "error" in current_result:
         st.session_state.backtest_result = None
         st.session_state.backtest_error = current_result['error']
@@ -2110,6 +2166,12 @@ def store_backtest_comparison(current_result: dict, pure_result: dict, start_dat
         pure_result["strategy_name"] = PURE_BACKTEST_LABEL
         st.session_state.backtest_pure_result = pure_result
         st.session_state.backtest_pure_error = None
+    store_single_backtest_result(
+        ma_v11_result,
+        "backtest_ma_v11_result",
+        "backtest_ma_v11_error",
+        MA_V11_BACKTEST_LABEL
+    )
 
 
 def format_optional_percent(value) -> str:
@@ -2162,9 +2224,10 @@ def build_strategy_metrics(result: dict) -> dict:
     }
 
 
-def build_metrics_comparison_display(current_result: dict, pure_result: dict) -> pd.DataFrame:
+def build_metrics_comparison_display(current_result: dict, pure_result: dict, ma_v11_result: dict = None) -> pd.DataFrame:
     current = build_strategy_metrics(current_result)
     pure = build_strategy_metrics(pure_result)
+    ma_v11 = build_strategy_metrics(ma_v11_result)
     if not current:
         return pd.DataFrame()
 
@@ -2174,10 +2237,8 @@ def build_metrics_comparison_display(current_result: dict, pure_result: dict) ->
         ("시드증액 합계", "seed_total", "money"),
         ("투입원금 합계", "capital_basis", "money"),
         ("최종자산", "final_value", "money"),
-        ("손익(초기자본 대비)", "profit_vs_initial", "signed_money"),
         ("손익(투입원금 대비)", "profit_vs_capital_basis", "signed_money"),
-        ("총수익률(초기자본 기준)", "total_return", "percent"),
-        ("총수익률(투입원금 기준)", "return_on_capital_basis", "percent"),
+        ("총수익률", "return_on_capital_basis", "percent"),
         ("MDD", "mdd_percent", "mdd_percent"),
         ("MDD 발생일", "mdd_date", "text"),
         ("MDD 최저자산", "mdd_value", "money"),
@@ -2208,25 +2269,42 @@ def build_metrics_comparison_display(current_result: dict, pure_result: dict) ->
             return current_value - pure_value
         return None
 
+    def raw_ma_delta(metric_key: str):
+        if not ma_v11:
+            return None
+        ma_value = ma_v11.get(metric_key)
+        current_value = current.get(metric_key)
+        if isinstance(ma_value, (int, float)) and isinstance(current_value, (int, float)):
+            return ma_value - current_value
+        return None
+
     comparison_rows = []
     for label, key, metric_type in rows:
         delta = raw_delta(key)
+        ma_delta = raw_ma_delta(key)
         if metric_type in {"money", "signed_money"}:
             delta_display = format_signed_money(delta) if delta is not None else ""
+            ma_delta_display = format_signed_money(ma_delta) if ma_delta is not None else ""
         elif metric_type == "percent":
             delta_display = f"{delta:+.2f}%p" if delta is not None else ""
+            ma_delta_display = f"{ma_delta:+.2f}%p" if ma_delta is not None else ""
         elif metric_type == "mdd_percent":
             delta_display = f"{delta:+.2f}%p" if delta is not None else ""
+            ma_delta_display = f"{ma_delta:+.2f}%p" if ma_delta is not None else ""
         elif metric_type == "count":
             delta_display = f"{int(delta):+,}" if delta is not None else ""
+            ma_delta_display = f"{int(ma_delta):+,}" if ma_delta is not None else ""
         else:
             delta_display = ""
+            ma_delta_display = ""
 
         comparison_rows.append({
             "지표": label,
             CURRENT_BACKTEST_LABEL: format_metric(current.get(key), metric_type),
             PURE_BACKTEST_LABEL: format_metric(pure.get(key), metric_type) if pure else "",
+            MA_V11_BACKTEST_LABEL: format_metric(ma_v11.get(key), metric_type) if ma_v11 else "",
             "차이(변형-순정)": delta_display,
+            "차이(정배열V1.1-변형)": ma_delta_display,
         })
 
     return pd.DataFrame(comparison_rows)
@@ -2246,13 +2324,15 @@ def build_backtest_trade_display(result: dict) -> pd.DataFrame:
         return pd.DataFrame()
 
     display_columns = [
-        'date', 'week', 'rsi', 'mode', 'current_round',
+        'date', 'week', 'rsi', 'mode', 'strategy_name', 'current_round',
         'buy_executed_price', 'buy_quantity', 'buy_amount',
         'sell_executed_price', 'realized_pnl', 'total_assets'
     ]
+    if 'strategy_name' not in df_trades.columns:
+        df_trades['strategy_name'] = ""
     df_display = df_trades[display_columns].copy()
     df_display.columns = [
-        '날짜', '주차', 'RSI', '모드', '회차',
+        '날짜', '주차', 'RSI', '모드', '적용전략', '회차',
         '매수가', '수량', '매수금액',
         '매도가', '실현손익', '총자산'
     ]
@@ -2266,7 +2346,7 @@ def build_backtest_trade_display(result: dict) -> pd.DataFrame:
     return df_display
 
 
-def build_daily_comparison_display(current_result: dict, pure_result: dict) -> pd.DataFrame:
+def build_daily_comparison_display(current_result: dict, pure_result: dict, ma_v11_result: dict = None) -> pd.DataFrame:
     if not current_result or not pure_result:
         return pd.DataFrame()
     if not current_result.get('daily_records') or not pure_result.get('daily_records'):
@@ -2274,9 +2354,11 @@ def build_daily_comparison_display(current_result: dict, pure_result: dict) -> p
 
     current_df = pd.DataFrame(current_result['daily_records'])
     pure_df = pd.DataFrame(pure_result['daily_records'])
+    ma_v11_df = pd.DataFrame(ma_v11_result['daily_records']) if ma_v11_result and ma_v11_result.get('daily_records') else pd.DataFrame()
     needed_cols = ['date', 'total_assets', 'cash_balance', 'position_value', 'buy_amount', 'realized_pnl']
     if any(col not in current_df.columns for col in needed_cols) or any(col not in pure_df.columns for col in needed_cols):
         return pd.DataFrame()
+    has_ma_v11 = not ma_v11_df.empty and all(col in ma_v11_df.columns for col in needed_cols)
 
     current_df = current_df[needed_cols].copy()
     pure_df = pure_df[needed_cols].copy()
@@ -2288,8 +2370,17 @@ def build_daily_comparison_display(current_result: dict, pure_result: dict) -> p
     ]
 
     merged = pd.merge(current_df, pure_df, on='날짜', how='outer').sort_values('날짜')
+    if has_ma_v11:
+        ma_v11_df = ma_v11_df[needed_cols].copy()
+        ma_v11_df.columns = [
+            '날짜', '정배열V1.1 총자산', '정배열V1.1 현금', '정배열V1.1 주식평가',
+            '정배열V1.1 매수금액', '정배열V1.1 실현손익'
+        ]
+        merged = pd.merge(merged, ma_v11_df, on='날짜', how='outer').sort_values('날짜')
     merged['날짜'] = pd.to_datetime(merged['날짜'], errors='coerce')
     merged['총자산 차이'] = merged['변형 총자산'].fillna(0) - merged['순정 총자산'].fillna(0)
+    if has_ma_v11:
+        merged['정배열V1.1 차이'] = merged['정배열V1.1 총자산'].fillna(0) - merged['변형 총자산'].fillna(0)
     merged['날짜'] = merged['날짜'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else '')
 
     money_cols = [
@@ -2297,6 +2388,11 @@ def build_daily_comparison_display(current_result: dict, pure_result: dict) -> p
         '변형 현금', '순정 현금', '변형 주식평가', '순정 주식평가',
         '변형 매수금액', '순정 매수금액', '변형 실현손익', '순정 실현손익'
     ]
+    if has_ma_v11:
+        money_cols.extend([
+            '정배열V1.1 총자산', '정배열V1.1 현금', '정배열V1.1 주식평가',
+            '정배열V1.1 매수금액', '정배열V1.1 실현손익', '정배열V1.1 차이'
+        ])
     for col in money_cols:
         merged[col] = merged[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
 
@@ -2339,23 +2435,25 @@ def show_backtest():
         "seed_increases": st.session_state.get('seed_increases') or [],
         "sf_config": st.session_state.get('sf_config') or {},
         "ag_config": st.session_state.get('ag_config') or {},
-        "comparison": "current_vs_equal_split_v1",
+        "comparison": "current_vs_equal_split_vs_ma_v11_v1",
     }, sort_keys=True, ensure_ascii=True)
 
     if st.session_state.get('auto_backtest_key') != auto_backtest_key:
         try:
             with st.spinner('현재 프리셋 기준으로 오늘까지 백테스팅 계산 중...'):
-                backtest_result, pure_backtest_result = run_backtest_comparison(
+                backtest_result, pure_backtest_result, ma_v11_backtest_result = run_backtest_comparison(
                     auto_start_date_str,
                     auto_end_date_str
                 )
         except Exception as e:
             backtest_result = {"error": str(e)}
             pure_backtest_result = {"error": str(e)}
+            ma_v11_backtest_result = {"error": str(e)}
 
         store_backtest_comparison(
             backtest_result,
             pure_backtest_result,
+            ma_v11_backtest_result,
             auto_start_date_str,
             auto_end_date_str
         )
@@ -2391,13 +2489,14 @@ def show_backtest():
     # 백테스팅 실행
     if st.button("🚀 백테스팅 실행", use_container_width=True):
         with st.spinner('백테스팅 실행 중...'):
-            backtest_result, pure_backtest_result = run_backtest_comparison(
+            backtest_result, pure_backtest_result, ma_v11_backtest_result = run_backtest_comparison(
                 start_date.strftime('%Y-%m-%d'),
                 end_date.strftime('%Y-%m-%d')
             )
         store_backtest_comparison(
             backtest_result,
             pure_backtest_result,
+            ma_v11_backtest_result,
             start_date.strftime('%Y-%m-%d'),
             end_date.strftime('%Y-%m-%d')
         )
@@ -2410,15 +2509,20 @@ def show_backtest():
         st.error(f"{CURRENT_BACKTEST_LABEL} 백테스팅 실패: {st.session_state.backtest_error}")
     if 'backtest_pure_error' in st.session_state and st.session_state.backtest_pure_error:
         st.warning(f"{PURE_BACKTEST_LABEL} 백테스팅 실패: {st.session_state.backtest_pure_error}")
+    if 'backtest_ma_v11_error' in st.session_state and st.session_state.backtest_ma_v11_error:
+        st.warning(f"{MA_V11_BACKTEST_LABEL} 백테스팅 실패: {st.session_state.backtest_ma_v11_error}")
     
     # 백테스팅 결과 표시
     if 'backtest_result' in st.session_state and st.session_state.backtest_result:
         backtest_result = st.session_state.backtest_result
         pure_backtest_result = st.session_state.get('backtest_pure_result')
+        ma_v11_backtest_result = st.session_state.get('backtest_ma_v11_result')
         
         # 결과 표시
         st.success("✅ 백테스팅 완료!")
-        st.caption(f"현재 매매법: {CURRENT_BACKTEST_LABEL} / 비교 매매법: {PURE_BACKTEST_LABEL} (SF·AG 분할비중 동등분할)")
+        st.caption(f"현재 매매법: {CURRENT_BACKTEST_LABEL} / 비교 매매법: {PURE_BACKTEST_LABEL}, {MA_V11_BACKTEST_LABEL}")
+        st.caption("정배열 V1.1은 SOXL 5일선 > 20일선 > 60일선일 때만 V1.1 조건을 적용하고, 그 외에는 동파 변형-공격형 기준을 적용합니다.")
+        st.caption("수익률은 초기자본 + 중간 시드증액을 반영한 투입원금 기준입니다.")
         
         # 요약 결과
         st.subheader(f"📌 {CURRENT_BACKTEST_LABEL} 요약")
@@ -2431,7 +2535,8 @@ def show_backtest():
             st.metric("💰 최종자산", f"${backtest_result['final_value']:,.0f}")
         
         with col3:
-            st.metric("📈 총수익률", f"{backtest_result['total_return']:+.2f}%")
+            basis_return = backtest_result.get('total_return_on_capital_basis', backtest_result['total_return'])
+            st.metric("📈 총수익률", f"{basis_return:+.2f}%")
         
         with col4:
             st.metric("📦 최종포지션", f"{backtest_result['final_positions']}개")
@@ -2451,7 +2556,7 @@ def show_backtest():
         with col3:
             st.metric("💰 최저자산", f"${mdd_info.get('mdd_value', 0.0):,.0f}")
 
-        df_metrics_comparison = build_metrics_comparison_display(backtest_result, pure_backtest_result)
+        df_metrics_comparison = build_metrics_comparison_display(backtest_result, pure_backtest_result, ma_v11_backtest_result)
         if not df_metrics_comparison.empty:
             st.subheader("📊 매매법 지표 비교")
             st.dataframe(df_metrics_comparison, use_container_width=True, hide_index=True)
@@ -2484,9 +2589,20 @@ def show_backtest():
                     name=PURE_BACKTEST_LABEL,
                     line=dict(color='orange', width=2)
                 ))
+
+            if ma_v11_backtest_result and ma_v11_backtest_result.get('daily_records'):
+                df_ma_v11_backtest = pd.DataFrame(ma_v11_backtest_result['daily_records'])
+                df_ma_v11_backtest['date'] = pd.to_datetime(df_ma_v11_backtest['date'], errors='coerce')
+                fig.add_trace(go.Scatter(
+                    x=df_ma_v11_backtest['date'],
+                    y=df_ma_v11_backtest['total_assets'],
+                    mode='lines',
+                    name=MA_V11_BACKTEST_LABEL,
+                    line=dict(color='green', width=2)
+                ))
             
             fig.update_layout(
-                title="자산 변화 추이: 동파 변형-공격형 vs 동파 순정",
+                title="자산 변화 추이: 동파 변형-공격형 vs 동파 순정 vs 정배열 V1.1",
                 xaxis_title="날짜",
                 yaxis_title="자산 ($)",
                 hovermode='x unified'
@@ -2495,14 +2611,18 @@ def show_backtest():
             st.plotly_chart(fig, use_container_width=True)
 
             st.subheader("📋 일별 비교 데이터")
-            df_daily_comparison = build_daily_comparison_display(backtest_result, pure_backtest_result)
+            df_daily_comparison = build_daily_comparison_display(backtest_result, pure_backtest_result, ma_v11_backtest_result)
             if not df_daily_comparison.empty:
                 st.dataframe(df_daily_comparison, use_container_width=True, hide_index=True)
             else:
                 st.info("두 매매법의 일별 비교 데이터가 없습니다.")
 
             st.subheader("📋 상세 거래 내역")
-            current_trade_tab, pure_trade_tab = st.tabs([CURRENT_BACKTEST_LABEL, PURE_BACKTEST_LABEL])
+            current_trade_tab, pure_trade_tab, ma_v11_trade_tab = st.tabs([
+                CURRENT_BACKTEST_LABEL,
+                PURE_BACKTEST_LABEL,
+                MA_V11_BACKTEST_LABEL
+            ])
 
             with current_trade_tab:
                 df_display = build_backtest_trade_display(backtest_result)
@@ -2517,6 +2637,13 @@ def show_backtest():
                     st.dataframe(df_pure_display, use_container_width=True, hide_index=True)
                 else:
                     st.info(f"{PURE_BACKTEST_LABEL} 거래 내역이 없습니다.")
+
+            with ma_v11_trade_tab:
+                df_ma_v11_display = build_backtest_trade_display(ma_v11_backtest_result)
+                if not df_ma_v11_display.empty:
+                    st.dataframe(df_ma_v11_display, use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"{MA_V11_BACKTEST_LABEL} 거래 내역이 없습니다.")
         
         # 엑셀 다운로드
         if st.button("📥 엑셀 파일 생성", key="generate_excel"):

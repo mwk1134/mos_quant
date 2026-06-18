@@ -1839,6 +1839,25 @@ class SOXLQuantTrader:
     def get_current_config(self) -> Dict:
         """현재 모드에 따른 설정 반환"""
         return self.sf_config if self.current_mode == "SF" else self.ag_config
+
+    def get_mode_config(self, mode: str, current_date: Optional[datetime] = None, soxl_history: Optional[pd.DataFrame] = None) -> Dict:
+        """Return the trading config for a mode at a specific date.
+
+        Subclasses can override this to apply date-dependent strategy variants.
+        """
+        return self.sf_config if mode == "SF" else self.ag_config
+
+    def get_position_config(self, position: Dict) -> Dict:
+        """Return the sell/hold config stored at buy time, falling back to mode config."""
+        base_config = self.sf_config if position.get("mode") == "SF" else self.ag_config
+        position_config = base_config.copy()
+        if "sell_threshold" in position:
+            position_config["sell_threshold"] = float(position["sell_threshold"])
+        if "max_hold_days" in position:
+            position_config["max_hold_days"] = int(position["max_hold_days"])
+        if "strategy_name" in position:
+            position_config["strategy_name"] = position["strategy_name"]
+        return position_config
     
     def calculate_buy_sell_prices(self, current_price: float) -> Tuple[float, float]:
         """
@@ -1995,6 +2014,12 @@ class SOXLQuantTrader:
             "amount": actual_amount,    # 실제 투자금액
             "mode": buy_mode  # 매수 시점의 모드 저장
         }
+        active_buy_config = getattr(self, "_active_buy_config", None)
+        if active_buy_config:
+            position["sell_threshold"] = float(active_buy_config.get("sell_threshold", 0))
+            position["max_hold_days"] = int(active_buy_config.get("max_hold_days", 0))
+            if active_buy_config.get("strategy_name"):
+                position["strategy_name"] = active_buy_config["strategy_name"]
         
         # 디버깅: 매수 시점의 모드 확인 및 검증
         if mode is not None and mode != buy_mode:
@@ -2061,7 +2086,7 @@ class SOXLQuantTrader:
             if future_data.empty:
                 continue
 
-            position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
+            position_config = self.get_position_config(position)
             target_price = position["buy_price"] * (1 + position_config["sell_threshold"] / 100)
 
             # 1. 목표가 도달한 경우 매도
@@ -2158,7 +2183,7 @@ class SOXLQuantTrader:
                     hold_days += 1
             
             # 해당 포지션의 모드 설정 가져오기
-            position_config = self.sf_config if position["mode"] == "SF" else self.ag_config
+            position_config = self.get_position_config(position)
             
             # 손절예정일 계산 (거래일 기준)
             stop_loss_date = buy_date
@@ -3788,7 +3813,8 @@ class SOXLQuantTrader:
             if prev_close is not None:
 
                 # 현재 모드 설정 가져오기 (주차 단위로 결정된 모드 사용)
-                config = self.sf_config if current_mode == "SF" else self.ag_config
+                soxl_history_to_date = soxl_data[soxl_data.index <= current_date]
+                config = self.get_mode_config(current_mode, current_date, soxl_history_to_date)
                 
                 # 디버깅: 매매 실행 시점의 모드 확인
                 debug_mode_msg = f"🔍 {current_date.strftime('%Y-%m-%d')} 매매 실행 - 현재 주차 모드: {current_mode}"
@@ -3809,7 +3835,7 @@ class SOXLQuantTrader:
                         print(f"   - 보유 포지션 목록:")
                         for pos in self.positions:
                             buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
-                            pos_config = self.sf_config if pos["mode"] == "SF" else self.ag_config
+                            pos_config = self.get_position_config(pos)
                             target_price = pos["buy_price"] * (1 + pos_config["sell_threshold"] / 100)
                             print(f"      {pos['round']}회차: 매수일 {buy_date_str}, 모드 {pos.get('mode', 'N/A')}, 매수가 ${pos.get('buy_price', 0):.2f}, 목표가 ${target_price:.2f}")
                             print(f"         당일 종가: ${row['Close']:.2f}, 매도 조건: {row['Close']:.2f} >= {target_price:.2f} = {row['Close'] >= target_price}")
@@ -3918,7 +3944,12 @@ class SOXLQuantTrader:
                         # 매수 시점의 모드 로그 (디버깅)
                         print(f"🔍 매수 실행 전: 날짜={current_date.strftime('%Y-%m-%d')}, 주차 모드={current_mode}, self.current_mode={self.current_mode}")
                         
-                        if self.execute_buy(buy_price, daily_close, current_date, current_mode):  # 목표가 기준 수량으로 계산하여 종가에 매수, 매수 시점의 모드 전달
+                        self._active_buy_config = config.copy()
+                        try:
+                            buy_success = self.execute_buy(buy_price, daily_close, current_date, current_mode)
+                        finally:
+                            self._active_buy_config = None
+                        if buy_success:  # 목표가 기준 수량으로 계산하여 종가에 매수, 매수 시점의 모드 전달
                             exec_msg = f"✅ 매수 체결 성공! (모드: {current_mode})"
                             print(exec_msg)
                             self.backtest_logs.append(exec_msg)
@@ -4009,6 +4040,7 @@ class SOXLQuantTrader:
                     "week": current_week,
                     "rsi": current_week_rsi if current_week_rsi is not None else 50.0,  # None일 때만 기본값 사용
                     "mode": current_mode,
+                    "strategy_name": config.get("strategy_name", "기본"),
                     "current_round": min(current_round_before_buy, 7 if current_mode == "SF" else 8),  # 매수 전 회차 사용 (최대값 제한)
                     "seed_amount": self.calculate_position_size(current_round_before_buy) if buy_executed else 0,
                     "buy_order_price": buy_price,
