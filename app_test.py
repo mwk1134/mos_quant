@@ -669,7 +669,8 @@ if 'jeh2_preset' not in st.session_state:
         'initial_capital': 2704.0,
         'session_start_date': "2025-12-22",
         'seed_increases': [
-            {"date": "2026-01-15", "amount": 678.0}
+            {"date": "2026-01-15", "amount": 678.0},
+            {"date": "2026-06-16", "amount": 600.0}
         ],
         'position_edits': {}  # 포지션 수정 정보 저장
     }
@@ -680,6 +681,28 @@ if 'kmw2_preset' not in st.session_state:
         'seed_increases': [],
         'position_edits': {}
     }
+
+def ensure_seed_increase(seed_list, seed_date: str, seed_amount: float) -> list:
+    """Add a fixed seed increase once, preserving existing user entries."""
+    seeds = list(seed_list or [])
+    for seed in seeds:
+        if seed.get("date") == seed_date and abs(float(seed.get("amount", 0) or 0) - seed_amount) < 1e-9:
+            return seeds
+    seeds.append({"date": seed_date, "amount": seed_amount})
+    seeds.sort(key=lambda item: item.get("date", ""))
+    return seeds
+
+st.session_state.jeh2_preset['seed_increases'] = ensure_seed_increase(
+    st.session_state.jeh2_preset.get('seed_increases'),
+    "2026-06-16",
+    600.0
+)
+if st.session_state.get('active_preset') == "JEH2":
+    st.session_state.seed_increases = ensure_seed_increase(
+        st.session_state.get('seed_increases'),
+        "2026-06-16",
+        600.0
+    )
 
 # app_test.py: production-like test app. Debug deploy banners are intentionally disabled.
 
@@ -2031,21 +2054,75 @@ def show_backtest():
         st.error("시스템이 초기화되지 않았습니다.")
         return
     
+    auto_end_date = st.session_state.trader.get_today_date()
+    session_start_str = st.session_state.get('session_start_date')
+    if hasattr(session_start_str, "strftime"):
+        session_start_str = session_start_str.strftime('%Y-%m-%d')
+    try:
+        auto_start_date = datetime.strptime(str(session_start_str), '%Y-%m-%d')
+    except (TypeError, ValueError):
+        auto_start_date = auto_end_date - timedelta(days=365)
+    if auto_start_date > auto_end_date:
+        auto_start_date = auto_end_date
+
+    auto_start_date_str = auto_start_date.strftime('%Y-%m-%d')
+    auto_end_date_str = auto_end_date.strftime('%Y-%m-%d')
+
+    # 세션 상태 초기화: 기본값은 현재 프리셋 시작일 ~ 오늘
+    if 'backtest_start_date' not in st.session_state:
+        st.session_state.backtest_start_date = auto_start_date
+    if 'backtest_end_date' not in st.session_state:
+        st.session_state.backtest_end_date = auto_end_date
+
+    auto_backtest_key = json.dumps({
+        "active_preset": st.session_state.get('active_preset'),
+        "initial_capital": float(st.session_state.get('initial_capital', 0) or 0),
+        "session_start_date": auto_start_date_str,
+        "end_date": auto_end_date_str,
+        "seed_increases": st.session_state.get('seed_increases') or [],
+        "sf_config": st.session_state.get('sf_config') or {},
+        "ag_config": st.session_state.get('ag_config') or {},
+    }, sort_keys=True, ensure_ascii=True)
+
+    if st.session_state.get('auto_backtest_key') != auto_backtest_key:
+        try:
+            with st.spinner('현재 프리셋 기준으로 오늘까지 백테스팅 계산 중...'):
+                auto_trader = SOXLQuantTrader(
+                    initial_capital=float(st.session_state.get('initial_capital', 0) or 0),
+                    sf_config=st.session_state.get('sf_config'),
+                    ag_config=st.session_state.get('ag_config')
+                )
+                auto_trader.session_start_date = auto_start_date_str
+                auto_trader.set_seed_increases(st.session_state.get('seed_increases') or [])
+                if st.session_state.trader.test_today_override:
+                    auto_trader.set_test_today(st.session_state.trader.test_today_override)
+                auto_trader.clear_cache()
+                backtest_result = auto_trader.run_backtest(auto_start_date_str, auto_end_date_str)
+        except Exception as e:
+            backtest_result = {"error": str(e)}
+
+        if "error" in backtest_result:
+            st.session_state.backtest_result = None
+            st.session_state.backtest_error = backtest_result['error']
+        else:
+            st.session_state.backtest_result = backtest_result
+            st.session_state.backtest_error = None
+            st.session_state.backtest_start_date_saved = auto_start_date_str
+            st.session_state.backtest_end_date_saved = auto_end_date_str
+        st.session_state.auto_backtest_key = auto_backtest_key
+
+    preset_label = st.session_state.get('active_preset') or "CUSTOM"
+    st.caption(f"자동 계산 기준: {preset_label} / {auto_start_date_str} ~ {auto_end_date_str}")
+
     # 백테스팅 설정
     col1, col2 = st.columns(2)
-    
-    # 세션 상태 초기화
-    if 'backtest_start_date' not in st.session_state:
-        st.session_state.backtest_start_date = datetime.now() - timedelta(days=365)
-    if 'backtest_end_date' not in st.session_state:
-        st.session_state.backtest_end_date = datetime.now()
     
     with col1:
         start_date = st.date_input(
             "시작 날짜",
             value=st.session_state.backtest_start_date,
             min_value=datetime(2011, 1, 1),
-            max_value=datetime.now(),
+            max_value=max(datetime.now(), auto_end_date),
             key="backtest_start_date_input"
         )
         if start_date != st.session_state.backtest_start_date:
@@ -2055,7 +2132,7 @@ def show_backtest():
         end_date = st.date_input(
             "종료 날짜",
             value=st.session_state.backtest_end_date,
-            max_value=datetime.now(),
+            max_value=max(datetime.now(), auto_end_date),
             key="backtest_end_date_input"
         )
         if end_date != st.session_state.backtest_end_date:
