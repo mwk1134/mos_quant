@@ -62,10 +62,14 @@ class MovingAverageV11BacktestTrader(SOXLQuantTrader):
                 config["buy_threshold"] = 6.25
                 config["sell_threshold"] = 1.5
                 config["max_hold_days"] = 35
+                config["split_count"] = 7
+                config["split_ratios"] = [1.0 / 7] * 7
             else:
                 config["buy_threshold"] = 15.25
                 config["sell_threshold"] = 6.8
                 config["max_hold_days"] = 7
+                config["split_count"] = 8
+                config["split_ratios"] = [1.0 / 8] * 8
             config["strategy_name"] = "정배열 V1.1"
         else:
             config["strategy_name"] = "동파 변형-공격형"

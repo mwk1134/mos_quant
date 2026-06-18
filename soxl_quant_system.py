@@ -1886,7 +1886,7 @@ class SOXLQuantTrader:
         Returns:
             float: 해당 회차 매수 금액
         """
-        config = self.get_current_config()
+        config = getattr(self, "_active_buy_config", None) or self.get_current_config()
         
         if round_num <= len(config["split_ratios"]):
             ratio = config["split_ratios"][round_num - 1]
@@ -4042,7 +4042,11 @@ class SOXLQuantTrader:
                     "mode": current_mode,
                     "strategy_name": config.get("strategy_name", "기본"),
                     "current_round": min(current_round_before_buy, 7 if current_mode == "SF" else 8),  # 매수 전 회차 사용 (최대값 제한)
-                    "seed_amount": self.calculate_position_size(current_round_before_buy) if buy_executed else 0,
+                    "seed_amount": (
+                        self.current_investment_capital * config["split_ratios"][current_round_before_buy - 1]
+                        if buy_executed and 1 <= current_round_before_buy <= len(config.get("split_ratios", []))
+                        else 0
+                    ),
                     "buy_order_price": buy_price,
                     "close_price": current_price,
                     "sell_target_price": sell_price,
