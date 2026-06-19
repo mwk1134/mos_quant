@@ -23,6 +23,7 @@ if str(CURRENT_DIR) not in sys.path:
 
 # 기존 SOXLQuantTrader 클래스 import
 from soxl_quant_system import SOXLQuantTrader as BaseSOXLQuantTrader
+from soxl_ma_v11_strategy import MovingAverageV11StrategyMixin
 
 
 class SOXLQuantTrader(BaseSOXLQuantTrader):
@@ -41,39 +42,10 @@ class SOXLQuantTrader(BaseSOXLQuantTrader):
         return candidate
 
 
-class MovingAverageV11BacktestTrader(SOXLQuantTrader):
-    """Backtest variant: use V1.1 thresholds only when SOXL 5 > 20 > 60 MA."""
+class MovingAverageV11BacktestTrader(MovingAverageV11StrategyMixin, SOXLQuantTrader):
+    """Backtest trader for the conditional MA V1.1 strategy."""
 
-    def _is_soxl_bull_alignment(self, soxl_history: pd.DataFrame) -> bool:
-        if soxl_history is None or len(soxl_history) < 60 or "Close" not in soxl_history.columns:
-            return False
-        close = soxl_history["Close"].dropna()
-        if len(close) < 60:
-            return False
-        ma5 = close.rolling(window=5).mean().iloc[-1]
-        ma20 = close.rolling(window=20).mean().iloc[-1]
-        ma60 = close.rolling(window=60).mean().iloc[-1]
-        return bool(pd.notna(ma5) and pd.notna(ma20) and pd.notna(ma60) and ma5 > ma20 > ma60)
-
-    def get_mode_config(self, mode: str, current_date: datetime = None, soxl_history: pd.DataFrame = None) -> dict:
-        config = super().get_mode_config(mode, current_date, soxl_history).copy()
-        if self._is_soxl_bull_alignment(soxl_history):
-            if mode == "SF":
-                config["buy_threshold"] = 6.25
-                config["sell_threshold"] = 1.5
-                config["max_hold_days"] = 35
-                config["split_count"] = 7
-                config["split_ratios"] = [1.0 / 7] * 7
-            else:
-                config["buy_threshold"] = 15.25
-                config["sell_threshold"] = 6.8
-                config["max_hold_days"] = 7
-                config["split_count"] = 8
-                config["split_ratios"] = [1.0 / 8] * 8
-            config["strategy_name"] = "정배열 V1.1"
-        else:
-            config["strategy_name"] = "동파 변형-공격형"
-        return config
+    pass
 
 
 def _secret_or_env(name: str, default: str = "") -> str:
@@ -2525,7 +2497,7 @@ def show_backtest():
         # 결과 표시
         st.success("✅ 백테스팅 완료!")
         st.caption(f"현재 매매법: {CURRENT_BACKTEST_LABEL} / 비교 매매법: {PURE_BACKTEST_LABEL}, {MA_V11_BACKTEST_LABEL}")
-        st.caption("정배열 V1.1은 SOXL 5일선 > 20일선 > 60일선일 때만 V1.1 조건을 적용하고, 그 외에는 동파 변형-공격형 기준을 적용합니다.")
+        st.caption("정배열 V1.1은 전일 기준 SOXL 5일선 > 20일선 > 60일선일 때만 매수/매도/보유일 조건을 강화하고, 분할비율은 기본 매매법과 동일하게 유지합니다.")
         st.caption("수익률은 초기자본 + 중간 시드증액을 반영한 투입원금 기준입니다.")
         
         # 요약 결과
