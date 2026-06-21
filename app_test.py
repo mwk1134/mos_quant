@@ -255,6 +255,7 @@ st.markdown("""
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
 _GH_PRESET_PATH = "data/wepapp_v2_preset.json"
+_PRESET_CONFIGS_KEY = "_preset_configs"
 
 def _gh_token() -> str:
     """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
@@ -612,13 +613,36 @@ def _preset_state_key(preset_name: str) -> str:
     return f"{preset_name.lower()}_preset"
 
 
+def _load_app_preset_configs_from_snapshot() -> dict:
+    """Load app.py's persisted preset configs from positions_snapshots.json."""
+    all_data, _ = _gh_load_all_snapshots()
+    if not all_data:
+        all_data = _read_local_json(_GH_SNAPSHOT_PATH)
+    configs = all_data.get(_PRESET_CONFIGS_KEY, {}) if isinstance(all_data, dict) else {}
+    return configs if isinstance(configs, dict) else {}
+
+
+def _normalize_preset_configs(configs: dict) -> dict:
+    normalized = {}
+    for preset_name, config in (configs or {}).items():
+        if isinstance(config, dict):
+            normalized[preset_name] = _normalize_preset_config(config)
+    return normalized
+
+
 def load_persisted_preset_configs() -> dict:
     data, sha = _gh_load_json_file(_GH_PRESET_PATH)
-    if data:
-        st.session_state._gh_preset_sha = sha
-        st.session_state._gh_preset_all = data
-        return data
-    data = _read_local_json(_GH_PRESET_PATH)
+    if not data:
+        data = _read_local_json(_GH_PRESET_PATH)
+
+    # app.py stores the live preset source of truth inside positions_snapshots.json.
+    # app_test keeps its own file too, but app.py's recorded presets win when present.
+    app_configs = _normalize_preset_configs(_load_app_preset_configs_from_snapshot())
+    if app_configs:
+        data = {**(data if isinstance(data, dict) else {}), **app_configs}
+        _write_local_json(_GH_PRESET_PATH, data)
+
+    st.session_state._gh_preset_sha = sha
     st.session_state._gh_preset_all = data
     return data if isinstance(data, dict) else {}
 
@@ -679,6 +703,28 @@ def save_active_preset_config() -> tuple:
         _, new_sha = _gh_load_json_file(_GH_PRESET_PATH)
         st.session_state._gh_preset_sha = new_sha
     st.session_state._gh_preset_all = all_data
+
+    snapshot_data, snapshot_sha = _gh_load_all_snapshots()
+    if not snapshot_data:
+        snapshot_data = _read_local_json(_GH_SNAPSHOT_PATH)
+    if isinstance(snapshot_data, dict):
+        snapshot_configs = snapshot_data.get(_PRESET_CONFIGS_KEY, {})
+        if not isinstance(snapshot_configs, dict):
+            snapshot_configs = {}
+        snapshot_configs[preset_name] = _normalize_preset_config(st.session_state[key])
+        snapshot_data[_PRESET_CONFIGS_KEY] = snapshot_configs
+        if not _gh_headers():
+            _write_local_json(_GH_SNAPSHOT_PATH, snapshot_data)
+        else:
+            mirror_ok, mirror_err = _gh_save_all_snapshots(snapshot_data, snapshot_sha)
+            if mirror_ok:
+                _, new_snapshot_sha = _gh_load_all_snapshots()
+                st.session_state._gh_snapshot_sha = new_snapshot_sha
+                st.session_state._gh_snapshot_all = snapshot_data
+            elif ok:
+                st.session_state._preset_config_save_result = (False, mirror_err)
+                return False, mirror_err
+
     st.session_state._preset_config_save_result = (ok, err)
     return ok, err
 
