@@ -653,7 +653,7 @@ class SOXLQuantTrader:
             # 매수일 기준으로 재계산되도록 _mode_needs_recalc 플래그로 표시.
             # (과거 버전은 mode 필드를 저장하지 않아 SF로 간주되어 공세모드 포지션이
             # 재시뮬 매도조건 체크에서 잘못 매도되는 버그가 있었음)
-            positions.append({
+            position = {
                 "round": round_num,
                 "buy_date": buy_dt,
                 "buy_price": buy_price,
@@ -661,7 +661,14 @@ class SOXLQuantTrader:
                 "amount": amount,
                 "mode": str(stored_mode) if stored_mode else "SF",
                 "_mode_needs_recalc": stored_mode is None,
-            })
+            }
+            if val.get("sell_threshold") is not None:
+                position["sell_threshold"] = float(val.get("sell_threshold"))
+            if val.get("max_hold_days") is not None:
+                position["max_hold_days"] = int(val.get("max_hold_days"))
+            if val.get("strategy_name"):
+                position["strategy_name"] = str(val.get("strategy_name"))
+            positions.append(position)
         if not positions:
             return [], max_snap_date, self.initial_capital
         # available_cash는 simulate_from_snapshot_to_today에서 시뮬레이션으로 계산 (매도 수익 반영)

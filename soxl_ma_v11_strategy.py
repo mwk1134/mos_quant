@@ -62,3 +62,13 @@ class MovingAverageV11StrategyMixin:
 
         config["strategy_name"] = BASE_STRATEGY_NAME
         return config
+
+    def get_current_config(self) -> dict:
+        """Return the current mode config with the MA V1.1 overlay when applicable."""
+        mode = self.current_mode or "SF"
+        soxl_history = None
+        try:
+            soxl_history = self.get_stock_data("SOXL", "6mo")
+        except Exception:
+            soxl_history = None
+        return self.get_mode_config(mode, self.get_today_date(), soxl_history)

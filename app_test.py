@@ -25,6 +25,12 @@ if str(CURRENT_DIR) not in sys.path:
 from soxl_quant_system import SOXLQuantTrader as BaseSOXLQuantTrader
 from soxl_ma_v11_strategy import MovingAverageV11StrategyMixin
 
+CURRENT_BACKTEST_LABEL = "동파 변형-공격형"
+PURE_BACKTEST_LABEL = "동파 순정"
+MA_V11_BACKTEST_LABEL = "동파변형-정배열V1.1"
+STRATEGY_OPTIONS = [MA_V11_BACKTEST_LABEL, CURRENT_BACKTEST_LABEL]
+DEFAULT_TRADING_STRATEGY = MA_V11_BACKTEST_LABEL
+
 
 class SOXLQuantTrader(BaseSOXLQuantTrader):
     """Web app wrapper with safer date handling for app_test.py."""
@@ -46,6 +52,13 @@ class MovingAverageV11BacktestTrader(MovingAverageV11StrategyMixin, SOXLQuantTra
     """Backtest trader for the conditional MA V1.1 strategy."""
 
     pass
+
+
+def get_trader_class_for_strategy(strategy_name: str):
+    """Return the trader class for the selected app_test.py strategy."""
+    if strategy_name == MA_V11_BACKTEST_LABEL:
+        return MovingAverageV11BacktestTrader
+    return SOXLQuantTrader
 
 
 def _secret_or_env(name: str, default: str = "") -> str:
@@ -241,6 +254,7 @@ st.markdown("""
 # --- GitHub API 기반 스냅샷 영구 저장 ---
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
+_GH_PRESET_PATH = "data/wepapp_v2_preset.json"
 
 def _gh_token() -> str:
     """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
@@ -303,6 +317,70 @@ def _gh_save_all_snapshots(data: dict, sha: str = None) -> tuple:
         return False, f"GitHub API 오류 ({resp.status_code}): {msg}"
     except Exception as e:
         return False, str(e)
+
+def _local_json_path(repo_path: str) -> Path:
+    return Path(__file__).resolve().parent / repo_path
+
+
+def _read_local_json(repo_path: str) -> dict:
+    path = _local_json_path(repo_path)
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    return data if isinstance(data, dict) else {}
+
+
+def _write_local_json(repo_path: str, data: dict) -> None:
+    path = _local_json_path(repo_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _gh_load_json_file(repo_path: str) -> tuple:
+    headers = _gh_headers()
+    if not headers:
+        return {}, None
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{repo_path}"
+        resp = _requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            info = resp.json()
+            content = base64.b64decode(info["content"]).decode("utf-8")
+            data = json.loads(content)
+            return (data if isinstance(data, dict) else {}), info["sha"]
+        return {}, None
+    except Exception as e:
+        print(f"GitHub JSON load failed: {repo_path} / {e}")
+        return {}, None
+
+
+def _gh_save_json_file(repo_path: str, data: dict, sha: str = None, message_prefix: str = "json update") -> tuple:
+    headers = _gh_headers()
+    if not headers:
+        return False, "GITHUB_TOKEN이 설정되지 않았습니다. Streamlit Secrets에 추가해주세요."
+    try:
+        url = f"https://api.github.com/repos/{_GH_REPO}/contents/{repo_path}"
+        if not sha:
+            get_resp = _requests.get(url, headers=headers, timeout=10)
+            if get_resp.status_code == 200:
+                sha = get_resp.json().get("sha")
+        content_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        body = {
+            "message": f"{message_prefix} {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "content": base64.b64encode(content_bytes).decode("ascii"),
+        }
+        if sha:
+            body["sha"] = sha
+        resp = _requests.put(url, headers=headers, json=body, timeout=10)
+        if resp.status_code in (200, 201):
+            return True, ""
+        err = resp.json() if resp.text else {}
+        return False, f"GitHub API 오류 ({resp.status_code}): {err.get('message', resp.text[:200])}"
+    except Exception as e:
+        return False, str(e)
+
 
 def _load_snapshot_fallback(preset_name: str) -> dict:
     """GitHub 실패 시 raw URL 또는 로컬 파일에서 로드"""
@@ -372,6 +450,28 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
         return True
     return _snapshot_max_date(current_snapshot) > _snapshot_max_date(previous_snapshot or {})
 
+
+def _snapshot_item_from_position(pos: dict, saved: dict = None) -> dict:
+    """Build a persisted snapshot item while preserving buy-time strategy metadata."""
+    saved = saved or {}
+    shares = int(saved.get('shares', pos.get('shares', 0)) or 0)
+    buy_price = float(pos.get('buy_price', saved.get('buy_price', 0)) or 0)
+    amount = shares * buy_price if saved else float(pos.get('amount', shares * buy_price) or 0)
+    item = {
+        'shares': shares,
+        'buy_price': buy_price,
+        'amount': amount,
+        'round': int(pos.get('round', saved.get('round', 0)) or 0),
+        'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
+    }
+    if pos.get('sell_threshold') is not None or saved.get('sell_threshold') is not None:
+        item['sell_threshold'] = float(pos.get('sell_threshold', saved.get('sell_threshold')) or 0)
+    if pos.get('max_hold_days') is not None or saved.get('max_hold_days') is not None:
+        item['max_hold_days'] = int(pos.get('max_hold_days', saved.get('max_hold_days')) or 0)
+    if pos.get('strategy_name') or saved.get('strategy_name'):
+        item['strategy_name'] = str(pos.get('strategy_name') or saved.get('strategy_name'))
+    return item
+
 def get_preset_configs() -> dict:
     """저장된 전체 프리셋 설정을 반환."""
     return {
@@ -396,26 +496,15 @@ def _build_snapshot_from_positions(trader: SOXLQuantTrader, previous_snapshot: d
                     saved = sv
                     break
         if saved:
-            current_snapshot[snap_key] = {
-                'shares': int(saved['shares']),
-                'buy_price': float(pos['buy_price']),
-                'amount': float(saved['shares']) * float(pos['buy_price']),
-                'round': int(pos['round']),
-                'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
-            }
+            current_snapshot[snap_key] = _snapshot_item_from_position(pos, saved)
         else:
-            current_snapshot[snap_key] = {
-                'shares': int(pos['shares']),
-                'buy_price': float(pos['buy_price']),
-                'amount': float(pos['amount']),
-                'round': int(pos['round']),
-                'mode': str(pos.get('mode') or 'SF'),
-            }
+            current_snapshot[snap_key] = _snapshot_item_from_position(pos)
     return current_snapshot
 
 def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
     """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
-    temp_trader = SOXLQuantTrader(
+    trader_cls = get_trader_class_for_strategy(st.session_state.get('selected_strategy', DEFAULT_TRADING_STRATEGY))
+    temp_trader = trader_cls(
         initial_capital=preset['initial_capital'],
         sf_config=st.session_state.get('sf_config'),
         ag_config=st.session_state.get('ag_config')
@@ -490,6 +579,107 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
             st.session_state._gh_snapshot_all = all_data
         except Exception:
             pass
+    return ok, err
+
+
+def _copy_seed_increases(seeds: list) -> list:
+    copied = []
+    for seed in seeds or []:
+        try:
+            item = {
+                "date": str(seed.get("date", "")),
+                "amount": float(seed.get("amount", 0) or 0),
+            }
+            if seed.get("description"):
+                item["description"] = str(seed.get("description"))
+            if item["date"]:
+                copied.append(item)
+        except Exception:
+            continue
+    return sorted(copied, key=lambda x: x["date"])
+
+
+def _normalize_preset_config(config: dict) -> dict:
+    return {
+        "initial_capital": float(config.get("initial_capital", 0) or 0),
+        "session_start_date": str(config.get("session_start_date", "")),
+        "seed_increases": _copy_seed_increases(config.get("seed_increases") or []),
+        "position_edits": dict(config.get("position_edits") or {}),
+    }
+
+
+def _preset_state_key(preset_name: str) -> str:
+    return f"{preset_name.lower()}_preset"
+
+
+def load_persisted_preset_configs() -> dict:
+    data, sha = _gh_load_json_file(_GH_PRESET_PATH)
+    if data:
+        st.session_state._gh_preset_sha = sha
+        st.session_state._gh_preset_all = data
+        return data
+    data = _read_local_json(_GH_PRESET_PATH)
+    st.session_state._gh_preset_all = data
+    return data if isinstance(data, dict) else {}
+
+
+def apply_persisted_preset_configs() -> None:
+    if st.session_state.get("_webapp_v2_preset_configs_loaded"):
+        return
+    persisted = load_persisted_preset_configs()
+    for preset_name, persisted_config in persisted.items():
+        key = _preset_state_key(preset_name)
+        if key not in st.session_state or not isinstance(persisted_config, dict):
+            continue
+        merged = dict(st.session_state[key])
+        for field in ("initial_capital", "session_start_date", "seed_increases", "position_edits"):
+            if field in persisted_config:
+                merged[field] = persisted_config[field]
+        st.session_state[key] = _normalize_preset_config(merged)
+    st.session_state._webapp_v2_preset_configs_loaded = True
+
+
+def sync_active_preset_config_from_session() -> None:
+    preset_name = st.session_state.get("active_preset")
+    if not preset_name:
+        return
+    key = _preset_state_key(preset_name)
+    if key not in st.session_state:
+        return
+    preset = dict(st.session_state[key])
+    preset["initial_capital"] = float(st.session_state.get("initial_capital", preset.get("initial_capital", 0)) or 0)
+    preset["session_start_date"] = str(st.session_state.get("session_start_date", preset.get("session_start_date", "")))
+    preset["seed_increases"] = _copy_seed_increases(st.session_state.get("seed_increases") or [])
+    if "position_edits" in st.session_state:
+        preset["position_edits"] = dict(st.session_state.position_edits or {})
+    st.session_state[key] = _normalize_preset_config(preset)
+
+
+def save_active_preset_config() -> tuple:
+    preset_name = st.session_state.get("active_preset")
+    if not preset_name:
+        return True, ""
+    sync_active_preset_config_from_session()
+    key = _preset_state_key(preset_name)
+    if key not in st.session_state:
+        return False, f"알 수 없는 프리셋입니다: {preset_name}"
+
+    all_data = getattr(st.session_state, "_gh_preset_all", None)
+    sha = getattr(st.session_state, "_gh_preset_sha", None)
+    if not isinstance(all_data, dict):
+        all_data, sha = _gh_load_json_file(_GH_PRESET_PATH)
+        if not all_data:
+            all_data = _read_local_json(_GH_PRESET_PATH)
+
+    all_data[preset_name] = _normalize_preset_config(st.session_state[key])
+    _write_local_json(_GH_PRESET_PATH, all_data)
+
+    ok, err = _gh_save_json_file(_GH_PRESET_PATH, all_data, sha, "webapp v2 preset update")
+    if ok:
+        _, new_sha = _gh_load_json_file(_GH_PRESET_PATH)
+        st.session_state._gh_preset_sha = new_sha
+    st.session_state._gh_preset_all = all_data
+    st.session_state._preset_config_save_result = (ok, err)
     return ok, err
 
 
@@ -647,6 +837,10 @@ if 'ag_config' not in st.session_state:
     }
 if 'active_preset' not in st.session_state:
     st.session_state.active_preset = None
+if 'selected_strategy' not in st.session_state:
+    st.session_state.selected_strategy = DEFAULT_TRADING_STRATEGY
+if 'trader_strategy' not in st.session_state:
+    st.session_state.trader_strategy = None
 if 'kmw_preset' not in st.session_state:
     st.session_state.kmw_preset = {
         'initial_capital': 9000.0,
@@ -688,6 +882,8 @@ if 'kmw2_preset' not in st.session_state:
         'seed_increases': [],
         'position_edits': {}
     }
+
+apply_persisted_preset_configs()
 
 def ensure_seed_increase(seed_list, seed_date: str, seed_amount: float) -> list:
     """Add a fixed seed increase once, preserving existing user entries."""
@@ -745,18 +941,27 @@ def login_page():
 
 def initialize_trader():
     """트레이더 초기화 - 오류 처리 강화"""
+    selected_strategy = st.session_state.get('selected_strategy', DEFAULT_TRADING_STRATEGY)
+    if (
+        st.session_state.trader is not None
+        and st.session_state.get('trader_strategy') != selected_strategy
+    ):
+        st.session_state.trader = None
+
     if st.session_state.trader is None:
         try:
             with st.spinner('MOS 퀀트투자 시스템 초기화 중...'):
                 # 사용자 지정 파라미터 가져오기 (없으면 None = 기본값 사용)
                 sf_config = st.session_state.get('sf_config')
                 ag_config = st.session_state.get('ag_config')
+                trader_cls = get_trader_class_for_strategy(selected_strategy)
                 
-                st.session_state.trader = SOXLQuantTrader(
+                st.session_state.trader = trader_cls(
                     initial_capital=st.session_state.initial_capital,
                     sf_config=sf_config,
                     ag_config=ag_config
                 )
+                st.session_state.trader_strategy = selected_strategy
                 if st.session_state.test_today_override:
                     st.session_state.trader.set_test_today(st.session_state.test_today_override)
                 
@@ -805,6 +1010,8 @@ def show_mobile_settings():
     
     if initial_capital != st.session_state.initial_capital:
         st.session_state.initial_capital = initial_capital
+        if st.session_state.get('active_preset'):
+            save_active_preset_config()
         clear_runtime_snapshot("초기 투자금 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
         st.rerun()  # 즉시 새로고침
     
@@ -895,6 +1102,8 @@ def show_mobile_settings():
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
         st.session_state.session_start_date = new_start_date
+        if st.session_state.get('active_preset'):
+            save_active_preset_config()
         clear_runtime_snapshot("투자 시작일 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
         st.rerun()  # 즉시 새로고침
     
@@ -919,6 +1128,8 @@ def show_mobile_settings():
             with col3:
                 if st.button("🗑️", key=f"delete_seed_{i}"):
                     st.session_state.seed_increases.pop(i)
+                    if st.session_state.get('active_preset'):
+                        save_active_preset_config()
                     clear_runtime_snapshot("시드증액/인출 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
                     st.rerun()
     
@@ -950,6 +1161,8 @@ def show_mobile_settings():
                 "amount": seed_amount
             }
             st.session_state.seed_increases.append(seed_increase)
+            if st.session_state.get('active_preset'):
+                save_active_preset_config()
             clear_runtime_snapshot("시드증액/인출 변경으로 계산 상태만 초기화했습니다. 저장된 프리셋 포지션은 보존됩니다.")
             if seed_amount > 0:
                 st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
@@ -986,7 +1199,23 @@ def main():
     korea_time = datetime.now(korea_tz)
     st.info(f"🕐 한국시간: {korea_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
-    
+    current_strategy = st.session_state.get('selected_strategy', DEFAULT_TRADING_STRATEGY)
+    strategy_index = STRATEGY_OPTIONS.index(current_strategy) if current_strategy in STRATEGY_OPTIONS else 0
+    selected_strategy = st.radio(
+        "매매법",
+        STRATEGY_OPTIONS,
+        index=strategy_index,
+        horizontal=True,
+        key="strategy_selector",
+        help="일일 매수/매도 추천과 백테스트에 적용할 매매법입니다.",
+    )
+    if selected_strategy != current_strategy:
+        st.session_state.selected_strategy = selected_strategy
+        st.session_state.trader = None
+        st.session_state.trader_strategy = None
+        st.rerun()
+    st.caption(f"현재 적용 매매법: {st.session_state.get('selected_strategy', DEFAULT_TRADING_STRATEGY)}")
+
     # 설정 패널 (모든 화면)
     show_mobile_settings()
     
@@ -1234,6 +1463,9 @@ def show_daily_recommendation():
                     pos['shares'] = int(saved['shares'])
                     pos['buy_price'] = float(saved['buy_price'])
                     pos['amount'] = pos['shares'] * pos['buy_price']
+                    for field in ("sell_threshold", "max_hold_days", "strategy_name"):
+                        if field in saved:
+                            pos[field] = saved[field]
         
         # [수정] 스냅샷 적용 후 current_round 재계산 (보유 N개 → N+1회차, 보유 0 → 1회차)
         if st.session_state.trader.positions:
@@ -1280,25 +1512,12 @@ def show_daily_recommendation():
                         saved = sv
                         break
             if saved:
-                current_snapshot[snap_key] = {
-                    'shares': int(saved['shares']),
-                    'buy_price': float(pos['buy_price']),
-                    'amount': float(saved['shares']) * float(pos['buy_price']),
-                    'round': int(pos['round']),
-                    'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
-                }
+                current_snapshot[snap_key] = _snapshot_item_from_position(pos, saved)
             else:
-                current_snapshot[snap_key] = {
-                    'shares': int(pos['shares']),
-                    'buy_price': float(pos['buy_price']),
-                    'amount': float(pos['amount']),
-                    'round': int(pos['round']),
-                    'mode': str(pos.get('mode') or 'SF'),
-                }
+                current_snapshot[snap_key] = _snapshot_item_from_position(pos)
         st.session_state.positions_snapshot = current_snapshot
         
-        # 계산으로 달라진 스냅샷은 자동 저장하지 않는다. 영구 저장은 체결 확인,
-        # 포지션 수정, 또는 아래의 명시적 저장 버튼을 통해서만 수행한다.
+        # 계산 후 달라진 포지션 스냅샷은 app.py처럼 즉시 저장한다.
         st.session_state._gh_save_result = None
         st.session_state._pending_active_snapshot = None
         if (
@@ -1306,8 +1525,10 @@ def show_daily_recommendation():
             and st.session_state.get('active_preset')
             and _should_auto_save_snapshot(snapshot, current_snapshot)
         ):
-            st.session_state._pending_active_snapshot = current_snapshot
-            st.session_state._gh_save_result = ("pending", "계산 결과가 기존 스냅샷과 다릅니다. 자동 저장하지 않았습니다.")
+            gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
+            st.session_state._gh_save_result = (gh_ok, gh_err)
+        if st.session_state.get('active_preset'):
+            st.session_state._all_preset_snapshot_save_result = auto_save_all_preset_snapshots()
     
     if "error" in recommendation:
         st.error(f"추천 생성 실패: {recommendation['error']}")
@@ -1391,18 +1612,7 @@ def show_daily_recommendation():
     save_result = st.session_state.get('_gh_save_result')
     if save_result is not None:
         ok, err = save_result
-        if ok == "pending":
-            st.warning(f"⚠️ {err}")
-            st.caption("실제 체결/청산을 반영하려면 아래 버튼으로 현재 계산 스냅샷을 명시적으로 저장하세요.")
-            if st.button("💾 현재 계산 스냅샷 저장", key="save_pending_active_snapshot", use_container_width=True):
-                pending_snapshot = st.session_state.get('_pending_active_snapshot') or {}
-                if pending_snapshot and st.session_state.get('active_preset'):
-                    gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, pending_snapshot)
-                    st.session_state._gh_save_result = (gh_ok, gh_err)
-                    if gh_ok:
-                        st.session_state._pending_active_snapshot = None
-                    st.rerun()
-        elif ok:
+        if ok:
             st.success("✅ 포지션 스냅샷이 GitHub에 저장되었습니다. (PC/폰 동기화)")
         else:
             st.error(f"❌ GitHub 스냅샷 저장 실패: {err}")
@@ -1527,6 +1737,15 @@ def show_daily_recommendation():
                 buy_date_dt = datetime.combine(confirm_date, datetime.min.time())
                 buy_date_str = confirm_date.strftime('%Y-%m-%d')
                 snap_key = f"{int(confirm_round)}_{buy_date_str}"
+                active_buy_config = st.session_state.trader.get_current_config()
+                position_metadata = {
+                    "sell_threshold": float(active_buy_config.get("sell_threshold", 0) or 0),
+                    "max_hold_days": int(active_buy_config.get("max_hold_days", 0) or 0),
+                    "strategy_name": str(
+                        active_buy_config.get("strategy_name")
+                        or st.session_state.get('selected_strategy', CURRENT_BACKTEST_LABEL)
+                    ),
+                }
                 
                 # 같은 회차/체결일이 이미 있으면 입력값으로 갱신하고, 없으면 새로 추가한다.
                 existing_pos = None
@@ -1541,7 +1760,8 @@ def show_daily_recommendation():
                         "buy_price": float(confirm_price),
                         "shares": int(confirm_shares),
                         "amount": float(confirm_amount),
-                        "mode": recommendation.get('mode', existing_pos.get('mode') or st.session_state.trader.current_mode or 'SF')
+                        "mode": recommendation.get('mode', existing_pos.get('mode') or st.session_state.trader.current_mode or 'SF'),
+                        **position_metadata,
                     })
                 else:
                     new_pos = {
@@ -1550,7 +1770,8 @@ def show_daily_recommendation():
                         "buy_price": float(confirm_price),
                         "shares": int(confirm_shares),
                         "amount": float(confirm_amount),
-                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF')
+                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF'),
+                        **position_metadata,
                     }
                     st.session_state.trader.positions.append(new_pos)
                 
@@ -1559,13 +1780,7 @@ def show_daily_recommendation():
                 for pos in st.session_state.trader.positions:
                     bd = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
                     sk = f"{pos['round']}_{bd}"
-                    new_snapshot[sk] = {
-                        'shares': int(pos['shares']),
-                        'buy_price': float(pos['buy_price']),
-                        'amount': float(pos['amount']),
-                        'round': int(pos['round']),
-                        'mode': str(pos.get('mode') or 'SF'),
-                    }
+                    new_snapshot[sk] = _snapshot_item_from_position(pos)
                 st.session_state.positions_snapshot = new_snapshot
                 if st.session_state.get('active_preset'):
                     gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
@@ -1755,7 +1970,7 @@ def show_daily_recommendation():
             mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
             
             # 매도 목표가 계산
-            position_config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+            position_config = st.session_state.trader.get_position_config(pos)
             target_sell_price = pos['buy_price'] * (1 + position_config['sell_threshold'] / 100)
             
             positions_data.append({
@@ -1856,19 +2071,15 @@ def show_daily_recommendation():
                             'shares': new_shares,
                             'buy_price': new_buy_price
                         }
+                        if st.session_state.get('active_preset'):
+                            save_active_preset_config()
                         
                         # 스냅샷을 trader.positions 기준으로 재구성 후 GitHub에 영구 저장 (실제 체결 수량 반영)
                         current_snapshot = {}
                         for pos in st.session_state.trader.positions:
                             p_buy_date = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
                             snap_key = f"{pos['round']}_{p_buy_date}"
-                            current_snapshot[snap_key] = {
-                                'shares': int(pos['shares']),
-                                'buy_price': float(pos['buy_price']),
-                                'amount': float(pos['amount']),
-                                'round': int(pos['round']),
-                                'mode': str(pos.get('mode') or 'SF'),
-                            }
+                            current_snapshot[snap_key] = _snapshot_item_from_position(pos)
                         st.session_state.positions_snapshot = current_snapshot
                         gh_ok = True
                         if st.session_state.get('active_preset'):
@@ -1881,6 +2092,9 @@ def show_daily_recommendation():
                         st.rerun()
                     else:
                         st.error("❌ 포지션 수정 실패: 예수금이 부족합니다.")
+
+    comparison_end_date = recommendation.get('data_last_date') or latest_trading_day.strftime('%Y-%m-%d')
+    render_daily_strategy_comparison(start_date, comparison_end_date)
 
 def show_portfolio():
     """포트폴리오 페이지"""
@@ -2052,11 +2266,6 @@ def show_portfolio():
         fig = go.Figure(data=[go.Pie(labels=labels, values=values, marker_colors=colors)])
         fig.update_layout(title="자산 구성 비율")
         st.plotly_chart(fig, use_container_width=True)
-
-CURRENT_BACKTEST_LABEL = "동파 변형-공격형"
-PURE_BACKTEST_LABEL = "동파 순정"
-MA_V11_BACKTEST_LABEL = "동파변형-정배열V1.1"
-
 
 def make_equal_split_config(config: dict) -> dict:
     """Keep thresholds/hold rules and change only split ratios to equal weights."""
@@ -2373,6 +2582,110 @@ def build_daily_comparison_display(current_result: dict, pure_result: dict, ma_v
         merged[col] = merged[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "")
 
     return merged
+
+
+def _daily_strategy_comparison_cache_key(start_date_str: str, end_date_str: str) -> str:
+    return json.dumps({
+        "active_preset": st.session_state.get('active_preset'),
+        "initial_capital": float(st.session_state.get('initial_capital', 0) or 0),
+        "session_start_date": st.session_state.get('session_start_date'),
+        "start_date": start_date_str,
+        "end_date": end_date_str,
+        "seed_increases": st.session_state.get('seed_increases') or [],
+        "sf_config": st.session_state.get('sf_config') or {},
+        "ag_config": st.session_state.get('ag_config') or {},
+        "test_today": getattr(st.session_state.get('trader'), "test_today_override", None),
+        "comparison": "daily_ma_v11_vs_current_v1",
+    }, sort_keys=True, ensure_ascii=True)
+
+
+def _asset_curve_df(result: dict, strategy_name: str) -> pd.DataFrame:
+    records = result.get('daily_records') if result else None
+    if not records:
+        return pd.DataFrame()
+    df = pd.DataFrame(records)
+    if df.empty or 'date' not in df.columns or 'total_assets' not in df.columns:
+        return pd.DataFrame()
+    return pd.DataFrame({
+        "date": pd.to_datetime(df['date'], errors='coerce'),
+        "total_assets": pd.to_numeric(df['total_assets'], errors='coerce'),
+        "strategy": strategy_name,
+    }).dropna(subset=["date", "total_assets"])
+
+
+def render_daily_strategy_comparison(start_date_str: str, end_date_str: str) -> None:
+    st.subheader("📈 매매법 비교 그래프")
+    cache_key = _daily_strategy_comparison_cache_key(start_date_str, end_date_str)
+    if st.session_state.get('daily_strategy_comparison_key') != cache_key:
+        with st.spinner('정배열 V1.1과 동파 변형-공격형 비교 계산 중...'):
+            current_result = run_backtest_variant(
+                start_date_str,
+                end_date_str,
+                st.session_state.get('sf_config'),
+                st.session_state.get('ag_config'),
+                SOXLQuantTrader,
+            )
+            ma_v11_result = run_backtest_variant(
+                start_date_str,
+                end_date_str,
+                st.session_state.get('sf_config'),
+                st.session_state.get('ag_config'),
+                MovingAverageV11BacktestTrader,
+            )
+        st.session_state.daily_strategy_comparison_key = cache_key
+        st.session_state.daily_strategy_current_result = current_result
+        st.session_state.daily_strategy_ma_v11_result = ma_v11_result
+
+    current_result = st.session_state.get('daily_strategy_current_result') or {}
+    ma_v11_result = st.session_state.get('daily_strategy_ma_v11_result') or {}
+    errors = []
+    if "error" in current_result:
+        errors.append(f"{CURRENT_BACKTEST_LABEL}: {current_result['error']}")
+    if "error" in ma_v11_result:
+        errors.append(f"{MA_V11_BACKTEST_LABEL}: {ma_v11_result['error']}")
+    if errors:
+        st.warning(" / ".join(errors))
+        return
+
+    current_df = _asset_curve_df(current_result, CURRENT_BACKTEST_LABEL)
+    ma_v11_df = _asset_curve_df(ma_v11_result, MA_V11_BACKTEST_LABEL)
+    if current_df.empty or ma_v11_df.empty:
+        st.info("비교 그래프를 만들 백테스트 데이터가 없습니다.")
+        return
+
+    fig = go.Figure()
+    for df, label in ((ma_v11_df, MA_V11_BACKTEST_LABEL), (current_df, CURRENT_BACKTEST_LABEL)):
+        fig.add_trace(go.Scatter(
+            x=df['date'],
+            y=df['total_assets'],
+            mode='lines',
+            name=label,
+        ))
+    fig.update_layout(
+        title=f"{start_date_str} ~ {end_date_str} 총자산 비교",
+        xaxis_title="날짜",
+        yaxis_title="총자산($)",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(l=10, r=10, t=70, b=10),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    current_metrics = build_strategy_metrics(current_result)
+    ma_v11_metrics = build_strategy_metrics(ma_v11_result)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric(
+            MA_V11_BACKTEST_LABEL,
+            format_money(ma_v11_metrics.get("final_value", 0)),
+            f"{ma_v11_metrics.get('return_on_capital_basis', 0):+.2f}% / MDD {ma_v11_metrics.get('mdd_percent', 0):.2f}%",
+        )
+    with col2:
+        st.metric(
+            CURRENT_BACKTEST_LABEL,
+            format_money(current_metrics.get("final_value", 0)),
+            f"{current_metrics.get('return_on_capital_basis', 0):+.2f}% / MDD {current_metrics.get('mdd_percent', 0):.2f}%",
+        )
 
 
 def show_backtest():
