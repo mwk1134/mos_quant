@@ -43,5 +43,22 @@
       "round": 2,
       "mode": "SF"
     }
+  },
+  "_preset_configs": {
+    "KMW": {
+      "initial_capital": 9000.0,
+      "session_start_date": "2025-08-27",
+      "seed_increases": [
+        {
+          "date": "2025-10-21",
+          "amount": 31000.0
+        },
+        {
+          "date": "2026-06-21",
+          "amount": 11293.0
+        }
+      ],
+      "position_edits": {}
+    }
   }
 }
