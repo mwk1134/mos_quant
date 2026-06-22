@@ -57,6 +57,14 @@ class MovingAverageV11StrategyMixin:
                 config["sell_threshold"] = 6.8
                 config["max_hold_days"] = 7
 
+            split_count = int(
+                config.get("split_count")
+                or len(config.get("split_ratios") or [])
+                or 1
+            )
+            split_count = max(1, split_count)
+            config["split_count"] = split_count
+            config["split_ratios"] = [1.0 / split_count] * split_count
             config["strategy_name"] = V11_STRATEGY_NAME
             return config
 

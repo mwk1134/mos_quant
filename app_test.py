@@ -2856,7 +2856,7 @@ def show_backtest():
         # 결과 표시
         st.success("✅ 백테스팅 완료!")
         st.caption(f"현재 매매법: {CURRENT_BACKTEST_LABEL} / 비교 매매법: {PURE_BACKTEST_LABEL}, {MA_V11_BACKTEST_LABEL}")
-        st.caption("정배열 V1.1은 전일 기준 SOXL 5일선 > 20일선 > 60일선일 때만 매수/매도/보유일 조건을 강화하고, 분할비율은 기본 매매법과 동일하게 유지합니다.")
+        st.caption("정배열 V1.1은 전일 기준 SOXL 5일선 > 20일선 > 60일선일 때만 매수/매도/보유일 조건을 강화하고, 분할 횟수는 기본 매매법과 같게 두되 각 회차 비중은 균등하게 적용합니다.")
         st.caption("수익률은 초기자본 + 중간 시드증액을 반영한 투입원금 기준입니다.")
         
         # 요약 결과
