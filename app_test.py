@@ -2762,21 +2762,35 @@ def render_daily_strategy_comparison(start_date_str: str, end_date_str: str) -> 
         return
 
     fig = go.Figure()
+    chart_styles = {
+        MA_V11_BACKTEST_LABEL: dict(color="#F59E0B", width=3),
+        CURRENT_BACKTEST_LABEL: dict(color="#06B6D4", width=3, dash="dot"),
+    }
     for df, label in ((ma_v11_df, MA_V11_BACKTEST_LABEL), (current_df, CURRENT_BACKTEST_LABEL)):
         fig.add_trace(go.Scatter(
             x=df['date'],
             y=df['total_assets'],
             mode='lines',
             name=label,
+            line=chart_styles.get(label, dict(width=3)),
         ))
     fig.update_layout(
-        title=f"{start_date_str} ~ {end_date_str} 총자산 비교",
+        title=None,
         xaxis_title="날짜",
         yaxis_title="총자산($)",
         hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(l=10, r=10, t=70, b=10),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.24,
+            xanchor="left",
+            x=0,
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        margin=dict(l=8, r=8, t=18, b=96),
+        height=480,
     )
+    st.caption(f"{start_date_str} ~ {end_date_str} 총자산 비교")
     st.plotly_chart(fig, use_container_width=True)
 
     current_metrics = build_strategy_metrics(current_result)
