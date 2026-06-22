@@ -1440,6 +1440,66 @@ def show_dashboard():
                 st.warning("⚠️ 10/10일(당일) 데이터를 찾을 수 없습니다.")
     
 
+def render_ma_v11_alignment_status(recommendation: dict) -> None:
+    """Show the SOXL MA alignment status used by the selected V1.1 strategy."""
+    trader = st.session_state.get("trader")
+    if not trader or not hasattr(trader, "get_bull_alignment_status"):
+        return
+
+    try:
+        alignment = trader.get_bull_alignment_status(trader.get_today_date())
+        current_config = trader.get_current_config()
+    except Exception as exc:
+        st.warning(f"⚠️ 정배열 상태 확인 실패: {exc}")
+        return
+
+    if not alignment.get("available"):
+        reason = alignment.get("reason") or "SOXL 이동평균 데이터를 계산할 수 없습니다."
+        st.warning(f"⚠️ SOXL 정배열 상태 확인 불가: {reason}")
+        return
+
+    is_aligned = bool(alignment.get("is_aligned"))
+    status_label = "ON" if is_aligned else "OFF"
+    status_icon = "🟢" if is_aligned else "⚪"
+    applied_strategy = current_config.get("strategy_name", CURRENT_BACKTEST_LABEL)
+    current_round = int(recommendation.get("next_buy_round") or getattr(trader, "current_round", 1) or 1)
+    split_ratios = current_config.get("split_ratios") or []
+    current_ratio = split_ratios[current_round - 1] if 1 <= current_round <= len(split_ratios) else 0
+    split_count = int(current_config.get("split_count") or len(split_ratios) or 0)
+
+    if is_aligned:
+        st.success(
+            f"{status_icon} **SOXL 정배열 {status_label}** "
+            f"({alignment.get('basis_date')} 기준) · 적용 전략: **{applied_strategy}**"
+        )
+    else:
+        st.info(
+            f"{status_icon} **SOXL 정배열 {status_label}** "
+            f"({alignment.get('basis_date')} 기준) · 적용 전략: **{applied_strategy}**"
+        )
+
+    ma_col1, ma_col2, ma_col3, ma_col4 = st.columns(4)
+    with ma_col1:
+        st.metric("SOXL 5일선", f"${alignment.get('ma5', 0):.2f}")
+    with ma_col2:
+        st.metric("SOXL 20일선", f"${alignment.get('ma20', 0):.2f}")
+    with ma_col3:
+        st.metric("SOXL 60일선", f"${alignment.get('ma60', 0):.2f}")
+    with ma_col4:
+        st.metric(
+            f"{current_round}회차 비중",
+            f"{current_ratio * 100:.1f}%",
+            f"{split_count}회 분할",
+        )
+
+    st.caption(
+        "정배열 조건: 전일 기준 SOXL 5일선 > 20일선 > 60일선. "
+        f"현재 설정: 매수 +{float(current_config.get('buy_threshold', 0)):.2f}% / "
+        f"매도 +{float(current_config.get('sell_threshold', 0)):.2f}% / "
+        f"최대보유 {int(current_config.get('max_hold_days', 0))}일"
+    )
+
+
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
     st.header("📊 일일 매매 추천")
@@ -1663,6 +1723,8 @@ def show_daily_recommendation():
         else:
             st.error(f"❌ GitHub 스냅샷 저장 실패: {err}")
             st.caption("Streamlit Cloud → Settings → Secrets에 GITHUB_TOKEN이 있는지 확인해주세요.")
+
+    render_ma_v11_alignment_status(recommendation)
 
     # 기본 정보 - 모바일 최적화
     col1, col2 = st.columns(2)

@@ -11,33 +11,71 @@ BASE_STRATEGY_NAME = "동파 변형-공격형"
 class MovingAverageV11StrategyMixin:
     """Apply MA V1.1 only when prior-day SOXL SMA(5) > SMA(20) > SMA(60)."""
 
-    def _is_soxl_bull_alignment(
+    def get_bull_alignment_status(
         self,
-        soxl_history: Optional[pd.DataFrame],
         current_date: Optional[datetime] = None,
-    ) -> bool:
+        soxl_history: Optional[pd.DataFrame] = None,
+    ) -> dict:
+        """Return the prior-bar SOXL SMA alignment status used by MA V1.1."""
+        if soxl_history is None:
+            try:
+                soxl_history = self.get_stock_data("SOXL", "6mo")
+            except Exception as exc:
+                return {
+                    "available": False,
+                    "is_aligned": False,
+                    "reason": str(exc),
+                }
+
         if soxl_history is None or len(soxl_history) < 60 or "Close" not in soxl_history.columns:
-            return False
+            return {
+                "available": False,
+                "is_aligned": False,
+                "reason": "SOXL 60일선 계산에 필요한 데이터가 부족합니다.",
+            }
 
         if current_date is not None:
             soxl_history = soxl_history[soxl_history.index < pd.Timestamp(current_date)]
-            if len(soxl_history) < 60:
-                return False
 
         close = soxl_history["Close"].dropna()
         if len(close) < 60:
-            return False
+            return {
+                "available": False,
+                "is_aligned": False,
+                "reason": "판정 기준일 이전 SOXL 60일선 데이터가 부족합니다.",
+            }
 
         ma5 = close.rolling(window=5).mean().iloc[-1]
         ma20 = close.rolling(window=20).mean().iloc[-1]
         ma60 = close.rolling(window=60).mean().iloc[-1]
-
-        return bool(
+        is_aligned = bool(
             pd.notna(ma5)
             and pd.notna(ma20)
             and pd.notna(ma60)
             and ma5 > ma20 > ma60
         )
+        basis_date = close.index[-1]
+        if hasattr(basis_date, "strftime"):
+            basis_date = basis_date.strftime("%Y-%m-%d")
+        else:
+            basis_date = str(basis_date)
+
+        return {
+            "available": True,
+            "is_aligned": is_aligned,
+            "basis_date": basis_date,
+            "ma5": float(ma5),
+            "ma20": float(ma20),
+            "ma60": float(ma60),
+        }
+
+    def _is_soxl_bull_alignment(
+        self,
+        soxl_history: Optional[pd.DataFrame],
+        current_date: Optional[datetime] = None,
+    ) -> bool:
+        status = self.get_bull_alignment_status(current_date, soxl_history)
+        return bool(status.get("available") and status.get("is_aligned"))
 
     def get_mode_config(
         self,
