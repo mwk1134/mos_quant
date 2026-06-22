@@ -409,14 +409,30 @@ def _snapshot_max_date(snapshot: dict) -> str:
         dates.append(date_str)
     return max(dates) if dates else ""
 
+def _snapshot_has_positions(snapshot: dict) -> bool:
+    return any(
+        isinstance(v, dict) and int(v.get("shares", 0) or 0) > 0
+        for v in (snapshot or {}).values()
+    )
+
+def _is_manual_cash_locked_snapshot(snapshot: dict) -> bool:
+    return (
+        isinstance(snapshot, dict)
+        and bool(snapshot.get("manual_cash_lock"))
+        and snapshot.get("available_cash") is not None
+        and not _snapshot_has_positions(snapshot)
+    )
+
 def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) -> bool:
     """거래일이거나 확정 종가 반영으로 스냅샷이 새 날짜까지 진행됐으면 자동 저장."""
     if not current_snapshot:
         return False
     if current_snapshot == (previous_snapshot or {}):
         return False
-    prev_has_positions = any(isinstance(v, dict) and int(v.get("shares", 0) or 0) > 0 for v in (previous_snapshot or {}).values())
-    curr_has_positions = any(isinstance(v, dict) and int(v.get("shares", 0) or 0) > 0 for v in current_snapshot.values())
+    prev_has_positions = _snapshot_has_positions(previous_snapshot)
+    curr_has_positions = _snapshot_has_positions(current_snapshot)
+    if _is_manual_cash_locked_snapshot(previous_snapshot) and not curr_has_positions:
+        return False
     if prev_has_positions and not curr_has_positions:
         return True
     if current_snapshot.get("available_cash") is not None and not curr_has_positions:
@@ -517,12 +533,23 @@ def auto_save_all_preset_snapshots() -> list:
 
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
-    all_data = getattr(st.session_state, '_gh_snapshot_all', None)
-    sha = getattr(st.session_state, '_gh_snapshot_sha', None)
-    if all_data is None:
-        all_data, sha = _gh_load_all_snapshots()
+    all_data, sha = _gh_load_all_snapshots()
+    if not all_data:
+        all_data = getattr(st.session_state, '_gh_snapshot_all', None) or {}
+        sha = getattr(st.session_state, '_gh_snapshot_sha', None)
+    previous_snapshot = (all_data or {}).get(preset_name, {})
+    if _is_manual_cash_locked_snapshot(previous_snapshot) and not _snapshot_has_positions(snapshot):
+        return True, ""
     all_data[preset_name] = snapshot
     ok, err = _gh_save_all_snapshots(all_data, sha)
+    if not ok and "GitHub API" in str(err) and "(409)" in str(err):
+        latest_data, latest_sha = _gh_load_all_snapshots()
+        latest_previous = (latest_data or {}).get(preset_name, {})
+        if _is_manual_cash_locked_snapshot(latest_previous) and not _snapshot_has_positions(snapshot):
+            return True, ""
+        latest_data[preset_name] = snapshot
+        all_data = latest_data
+        ok, err = _gh_save_all_snapshots(all_data, latest_sha)
     if ok:
         _, new_sha = _gh_load_all_snapshots()
         st.session_state._gh_snapshot_sha = new_sha

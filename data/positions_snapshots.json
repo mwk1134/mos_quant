@@ -1,6 +1,7 @@
 {
   "KMW": {
-    "available_cash": 96106.98318351746,
+    "available_cash": 95112.0,
+    "manual_cash_lock": true,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"
@@ -15,6 +16,7 @@
   },
   "KMW2": {
     "available_cash": 87589.0,
+    "manual_cash_lock": true,
     "processed_seed_dates": []
   },
   "JEH2": {
