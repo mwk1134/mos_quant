@@ -6,13 +6,11 @@
     ]
   },
   "JEH": {
-    "2_2026-06-17": {
-      "shares": 17,
-      "buy_price": 233.86000061035156,
-      "amount": 3975.6200103759766,
-      "round": 2,
-      "mode": "SF"
-    }
+    "available_cash": 33656.78162353516,
+    "processed_seed_dates": [
+      "2025-12-22",
+      "2026-01-15"
+    ]
   },
   "KMW2": {
     "available_cash": 87589.0,
