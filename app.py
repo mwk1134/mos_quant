@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import io
+import html
 from contextlib import redirect_stdout
 from pathlib import Path
 import plotly.graph_objects as go
@@ -88,6 +89,52 @@ st.markdown("""
     .mobile-settings-panel {
         margin-bottom: 1rem;
     }
+
+    .seed-entry {
+        margin: 0.35rem 0 0.9rem 0;
+    }
+
+    .seed-entry-date {
+        line-height: 1.35;
+        margin-bottom: 0.25rem;
+    }
+
+    .seed-entry-amount-line {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        flex-wrap: nowrap;
+    }
+
+    .seed-entry-amount {
+        line-height: 1.35;
+        white-space: nowrap;
+    }
+
+    .seed-entry-amount.negative {
+        color: #ff6b6b;
+    }
+
+    .seed-delete-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 2.1rem;
+        height: 2.1rem;
+        flex: 0 0 2.1rem;
+        border-radius: 0.45rem;
+        background: #4a4a4a;
+        color: #f2f4f8 !important;
+        text-decoration: none !important;
+        font-size: 1rem;
+        line-height: 1;
+    }
+
+    .seed-delete-link:hover {
+        background: #5a5a5a;
+        color: #ffffff !important;
+        text-decoration: none !important;
+    }
     
     /* 모바일에서 빈 입력 필드 숨기기 */
     @media (max-width: 768px) {
@@ -146,6 +193,21 @@ st.markdown("""
         }
         
         /* 버튼 크기 조정 */
+        .seed-entry {
+            margin: 0.4rem 0 1rem 0;
+        }
+
+        .seed-entry-amount-line {
+            gap: 0.5rem;
+        }
+
+        .seed-delete-link {
+            width: 1.9rem;
+            height: 1.9rem;
+            flex-basis: 1.9rem;
+            font-size: 0.9rem;
+        }
+
         .stButton > button {
             width: 100%;
             height: 3rem;
@@ -340,8 +402,11 @@ def _snapshot_max_date(snapshot: dict) -> str:
         if "_" not in key:
             continue
         _, date_str = key.split("_", 1)
-        if len(date_str) == 10:
-            dates.append(date_str)
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except Exception:
+            continue
+        dates.append(date_str)
     return max(dates) if dates else ""
 
 def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) -> bool:
@@ -350,6 +415,12 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
         return False
     if current_snapshot == (previous_snapshot or {}):
         return False
+    prev_has_positions = any(isinstance(v, dict) and int(v.get("shares", 0) or 0) > 0 for v in (previous_snapshot or {}).values())
+    curr_has_positions = any(isinstance(v, dict) and int(v.get("shares", 0) or 0) > 0 for v in current_snapshot.values())
+    if prev_has_positions and not curr_has_positions:
+        return True
+    if current_snapshot.get("available_cash") is not None and not curr_has_positions:
+        return True
     if _is_market_trading_day():
         return True
     return _snapshot_max_date(current_snapshot) > _snapshot_max_date(previous_snapshot or {})
@@ -393,6 +464,8 @@ def _build_snapshot_from_positions(trader: SOXLQuantTrader, previous_snapshot: d
                 'round': int(pos['round']),
                 'mode': str(pos.get('mode') or 'SF'),
             }
+    current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
+    current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
     return current_snapshot
 
 def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
@@ -595,6 +668,96 @@ def save_active_preset_config() -> tuple:
         pass
     st.session_state._preset_config_save_result = (ok, err)
     return ok, err
+
+def _get_query_param_value(name: str):
+    try:
+        params = st.query_params
+        if name in params:
+            value = params.get(name)
+            if isinstance(value, list):
+                return value[0] if value else None
+            return value
+    except Exception:
+        pass
+
+    try:
+        params = st.experimental_get_query_params()
+        value = params.get(name)
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
+    except Exception:
+        return None
+
+
+def _remove_query_param(name: str) -> None:
+    try:
+        if name in st.query_params:
+            del st.query_params[name]
+            return
+    except Exception:
+        pass
+
+    try:
+        params = st.experimental_get_query_params()
+        params.pop(name, None)
+        st.experimental_set_query_params(**params)
+    except Exception:
+        pass
+
+
+def handle_seed_delete_query() -> None:
+    delete_seed = _get_query_param_value("delete_seed")
+    if delete_seed is None:
+        return
+
+    try:
+        seed_index = int(delete_seed)
+    except (TypeError, ValueError):
+        _remove_query_param("delete_seed")
+        return
+
+    seeds = list(st.session_state.get("seed_increases") or [])
+    if not 0 <= seed_index < len(seeds):
+        _remove_query_param("delete_seed")
+        return
+
+    seeds.pop(seed_index)
+    st.session_state.seed_increases = seeds
+    if st.session_state.get("active_preset"):
+        sync_active_preset_config_from_session()
+        save_active_preset_config()
+    st.session_state.positions_snapshot = {}
+    st.session_state.trader = None
+    _remove_query_param("delete_seed")
+    st.rerun()
+
+
+def render_seed_entry(seed: dict, index: int) -> None:
+    amount = float(seed.get("amount", 0) or 0)
+    date_text = html.escape(str(seed.get("date", "")))
+    if amount >= 0:
+        amount_text = f"+${amount:,.0f}"
+        amount_class = "positive"
+        amount_icon = "💰"
+    else:
+        amount_text = f"-${abs(amount):,.0f}"
+        amount_class = "negative"
+        amount_icon = "🔴"
+
+    st.markdown(
+        f"""
+        <div class="seed-entry">
+            <div class="seed-entry-date">📅 {date_text}</div>
+            <div class="seed-entry-amount-line">
+                <span class="seed-entry-amount {amount_class}">{amount_icon} {html.escape(amount_text)}</span>
+                <a class="seed-delete-link" href="?delete_seed={index}" title="삭제" aria-label="시드증액 삭제">🗑️</a>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
     """같은 매수일에 여러 포지션이 있으면 하나만 유지 (하루 1매수 원칙). 스냅샷에 있으면 그 값 사용."""
@@ -988,26 +1151,12 @@ def show_mobile_settings():
     if 'seed_increases' not in st.session_state:
         st.session_state.seed_increases = []
     
+    handle_seed_delete_query()
+
     if st.session_state.seed_increases:
         st.write("**등록된 시드증액/인출:**")
         for i, seed in enumerate(st.session_state.seed_increases):
-            col1, col2, col3 = st.columns([3, 2, 1])
-            with col1:
-                st.write(f"📅 {seed['date']}")
-            with col2:
-                if seed['amount'] > 0:
-                    st.write(f"💰 +${seed['amount']:,.0f}")
-                else:
-                    st.write(f"🔴 -${abs(seed['amount']):,.0f}")
-            with col3:
-                if st.button("🗑️", key=f"delete_seed_{i}"):
-                    st.session_state.seed_increases.pop(i)
-                    if st.session_state.get('active_preset'):
-                        sync_active_preset_config_from_session()
-                        save_active_preset_config()
-                    st.session_state.positions_snapshot = {}
-                    st.session_state.trader = None
-                    st.rerun()
+            render_seed_entry(seed, i)
     
     # 시드증액 추가
     col1, col2 = st.columns(2)
@@ -1422,6 +1571,8 @@ def show_daily_recommendation():
                     'round': int(pos['round']),
                     'mode': str(pos.get('mode') or 'SF'),
                 }
+        current_snapshot['available_cash'] = float(getattr(st.session_state.trader, 'available_cash', 0.0) or 0.0)
+        current_snapshot['processed_seed_dates'] = sorted(list(getattr(st.session_state.trader, 'processed_seed_dates', set()) or []))
         st.session_state.positions_snapshot = current_snapshot
         
         # 포지션이 있으면 GitHub에 영구 저장.

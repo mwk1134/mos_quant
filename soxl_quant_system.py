@@ -616,6 +616,30 @@ class SOXLQuantTrader:
         except Exception:
             pass
 
+    def _snapshot_available_cash(self, snapshot: dict) -> Optional[float]:
+        try:
+            if isinstance(snapshot, dict) and snapshot.get("available_cash") is not None:
+                return max(0.0, float(snapshot.get("available_cash") or 0.0))
+        except Exception:
+            return None
+        return None
+
+    def _snapshot_processed_seed_dates(self, snapshot: dict) -> Optional[set]:
+        if not isinstance(snapshot, dict):
+            return None
+        raw_dates = snapshot.get("processed_seed_dates")
+        if not isinstance(raw_dates, list):
+            return None
+        dates = set()
+        for value in raw_dates:
+            text = str(value or "").strip()
+            try:
+                datetime.strptime(text, "%Y-%m-%d")
+            except Exception:
+                continue
+            dates.add(text)
+        return dates
+
     def _snapshot_to_positions_and_state(self, snapshot: dict) -> Tuple[List[dict], str, float]:
         """
         스냅샷을 포지션 리스트와 초기 상태로 변환.
@@ -626,14 +650,27 @@ class SOXLQuantTrader:
         """
         if not snapshot:
             return [], "", self.initial_capital
-        dates = [k.split("_", 1)[1] for k in snapshot.keys() if k != "available_cash" and "_" in k and len(k.split("_", 1)) == 2]
+        snapshot_cash = self._snapshot_available_cash(snapshot)
+        dates = []
+        for key, item in snapshot.items():
+            if not isinstance(item, dict) or "_" not in key:
+                continue
+            parts = key.split("_", 1)
+            if len(parts) != 2:
+                continue
+            date_str = parts[1]
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+            except Exception:
+                continue
+            dates.append(date_str)
         if not dates:
-            return [], "", self.initial_capital
+            return [], "", snapshot_cash if snapshot_cash is not None else self.initial_capital
         max_snap_date = max(dates)
         positions = []
         total_invested = 0.0
         for key, val in snapshot.items():
-            if "_" not in key or key == "available_cash":
+            if not isinstance(val, dict) or "_" not in key:
                 continue
             parts = key.split("_", 1)
             if len(parts) != 2:
@@ -670,7 +707,9 @@ class SOXLQuantTrader:
                 position["strategy_name"] = str(val.get("strategy_name"))
             positions.append(position)
         if not positions:
-            return [], max_snap_date, self.initial_capital
+            return [], max_snap_date, snapshot_cash if snapshot_cash is not None else self.initial_capital
+        if snapshot_cash is not None:
+            return positions, max_snap_date, snapshot_cash
         # available_cash는 simulate_from_snapshot_to_today에서 시뮬레이션으로 계산 (매도 수익 반영)
         seed_before = 0.0
         max_dt = datetime.strptime(max_snap_date, "%Y-%m-%d").date()
@@ -805,6 +844,16 @@ class SOXLQuantTrader:
         """
         positions, max_snap_date, available_cash = self._snapshot_to_positions_and_state(snapshot)
         if not positions:
+            snapshot_cash = self._snapshot_available_cash(snapshot)
+            if snapshot_cash is not None:
+                self.positions = []
+                self.available_cash = snapshot_cash
+                self.current_round = 1
+                self.processed_seed_dates = self._snapshot_processed_seed_dates(snapshot) or set()
+                self.trading_days_count = 0
+                self.current_week_friday = None
+                self._sync_investment_capital_to_latest_total_assets()
+                return {"from_snapshot": True, "max_snap_date": max_snap_date, "cash_only": True}
             return self.simulate_from_start_to_today(original_start_date, quiet)
 
         # [버그픽스] 스냅샷에 mode가 저장돼있지 않은 과거 포지션은 매수일 주간 RSI로 재계산.
@@ -813,12 +862,13 @@ class SOXLQuantTrader:
         self._recompute_missing_position_modes(positions)
 
         # 매도 수익 반영: 시작일~스냅최신일 시뮬레이션으로 잔여예수금 계산
-        snapshot_total_invested = sum(p.get("amount", 0) for p in positions)
-        sim_cash = self._compute_available_cash_from_simulation(
-            original_start_date, max_snap_date, snapshot_total_invested, quiet
-        )
-        if sim_cash is not None:
-            available_cash = sim_cash
+        if self._snapshot_available_cash(snapshot) is None:
+            snapshot_total_invested = sum(p.get("amount", 0) for p in positions)
+            sim_cash = self._compute_available_cash_from_simulation(
+                original_start_date, max_snap_date, snapshot_total_invested, quiet
+            )
+            if sim_cash is not None:
+                available_cash = sim_cash
 
         latest_trading_day = self.get_latest_trading_day().date()
         max_dt = datetime.strptime(max_snap_date, "%Y-%m-%d").date()
@@ -827,8 +877,10 @@ class SOXLQuantTrader:
             self.positions = positions
             self.available_cash = available_cash
             self.current_round = len(positions) + 1
-            self.processed_seed_dates = {si["date"] for si in self.seed_increases
-                                         if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
+            self.processed_seed_dates = self._snapshot_processed_seed_dates(snapshot) or {
+                si["date"] for si in self.seed_increases
+                if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt
+            }
             self.trading_days_count = 0
             self.current_week_friday = None
             # 입금+시뮬 수익(평가) 반영: 초기+시드 합이 아닌 현재 총자산 기준
@@ -872,6 +924,7 @@ class SOXLQuantTrader:
                     initial_positions=positions,
                     initial_cash=available_cash,
                     snapshot_max_date=max_snap_date,
+                    initial_processed_seed_dates=self._snapshot_processed_seed_dates(snapshot),
                 )
         else:
             result = self.run_backtest(
@@ -879,6 +932,7 @@ class SOXLQuantTrader:
                 initial_positions=positions,
                 initial_cash=available_cash,
                 snapshot_max_date=max_snap_date,
+                initial_processed_seed_dates=self._snapshot_processed_seed_dates(snapshot),
             )
 
         # 스냅샷 이후 구간에 데이터가 없으면(예: 2026년 테스트 데이터 vs 2025년 실제 데이터) 스냅샷만 적용
@@ -886,8 +940,10 @@ class SOXLQuantTrader:
             self.positions = positions
             self.available_cash = available_cash
             self.current_round = len(positions) + 1
-            self.processed_seed_dates = {si["date"] for si in self.seed_increases
-                                         if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
+            self.processed_seed_dates = self._snapshot_processed_seed_dates(snapshot) or {
+                si["date"] for si in self.seed_increases
+                if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt
+            }
             self.trading_days_count = 0
             self.current_week_friday = None
             self._sync_investment_capital_to_latest_total_assets()
@@ -1071,10 +1127,20 @@ class SOXLQuantTrader:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
             
-            # 15y가 지원되지 않으면 10y로 대체
+            # 장기 백테스트는 전체 가능 기간을 우선 사용하고, 실패하면 기존 범위로 폴백한다.
             if period == "15y":
-                # 먼저 15y 시도, 실패하면 10y로 대체
-                params_list = [{'range': '15y', 'interval': '1d'}, {'range': '10y', 'interval': '1d'}]
+                full_history_params = {
+                    'period1': 0,
+                    'period2': int((current_time + timedelta(days=1)).timestamp()),
+                    'interval': '1d',
+                    'events': 'history'
+                }
+                params_list = [
+                    full_history_params,
+                    {'range': 'max', 'interval': '1d'},
+                    {'range': '15y', 'interval': '1d'},
+                    {'range': '10y', 'interval': '1d'}
+                ]
             else:
                 params_list = [{'range': period, 'interval': '1d'}]
             
@@ -1083,7 +1149,8 @@ class SOXLQuantTrader:
             # 여러 파라미터 시도
             for i, params in enumerate(params_list):
                 try:
-                    print(f"   시도 {i+1}/{len(params_list)}: range={params['range']}")
+                    param_label = params.get('range') or f"period1={params.get('period1')}, period2={params.get('period2')}"
+                    print(f"   시도 {i+1}/{len(params_list)}: {param_label}")
                     response = requests.get(url, headers=headers, params=params, timeout=15)
                     
                     if response.status_code == 200:
@@ -1992,7 +2059,7 @@ class SOXLQuantTrader:
         # 1회시드 금액 계산
         target_amount = self.calculate_position_size(self.current_round)
         
-        # 목표가 기준 매수 수량은 정수 주식만 주문하므로 소수점은 절삭한다.
+        # LOC 주문가 기준 매수 수량은 정수 주식만 주문하므로 소수점은 절삭한다.
         target_shares = int(target_amount / target_price)
         
         if target_shares <= 0:
@@ -2449,9 +2516,16 @@ class SOXLQuantTrader:
             return {"error": "SOXL 데이터를 가져올 수 없습니다."}
         
         # 오늘 날짜의 미처리 시드증액 적용 (장중엔 시뮬레이션이 어제까지만 실행되므로 오늘 시드가 누락됨)
-        today_str = today.strftime('%Y-%m-%d')
-        unprocessed_today_seeds = [si for si in self.seed_increases
-            if si["date"] == today_str and si["date"] not in self.processed_seed_dates]
+        today_date_obj = today.date()
+        unprocessed_today_seeds = []
+        for si in self.seed_increases:
+            seed_date_str = si.get("date")
+            try:
+                seed_date_obj = datetime.strptime(seed_date_str, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if seed_date_obj <= today_date_obj and seed_date_str not in self.processed_seed_dates:
+                unprocessed_today_seeds.append(si)
         if unprocessed_today_seeds:
             total_seed = sum(si["amount"] for si in unprocessed_today_seeds)
             current_price = soxl_data.iloc[-1]['Close'] if len(soxl_data) > 0 else 0
@@ -3315,6 +3389,7 @@ class SOXLQuantTrader:
         initial_positions: List[dict] = None,
         initial_cash: float = None,
         snapshot_max_date: str = None,
+        initial_processed_seed_dates: Optional[set] = None,
     ) -> Dict:
         """
         백테스팅 실행
@@ -3345,8 +3420,11 @@ class SOXLQuantTrader:
             self.current_round = len(initial_positions) + 1  # 보유 N개 → 다음 N+1회차
             # current_investment_capital은 SOXL 데이터 로드 후 스냅샷 기준일 총자산으로 설정
             max_dt = datetime.strptime(snapshot_max_date, "%Y-%m-%d").date()
-            self.processed_seed_dates = {si["date"] for si in self.seed_increases
-                                         if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
+            if initial_processed_seed_dates is not None:
+                self.processed_seed_dates = set(initial_processed_seed_dates)
+            else:
+                self.processed_seed_dates = {si["date"] for si in self.seed_increases
+                                             if datetime.strptime(si["date"], "%Y-%m-%d").date() <= max_dt}
             self.trading_days_count = 0
             self.current_week_friday = None
         else:
