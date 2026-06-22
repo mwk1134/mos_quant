@@ -26,13 +26,8 @@
     }
   },
   "JSD": {
-    "2_2026-06-17": {
-      "shares": 18,
-      "buy_price": 233.86000061035156,
-      "amount": 4209.480010986328,
-      "round": 2,
-      "mode": "SF"
-    }
+    "available_cash": 34826.72143547058,
+    "processed_seed_dates": []
   },
   "_preset_configs": {
     "KMW": {
