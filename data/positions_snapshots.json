@@ -12,7 +12,11 @@
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15"
-    ]
+    ],
+    "compound_seed": 33656.78162353516,
+    "compound_reference_seed": 33656.78162353516,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2
   },
   "KMW2": {
     "available_cash": 87589.0,
