@@ -7,6 +7,7 @@ import os
 import sys
 import io
 import html
+import hashlib
 from contextlib import redirect_stdout
 from pathlib import Path
 import plotly.graph_objects as go
@@ -469,7 +470,11 @@ def get_preset_configs() -> dict:
         "JSD": st.session_state.jsd_preset,
     }
 
-def _build_snapshot_from_positions(trader: SOXLQuantTrader, previous_snapshot: dict) -> dict:
+def _build_snapshot_from_positions(
+    trader: SOXLQuantTrader,
+    previous_snapshot: dict,
+    include_runtime_state: bool = True,
+) -> dict:
     """트레이더 보유 포지션을 저장용 스냅샷으로 변환. 기존 저장 수량은 우선 보존."""
     current_snapshot = {}
     for pos in trader.positions:
@@ -498,8 +503,9 @@ def _build_snapshot_from_positions(trader: SOXLQuantTrader, previous_snapshot: d
                 'round': int(pos['round']),
                 'mode': str(pos.get('mode') or 'SF'),
             }
-    current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
-    current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
+    if include_runtime_state:
+        current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
+        current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
     if getattr(trader, 'profit_loss_compounding_enabled', False):
         current_snapshot['compound_seed'] = float(getattr(trader, 'compound_seed', 0.0) or 0.0)
         current_snapshot['compound_reference_seed'] = float(getattr(trader, 'compound_reference_seed', 0.0) or 0.0)
@@ -554,6 +560,27 @@ def auto_save_all_preset_snapshots() -> list:
         except Exception as e:
             results.append({"preset": preset_name, "status": "error", "message": str(e)})
     return results
+
+def _snapshot_content_key(snapshot: dict) -> str:
+    try:
+        payload = json.dumps(snapshot or {}, sort_keys=True, default=str, separators=(",", ":"))
+    except Exception:
+        payload = str(snapshot or {})
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+def auto_save_all_preset_snapshots_if_needed(current_snapshot: dict, ttl_seconds: int = 300) -> list:
+    cache_key = f"{st.session_state.get('active_preset') or ''}:{_snapshot_content_key(current_snapshot)}"
+    now_ts = datetime.now().timestamp()
+    cached_key = st.session_state.get('_all_preset_snapshot_save_key')
+    cached_at = float(st.session_state.get('_all_preset_snapshot_save_at') or 0)
+    if cached_key == cache_key and (now_ts - cached_at) < ttl_seconds:
+        return st.session_state.get('_all_preset_snapshot_save_result', [])
+
+    result = auto_save_all_preset_snapshots()
+    st.session_state._all_preset_snapshot_save_key = cache_key
+    st.session_state._all_preset_snapshot_save_at = now_ts
+    st.session_state._all_preset_snapshot_save_result = result
+    return result
 
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
@@ -920,8 +947,13 @@ if 'initial_capital' not in st.session_state:
     st.session_state.initial_capital = 9000
 if 'session_start_date' not in st.session_state:
     st.session_state.session_start_date = "2025-08-27"  # 기본값 설정
+today_override_default = datetime.now().strftime('%Y-%m-%d')
 if 'test_today_override' not in st.session_state:
-    st.session_state.test_today_override = datetime.now().strftime('%Y-%m-%d')  # 초기값: 오늘 날짜
+    st.session_state.test_today_override = today_override_default  # 초기값: 오늘 날짜
+    st.session_state._test_today_override_auto_value = today_override_default
+elif st.session_state.get('_test_today_override_auto_value') == st.session_state.test_today_override:
+    st.session_state.test_today_override = today_override_default
+    st.session_state._test_today_override_auto_value = today_override_default
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'position_edits' not in st.session_state:
@@ -990,14 +1022,6 @@ if 'kmw2_preset' not in st.session_state:
 
 apply_persisted_preset_configs()
 ensure_preset_seed_increase("JEH2", "2026-06-16", 600.0)
-
-# 배포 테스트 - 버전 1.5 - FORCE REDEPLOY
-import time
-current_time = int(time.time())
-st.sidebar.success("🚀 앱 버전 1.5 로드됨!")
-st.sidebar.info(f"📅 로드 시간: {current_time}")
-st.sidebar.info("💡 캐시 문제 시 Ctrl+F5로 강제 새로고침")
-st.sidebar.error("🔴 강제 재배포 테스트 중...")
 
 def login_page():
     """로그인 페이지 - 모바일 최적화"""
@@ -1596,7 +1620,7 @@ def show_daily_recommendation():
         
         # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
         # preset일 때: 원본 스냅샷의 수량 유지 (시뮬레이션 결과로 덮어쓰지 않음)
-        current_snapshot = {}
+        current_snapshot = _build_snapshot_from_positions(st.session_state.trader, snapshot or {})
         for pos in st.session_state.trader.positions:
             buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
             snap_key = f"{pos['round']}_{buy_date_str}"
@@ -1640,7 +1664,7 @@ def show_daily_recommendation():
             st.session_state._gh_save_result = (ok, err)
 
         if st.session_state.get('active_preset'):
-            st.session_state._all_preset_snapshot_save_result = auto_save_all_preset_snapshots()
+            st.session_state._all_preset_snapshot_save_result = auto_save_all_preset_snapshots_if_needed(current_snapshot)
     
     if "error" in recommendation:
         st.error(f"추천 생성 실패: {recommendation['error']}")
@@ -1771,11 +1795,15 @@ def show_daily_recommendation():
             st.success(f"✅ 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
             st.info(f"💰 매수가: \\${recommendation['buy_price']:.2f} (LOC 주문)")
             st.info(f"💵 매수금액: \\${recommendation['next_buy_amount']:,.0f}")
-            inv_base = float(st.session_state.trader.current_investment_capital)
+            inv_base = float(
+                getattr(st.session_state.trader, "compound_reference_seed", 0.0)
+                if getattr(st.session_state.trader, "profit_loss_compounding_enabled", False)
+                else st.session_state.trader.current_investment_capital
+            )
             ratio_dec = float(split_ratios[buy_round - 1]) if buy_round <= len(split_ratios) else 0.0
             calc_amt = inv_base * ratio_dec
             st.caption(
-                f"📐 계산식: 투자원금(갱신 기준) \\${inv_base:,.0f} × 비중 {buy_ratio_pct:.1f}% "
+                f"📐 계산식: 기준시드 \\${inv_base:,.0f} × 비중 {buy_ratio_pct:.1f}% "
                 f"(×{ratio_dec:.4f}) = \\${calc_amt:,.0f}"
             )
             shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
@@ -1868,7 +1896,11 @@ def show_daily_recommendation():
                     st.session_state.trader.positions.append(new_pos)
                 
                 # 스냅샷 재구성 및 저장
-                new_snapshot = {}
+                new_snapshot = _build_snapshot_from_positions(
+                    st.session_state.trader,
+                    snapshot_for_btn or {},
+                    include_runtime_state=False,
+                )
                 for pos in st.session_state.trader.positions:
                     bd = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
                     sk = f"{pos['round']}_{bd}"
