@@ -36,7 +36,11 @@
   },
   "JSD": {
     "available_cash": 34826.72143547058,
-    "processed_seed_dates": []
+    "processed_seed_dates": [],
+    "compound_seed": 34826.72143547058,
+    "compound_reference_seed": 34826.72143547058,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2
   },
   "_preset_configs": {
     "KMW": {
