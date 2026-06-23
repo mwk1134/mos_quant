@@ -25,6 +25,24 @@ if str(CURRENT_DIR) not in sys.path:
 # 기존 SOXLQuantTrader 클래스 import
 from soxl_quant_system import SOXLQuantTrader
 
+APP_COMPOUNDING_ENABLED = True
+APP_PROFIT_COMPOUNDING_RATE = 0.70
+APP_LOSS_COMPOUNDING_RATE = 0.20
+APP_COMPOUNDING_SETTLEMENT_DAYS = 7
+APP_COMPOUNDING_RENEWAL_DAYS = 10
+
+
+def configure_app_trader(trader: SOXLQuantTrader) -> SOXLQuantTrader:
+    if hasattr(trader, "set_profit_loss_compounding"):
+        trader.set_profit_loss_compounding(
+            enabled=APP_COMPOUNDING_ENABLED,
+            profit_rate=APP_PROFIT_COMPOUNDING_RATE,
+            loss_rate=APP_LOSS_COMPOUNDING_RATE,
+            settlement_delay_days=APP_COMPOUNDING_SETTLEMENT_DAYS,
+            renewal_days=APP_COMPOUNDING_RENEWAL_DAYS,
+        )
+    return trader
+
 # 페이지 설정
 st.set_page_config(
     page_title="SOXL 퀀트투자 시스템",
@@ -482,6 +500,11 @@ def _build_snapshot_from_positions(trader: SOXLQuantTrader, previous_snapshot: d
             }
     current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
     current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
+    if getattr(trader, 'profit_loss_compounding_enabled', False):
+        current_snapshot['compound_seed'] = float(getattr(trader, 'compound_seed', 0.0) or 0.0)
+        current_snapshot['compound_reference_seed'] = float(getattr(trader, 'compound_reference_seed', 0.0) or 0.0)
+        current_snapshot['compound_profit_rate'] = float(getattr(trader, 'profit_compounding_rate', 0.0) or 0.0)
+        current_snapshot['compound_loss_rate'] = float(getattr(trader, 'loss_compounding_rate', 0.0) or 0.0)
     return current_snapshot
 
 def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
@@ -491,6 +514,7 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
         sf_config=st.session_state.get('sf_config'),
         ag_config=st.session_state.get('ag_config')
     )
+    configure_app_trader(temp_trader)
     temp_trader.session_start_date = preset.get('session_start_date')
     temp_trader.set_seed_increases(preset.get('seed_increases') or [])
     if st.session_state.get('test_today_override'):
@@ -1012,6 +1036,7 @@ def initialize_trader():
                     sf_config=sf_config,
                     ag_config=ag_config
                 )
+                configure_app_trader(st.session_state.trader)
                 if st.session_state.test_today_override:
                     st.session_state.trader.set_test_today(st.session_state.test_today_override)
                 

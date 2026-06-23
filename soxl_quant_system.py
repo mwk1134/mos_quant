@@ -498,6 +498,17 @@ class SOXLQuantTrader:
         # 주차 추적 (모드 전환 제어용)
         self.current_week_friday: Optional[datetime] = None  # 현재 주차의 금요일
 
+        # Optional realized P/L compounding for buy sizing. Disabled unless a caller enables it.
+        self.profit_loss_compounding_enabled = False
+        self.profit_compounding_rate = 0.0
+        self.loss_compounding_rate = 0.0
+        self.compounding_settlement_delay_days = 7
+        self.compounding_reference_renewal_days = 10
+        self.compound_seed = float(initial_capital)
+        self.compound_reference_seed = float(initial_capital)
+        self.compound_settlements = []
+        self._compound_processed_dates = set()
+
     def set_test_today(self, date_str: Optional[str]):
         """테스트용 오늘 날짜 설정/해제. None 또는 빈문자면 해제."""
         if not date_str:
@@ -519,6 +530,120 @@ class SOXLQuantTrader:
             return datetime(d.year, d.month, d.day)
         return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     
+    def _reset_compounding_state(self, base_amount: Optional[float] = None) -> None:
+        try:
+            base = float(self.initial_capital if base_amount is None else base_amount)
+        except Exception:
+            base = float(self.initial_capital)
+        self.compound_seed = base
+        self.compound_reference_seed = base
+        self.compound_settlements = []
+        self._compound_processed_dates = set()
+
+    def set_profit_loss_compounding(
+        self,
+        enabled: bool = True,
+        profit_rate: float = 0.70,
+        loss_rate: float = 0.20,
+        settlement_delay_days: int = 7,
+        renewal_days: int = 10,
+    ) -> None:
+        """Enable optional realized P/L compounding for position sizing."""
+        self.profit_loss_compounding_enabled = bool(enabled)
+        self.profit_compounding_rate = max(0.0, float(profit_rate))
+        self.loss_compounding_rate = max(0.0, float(loss_rate))
+        self.compounding_settlement_delay_days = max(0, int(settlement_delay_days))
+        self.compounding_reference_renewal_days = max(1, int(renewal_days))
+        if self.profit_loss_compounding_enabled:
+            self._reset_compounding_state(self._current_total_assets_for_compounding())
+        else:
+            self._reset_compounding_state(self.initial_capital)
+
+    def _current_total_assets_for_compounding(self, current_price: Optional[float] = None) -> float:
+        if current_price is not None:
+            position_value = sum(float(pos.get("shares", 0) or 0) * float(current_price) for pos in self.positions)
+            return float(self.available_cash or 0.0) + position_value
+        base = float(getattr(self, "current_investment_capital", 0.0) or 0.0)
+        if base > 0:
+            return base
+        invested = sum(float(pos.get("amount", 0) or 0) for pos in self.positions)
+        return float(self.available_cash or 0.0) + invested
+
+    def _sync_compounding_base_to_current_assets(self, current_price: Optional[float] = None) -> None:
+        if not getattr(self, "profit_loss_compounding_enabled", False):
+            return
+        base = self._current_total_assets_for_compounding(current_price)
+        self.compound_seed = base
+        self.compound_reference_seed = base
+        self.compound_settlements = []
+        self._compound_processed_dates = set()
+
+    def _restore_compounding_from_snapshot(self, snapshot: dict) -> None:
+        if not getattr(self, "profit_loss_compounding_enabled", False):
+            return
+        if not isinstance(snapshot, dict):
+            self._sync_compounding_base_to_current_assets()
+            return
+        seed = snapshot.get("compound_seed")
+        reference_seed = snapshot.get("compound_reference_seed")
+        if seed is None and reference_seed is None:
+            self._sync_compounding_base_to_current_assets()
+            return
+        try:
+            seed_value = float(seed if seed is not None else reference_seed)
+            reference_value = float(reference_seed if reference_seed is not None else seed_value)
+        except Exception:
+            self._sync_compounding_base_to_current_assets()
+            return
+        self.compound_seed = seed_value
+        self.compound_reference_seed = reference_value
+        self.compound_settlements = []
+        self._compound_processed_dates = set()
+
+    def _add_compounding_seed(self, amount: float) -> None:
+        if not getattr(self, "profit_loss_compounding_enabled", False):
+            return
+        try:
+            value = float(amount or 0.0)
+        except Exception:
+            value = 0.0
+        self.compound_seed += value
+        self.compound_reference_seed += value
+
+    def _process_compounding_for_date(self, current_date: datetime) -> None:
+        if not getattr(self, "profit_loss_compounding_enabled", False):
+            return
+        if isinstance(current_date, pd.Timestamp):
+            current_dt = current_date.to_pydatetime()
+        elif isinstance(current_date, datetime):
+            current_dt = current_date
+        else:
+            current_dt = pd.Timestamp(current_date).to_pydatetime()
+        current_dt = current_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        current_key = current_dt.strftime("%Y-%m-%d")
+        if current_key in self._compound_processed_dates:
+            return
+        self._compound_processed_dates.add(current_key)
+
+        remaining = []
+        for settlement in self.compound_settlements:
+            settlement_dt = settlement.get("settlement_date")
+            if isinstance(settlement_dt, pd.Timestamp):
+                settlement_dt = settlement_dt.to_pydatetime()
+            if settlement_dt and settlement_dt <= current_dt:
+                pnl = float(settlement.get("pnl", 0.0) or 0.0)
+                rate = self.profit_compounding_rate if pnl >= 0 else self.loss_compounding_rate
+                self.compound_seed += pnl * rate
+            else:
+                remaining.append(settlement)
+        self.compound_settlements = remaining
+
+        if (
+            self.trading_days_count == 1
+            or self.trading_days_count % self.compounding_reference_renewal_days == 0
+        ):
+            self.compound_reference_seed = self.compound_seed
+
     def add_seed_increase(self, date: str, amount: float, description: str = ""):
         """시드증액 추가"""
         seed_increase = {
@@ -853,6 +978,7 @@ class SOXLQuantTrader:
                 self.trading_days_count = 0
                 self.current_week_friday = None
                 self._sync_investment_capital_to_latest_total_assets()
+                self._restore_compounding_from_snapshot(snapshot)
                 return {"from_snapshot": True, "max_snap_date": max_snap_date, "cash_only": True}
             return self.simulate_from_start_to_today(original_start_date, quiet)
 
@@ -885,6 +1011,7 @@ class SOXLQuantTrader:
             self.current_week_friday = None
             # 입금+시뮬 수익(평가) 반영: 초기+시드 합이 아닌 현재 총자산 기준
             self._sync_investment_capital_to_latest_total_assets()
+            self._restore_compounding_from_snapshot(snapshot)
             return {"from_snapshot": True, "max_snap_date": max_snap_date}
 
         start_after_snap = self._get_next_trading_day(max_snap_date)
@@ -892,9 +1019,16 @@ class SOXLQuantTrader:
         if self.seed_increases:
             sorted_seeds = sorted(self.seed_increases, key=lambda x: x["date"])
             seed_increases_str = "_".join([f"{s['date']}_{s['amount']}" for s in sorted_seeds])
+        compounding_cache_key = (
+            f"comp_{int(getattr(self, 'profit_loss_compounding_enabled', False))}_"
+            f"{getattr(self, 'profit_compounding_rate', 0.0)}_"
+            f"{getattr(self, 'loss_compounding_rate', 0.0)}_"
+            f"{getattr(self, 'compounding_settlement_delay_days', 0)}_"
+            f"{getattr(self, 'compounding_reference_renewal_days', 0)}"
+        )
         cache_key = (
             f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_"
-            f"{self.test_today_override or 'real'}_{seed_increases_str}"
+            f"{self.test_today_override or 'real'}_{seed_increases_str}_{compounding_cache_key}"
         )
         if cache_key in self._simulation_cache:
             cached, cache_time = self._simulation_cache[cache_key]
@@ -905,6 +1039,7 @@ class SOXLQuantTrader:
                 self.available_cash = cached.get("available_cash", self.initial_capital)
                 self.current_round = cached.get("current_round", 1)
                 self._sync_investment_capital_to_latest_total_assets()
+                self._restore_compounding_from_snapshot(cached)
                 return cached.get("result", {})
 
         latest_seed_date = None
@@ -915,6 +1050,13 @@ class SOXLQuantTrader:
             end_date_str = latest_seed_date.strftime("%Y-%m-%d")
         else:
             end_date_str = latest_trading_day.strftime("%Y-%m-%d")
+
+        if getattr(self, "profit_loss_compounding_enabled", False):
+            self.positions = list(positions)
+            self.available_cash = available_cash
+            self.current_round = len(positions) + 1
+            self._sync_investment_capital_to_latest_total_assets()
+        self._restore_compounding_from_snapshot(snapshot)
 
         if quiet:
             buf = io.StringIO()
@@ -947,6 +1089,7 @@ class SOXLQuantTrader:
             self.trading_days_count = 0
             self.current_week_friday = None
             self._sync_investment_capital_to_latest_total_assets()
+            self._restore_compounding_from_snapshot(snapshot)
             return {"from_snapshot": True, "max_snap_date": max_snap_date, "no_data_fallback": True}
 
         soxl_prune = self.get_stock_data("SOXL", "1mo")
@@ -957,6 +1100,8 @@ class SOXLQuantTrader:
             "positions": self.positions.copy(),
             "available_cash": self.available_cash,
             "current_round": self.current_round,
+            "compound_seed": getattr(self, "compound_seed", None),
+            "compound_reference_seed": getattr(self, "compound_reference_seed", None),
             "result": result,
         }
         self._simulation_cache[cache_key] = (cached, datetime.now())
@@ -979,7 +1124,14 @@ class SOXLQuantTrader:
             sorted_seeds = sorted(self.seed_increases, key=lambda x: x["date"])
             seed_increases_str = "_".join([f"{s['date']}_{s['amount']}" for s in sorted_seeds])
         
-        cache_key = f"{self.ticker}_{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}_{seed_increases_str}"
+        compounding_cache_key = (
+            f"comp_{int(getattr(self, 'profit_loss_compounding_enabled', False))}_"
+            f"{getattr(self, 'profit_compounding_rate', 0.0)}_"
+            f"{getattr(self, 'loss_compounding_rate', 0.0)}_"
+            f"{getattr(self, 'compounding_settlement_delay_days', 0)}_"
+            f"{getattr(self, 'compounding_reference_renewal_days', 0)}"
+        )
+        cache_key = f"{self.ticker}_{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}_{seed_increases_str}_{compounding_cache_key}"
         
         # 캐시된 결과가 있고 2분 이내면 재사용
         if cache_key in self._simulation_cache:
@@ -1965,7 +2117,12 @@ class SOXLQuantTrader:
         if round_num <= len(config["split_ratios"]):
             ratio = config["split_ratios"][round_num - 1]
             # 투자원금 사용 (10거래일마다 총자산으로 업데이트됨)
-            amount = self.current_investment_capital * ratio
+            base_amount = (
+                self.compound_reference_seed
+                if getattr(self, "profit_loss_compounding_enabled", False)
+                else self.current_investment_capital
+            )
+            amount = base_amount * ratio
             return amount
         else:
             return 0.0
@@ -2176,6 +2333,14 @@ class SOXLQuantTrader:
 
                 self.positions.remove(position)
                 self.available_cash += proceeds
+                if getattr(self, "profit_loss_compounding_enabled", False):
+                    sell_dt = sell_date.to_pydatetime() if isinstance(sell_date, pd.Timestamp) else sell_date
+                    sell_dt = sell_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                    self.compound_settlements.append({
+                        "trade_date": sell_dt,
+                        "settlement_date": sell_dt + timedelta(days=self.compounding_settlement_delay_days),
+                        "pnl": profit,
+                    })
                 sold_rounds.append(position["round"])
 
                 print("🧾 과거 종가 매도 보정 실행 (목표가 도달)")
@@ -2210,6 +2375,14 @@ class SOXLQuantTrader:
 
                 self.positions.remove(position)
                 self.available_cash += proceeds
+                if getattr(self, "profit_loss_compounding_enabled", False):
+                    sell_dt = sell_date.to_pydatetime() if isinstance(sell_date, pd.Timestamp) else sell_date
+                    sell_dt = sell_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                    self.compound_settlements.append({
+                        "trade_date": sell_dt,
+                        "settlement_date": sell_dt + timedelta(days=self.compounding_settlement_delay_days),
+                        "pnl": profit,
+                    })
                 sold_rounds.append(position["round"])
 
                 print("🧾 과거 종가 매도 보정 실행 (손절예정일 경과)")
@@ -2237,6 +2410,7 @@ class SOXLQuantTrader:
         """
         sell_positions = []
         debug_info = []  # 디버깅 정보 저장
+        self._process_compounding_for_date(current_date)
         
         # 디버깅: 보유 포지션 수 확인
         print(f"🔍 매도 조건 확인: 보유 포지션 {len(self.positions)}개")
@@ -2343,6 +2517,11 @@ class SOXLQuantTrader:
         else:
             print("❌ 매도 추천 없음")
         
+        if getattr(self, "profit_loss_compounding_enabled", False):
+            for sell_info in sell_positions:
+                if isinstance(sell_info, dict):
+                    sell_info["_compound_current_date"] = current_date
+
         if return_debug_info:
             return sell_positions, debug_info
         return sell_positions
@@ -2369,6 +2548,18 @@ class SOXLQuantTrader:
         # 포지션 제거
         self.positions.remove(position)
         self.available_cash += proceeds
+        if getattr(self, "profit_loss_compounding_enabled", False):
+            sell_dt = sell_info.get("_compound_current_date") or datetime.now()
+            if isinstance(sell_dt, pd.Timestamp):
+                sell_dt = sell_dt.to_pydatetime()
+            elif not isinstance(sell_dt, datetime):
+                sell_dt = pd.Timestamp(sell_dt).to_pydatetime()
+            sell_dt = sell_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            self.compound_settlements.append({
+                "trade_date": sell_dt,
+                "settlement_date": sell_dt + timedelta(days=self.compounding_settlement_delay_days),
+                "pnl": profit,
+            })
         
 
         print(f"✅ {sold_round}회차 매도 실행: {position['shares']}주 @ ${sell_price:.2f}")
@@ -3251,6 +3442,8 @@ class SOXLQuantTrader:
         
         # 주차 추적 초기화
         self.current_week_friday = None
+        if getattr(self, "profit_loss_compounding_enabled", False):
+            self._reset_compounding_state(self.initial_capital)
     
     def clear_cache(self):
         """캐시 초기화 (설정 변경 시 호출)"""
@@ -3661,6 +3854,7 @@ class SOXLQuantTrader:
                     new_investment_capital = current_total_assets + total_seed_increase
                     old_capital = self.current_investment_capital
                     self.current_investment_capital = new_investment_capital
+                    self._add_compounding_seed(total_seed_increase)
                     
                     # 처리된 시드증액 날짜 기록
                     for seed in unprocessed_seeds:
@@ -4128,7 +4322,11 @@ class SOXLQuantTrader:
                     "strategy_name": config.get("strategy_name", "기본"),
                     "current_round": min(current_round_before_buy, 7 if current_mode == "SF" else 8),  # 매수 전 회차 사용 (최대값 제한)
                     "seed_amount": (
-                        self.current_investment_capital * config["split_ratios"][current_round_before_buy - 1]
+                        (
+                            self.compound_reference_seed
+                            if getattr(self, "profit_loss_compounding_enabled", False)
+                            else self.current_investment_capital
+                        ) * config["split_ratios"][current_round_before_buy - 1]
                         if buy_executed and 1 <= current_round_before_buy <= len(config.get("split_ratios", []))
                         else 0
                     ),
@@ -4263,6 +4461,11 @@ class SOXLQuantTrader:
             "final_value": final_value,
             "total_return": total_return,
             "final_positions": len(self.positions),
+            "profit_loss_compounding_enabled": getattr(self, "profit_loss_compounding_enabled", False),
+            "profit_compounding_rate": getattr(self, "profit_compounding_rate", 0.0),
+            "loss_compounding_rate": getattr(self, "loss_compounding_rate", 0.0),
+            "compound_seed": getattr(self, "compound_seed", None),
+            "compound_reference_seed": getattr(self, "compound_reference_seed", None),
 
             "daily_records": daily_records,
             "logs": self.backtest_logs if hasattr(self, 'backtest_logs') else []
