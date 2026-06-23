@@ -28,7 +28,11 @@
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
-    ]
+    ],
+    "compound_seed": 6302.370232543945,
+    "compound_reference_seed": 6302.370232543945,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2
   },
   "JSD": {
     "available_cash": 34826.72143547058,
