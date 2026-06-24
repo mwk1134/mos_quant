@@ -14,7 +14,7 @@ import plotly.graph_objects as go
 import requests as _requests
 import base64
 
-# Force redeploy - version 1.1
+# Force redeploy - snapshot resume refresh 2026-06-24
 import plotly.express as px
 from plotly.subplots import make_subplots
 
