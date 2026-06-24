@@ -524,11 +524,12 @@ class SOXLQuantTrader:
             print("❌ 날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요.")
 
     def get_today_date(self) -> datetime:
-        """오버라이드된 오늘 날짜(자정)를 datetime으로 반환."""
+        """Return the effective market date at midnight."""
         if self.test_today_override:
             d = datetime.strptime(self.test_today_override, "%Y-%m-%d").date()
             return datetime(d.year, d.month, d.day)
-        return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        et_now = self.get_us_eastern_now()
+        return datetime(et_now.year, et_now.month, et_now.day)
     
     def _reset_compounding_state(self, base_amount: Optional[float] = None) -> None:
         try:
@@ -3273,11 +3274,12 @@ class SOXLQuantTrader:
         latest_data_date = soxl_data.index[-1]
 
         # 전일 종가 계산
-        # - 데이터의 마지막 날짜가 오늘보다 이전(주말/휴장/장전)인 경우: 마지막 종가를 기준으로 매수가 계산
-        # - 데이터의 마지막 날짜가 오늘(이미 오늘 종가가 존재)인 경우: 그 전날 종가를 기준으로 계산
+        # - 장마감 후 확정 일봉이면 최신 종가를 기준으로 다음 주문을 계산
+        # - 장중에 당일 일봉이 부분 반영된 경우에는 전일 종가를 기준으로 계산
         last_data_date = latest_data_date.date()
         today_date = today.date()  # 테스트 날짜 오버라이드 고려
-        if last_data_date < today_date:
+        market_closed = self.is_regular_session_closed_now()
+        if last_data_date < today_date or (last_data_date == today_date and market_closed):
             # 최신 거래일 종가를 전일 종가로 간주
             prev_close = soxl_data.iloc[-1]['Close']
             prev_close_basis_date = soxl_data.index[-1].strftime("%Y-%m-%d")
@@ -3316,7 +3318,6 @@ class SOXLQuantTrader:
         total_invested = sum([pos["amount"] for pos in self.positions])
         unrealized_pnl = total_position_value - total_invested
         
-        market_closed = self.is_regular_session_closed_now()
         recommendation = {
             "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
             "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜

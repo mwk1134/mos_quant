@@ -995,13 +995,14 @@ if 'initial_capital' not in st.session_state:
     st.session_state.initial_capital = 9000
 if 'session_start_date' not in st.session_state:
     st.session_state.session_start_date = "2025-08-27"  # 기본값 설정
-today_override_default = datetime.now().strftime('%Y-%m-%d')
 if 'test_today_override' not in st.session_state:
-    st.session_state.test_today_override = today_override_default  # 초기값: 오늘 날짜
-    st.session_state._test_today_override_auto_value = today_override_default
-elif st.session_state.get('_test_today_override_auto_value') == st.session_state.test_today_override:
-    st.session_state.test_today_override = today_override_default
-    st.session_state._test_today_override_auto_value = today_override_default
+    st.session_state.test_today_override = None
+else:
+    auto_override = st.session_state.get('_test_today_override_auto_value')
+    if auto_override and st.session_state.test_today_override == auto_override:
+        st.session_state.test_today_override = None
+if '_test_today_override_auto_value' in st.session_state:
+    del st.session_state['_test_today_override_auto_value']
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'position_edits' not in st.session_state:
