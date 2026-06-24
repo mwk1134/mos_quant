@@ -19,21 +19,12 @@
   },
   "JEH": {
     "1_2026-06-23": {
-      "shares": 5,
+      "shares": 6,
       "buy_price": 231.4199981689453,
-      "amount": 1157.0999908447266,
+      "amount": 1388.5199890136719,
       "round": 1,
       "mode": "SF"
-    },
-    "available_cash": 32499.68163269043,
-    "processed_seed_dates": [
-      "2025-12-22",
-      "2026-01-15"
-    ],
-    "compound_seed": 33656.78162353516,
-    "compound_reference_seed": 33656.78162353516,
-    "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    }
   },
   "KMW2": {
     "1_2026-06-23": {
