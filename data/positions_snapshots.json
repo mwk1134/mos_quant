@@ -51,12 +51,13 @@
     "compound_loss_rate": 0.2
   },
   "JEH2": {
-    "available_cash": 6302.370232543945,
-    "processed_seed_dates": [
-      "2026-01-15",
-      "2026-06-16"
-    ],
-    "cash_snapshot_date": "2026-06-22",
+    "1_2026-06-23": {
+      "shares": 1,
+      "buy_price": 231.42,
+      "amount": 231.42,
+      "round": 1,
+      "mode": "SF"
+    },
     "compound_seed": 6302.370232543945,
     "compound_reference_seed": 6302.370232543945,
     "compound_profit_rate": 0.7,
