@@ -792,6 +792,18 @@ class SOXLQuantTrader:
             if valid_dates:
                 return max(valid_dates)
 
+        if snapshot.get("available_cash") is not None:
+            try:
+                latest = self.get_latest_trading_day()
+                latest_date = latest.date() if hasattr(latest, "date") else pd.Timestamp(latest).date()
+                prev_date = latest_date
+                for _ in range(14):
+                    prev_date -= timedelta(days=1)
+                    if not self.is_market_closed(datetime(prev_date.year, prev_date.month, prev_date.day)):
+                        return prev_date.strftime("%Y-%m-%d")
+            except Exception:
+                pass
+
         return ""
 
     def _snapshot_to_positions_and_state(self, snapshot: dict) -> Tuple[List[dict], str, float]:
