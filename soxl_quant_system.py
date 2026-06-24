@@ -765,6 +765,35 @@ class SOXLQuantTrader:
             dates.add(text)
         return dates
 
+    def _snapshot_cash_resume_date(self, snapshot: dict) -> str:
+        """Return the date a cash-only snapshot should resume simulation from."""
+        if not isinstance(snapshot, dict):
+            return ""
+
+        for field in ("cash_snapshot_date", "snapshot_date", "manual_cash_lock_date", "as_of_date"):
+            value = str(snapshot.get(field) or "").strip()
+            if not value:
+                continue
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+                return value
+            except Exception:
+                continue
+
+        if snapshot.get("manual_cash_lock"):
+            processed_dates = self._snapshot_processed_seed_dates(snapshot) or set()
+            valid_dates = []
+            for value in processed_dates:
+                try:
+                    datetime.strptime(str(value), "%Y-%m-%d")
+                    valid_dates.append(str(value))
+                except Exception:
+                    continue
+            if valid_dates:
+                return max(valid_dates)
+
+        return ""
+
     def _snapshot_to_positions_and_state(self, snapshot: dict) -> Tuple[List[dict], str, float]:
         """
         스냅샷을 포지션 리스트와 초기 상태로 변환.
@@ -790,7 +819,8 @@ class SOXLQuantTrader:
                 continue
             dates.append(date_str)
         if not dates:
-            return [], "", snapshot_cash if snapshot_cash is not None else self.initial_capital
+            resume_date = self._snapshot_cash_resume_date(snapshot)
+            return [], resume_date, snapshot_cash if snapshot_cash is not None else self.initial_capital
         max_snap_date = max(dates)
         positions = []
         total_invested = 0.0
@@ -971,21 +1001,25 @@ class SOXLQuantTrader:
         if not positions:
             snapshot_cash = self._snapshot_available_cash(snapshot)
             if snapshot_cash is not None:
-                self.positions = []
-                self.available_cash = snapshot_cash
-                self.current_round = 1
-                self.processed_seed_dates = self._snapshot_processed_seed_dates(snapshot) or set()
-                self.trading_days_count = 0
-                self.current_week_friday = None
-                self._sync_investment_capital_to_latest_total_assets()
-                self._restore_compounding_from_snapshot(snapshot)
-                return {"from_snapshot": True, "max_snap_date": max_snap_date, "cash_only": True}
-            return self.simulate_from_start_to_today(original_start_date, quiet)
+                if not max_snap_date:
+                    self.positions = []
+                    self.available_cash = snapshot_cash
+                    self.current_round = 1
+                    self.processed_seed_dates = self._snapshot_processed_seed_dates(snapshot) or set()
+                    self.trading_days_count = 0
+                    self.current_week_friday = None
+                    self._sync_investment_capital_to_latest_total_assets()
+                    self._restore_compounding_from_snapshot(snapshot)
+                    return {"from_snapshot": True, "max_snap_date": max_snap_date, "cash_only": True}
+                available_cash = snapshot_cash
+            else:
+                return self.simulate_from_start_to_today(original_start_date, quiet)
 
         # [버그픽스] 스냅샷에 mode가 저장돼있지 않은 과거 포지션은 매수일 주간 RSI로 재계산.
         # 이 작업을 run_backtest 호출 전에 수행해, 재시뮬 매도조건 체크가 올바른 모드(SF/AG)로
         # 동작하도록 한다. (이전엔 모두 SF로 기본값 처리되어 공세 포지션이 잘못 매도됐음)
-        self._recompute_missing_position_modes(positions)
+        if positions:
+            self._recompute_missing_position_modes(positions)
 
         # 매도 수익 반영: 시작일~스냅최신일 시뮬레이션으로 잔여예수금 계산
         if self._snapshot_available_cash(snapshot) is None:

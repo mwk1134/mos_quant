@@ -506,6 +506,11 @@ def _build_snapshot_from_positions(
     if include_runtime_state:
         current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
         current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
+        if not _snapshot_has_positions(current_snapshot):
+            try:
+                current_snapshot['cash_snapshot_date'] = trader.get_latest_trading_day().strftime("%Y-%m-%d")
+            except Exception:
+                current_snapshot['cash_snapshot_date'] = datetime.now().strftime("%Y-%m-%d")
     if getattr(trader, 'profit_loss_compounding_enabled', False):
         current_snapshot['compound_seed'] = float(getattr(trader, 'compound_seed', 0.0) or 0.0)
         current_snapshot['compound_reference_seed'] = float(getattr(trader, 'compound_reference_seed', 0.0) or 0.0)
