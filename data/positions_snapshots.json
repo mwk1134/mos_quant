@@ -38,6 +38,7 @@
       "mode": "SF"
     },
     "available_cash": 84580.54002380371,
+    "processed_seed_dates": [],
     "compound_seed": 87589.0,
     "compound_reference_seed": 87589.0,
     "compound_profit_rate": 0.7,
