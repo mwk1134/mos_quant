@@ -770,13 +770,31 @@ class SOXLQuantTrader:
         if not isinstance(snapshot, dict):
             return ""
 
+        def previous_trading_day(date_obj) -> str:
+            prev_date = date_obj
+            for _ in range(14):
+                prev_date -= timedelta(days=1)
+                if not self.is_market_closed(datetime(prev_date.year, prev_date.month, prev_date.day)):
+                    return prev_date.strftime("%Y-%m-%d")
+            return date_obj.strftime("%Y-%m-%d")
+
+        def cap_to_before_latest_trading_day(date_text: str) -> str:
+            candidate = datetime.strptime(date_text, "%Y-%m-%d").date()
+            try:
+                latest = self.get_latest_trading_day()
+                latest_date = latest.date() if hasattr(latest, "date") else pd.Timestamp(latest).date()
+                if candidate >= latest_date:
+                    return previous_trading_day(latest_date)
+            except Exception:
+                pass
+            return candidate.strftime("%Y-%m-%d")
+
         for field in ("cash_snapshot_date", "snapshot_date", "manual_cash_lock_date", "as_of_date"):
             value = str(snapshot.get(field) or "").strip()
             if not value:
                 continue
             try:
-                datetime.strptime(value, "%Y-%m-%d")
-                return value
+                return cap_to_before_latest_trading_day(value)
             except Exception:
                 continue
 
@@ -790,17 +808,13 @@ class SOXLQuantTrader:
                 except Exception:
                     continue
             if valid_dates:
-                return max(valid_dates)
+                return cap_to_before_latest_trading_day(max(valid_dates))
 
         if snapshot.get("available_cash") is not None:
             try:
                 latest = self.get_latest_trading_day()
                 latest_date = latest.date() if hasattr(latest, "date") else pd.Timestamp(latest).date()
-                prev_date = latest_date
-                for _ in range(14):
-                    prev_date -= timedelta(days=1)
-                    if not self.is_market_closed(datetime(prev_date.year, prev_date.month, prev_date.day)):
-                        return prev_date.strftime("%Y-%m-%d")
+                return previous_trading_day(latest_date)
             except Exception:
                 pass
 
