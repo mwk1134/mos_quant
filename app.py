@@ -752,68 +752,18 @@ def save_active_preset_config() -> tuple:
     st.session_state._preset_config_save_result = (ok, err)
     return ok, err
 
-def _get_query_param_value(name: str):
-    try:
-        params = st.query_params
-        if name in params:
-            value = params.get(name)
-            if isinstance(value, list):
-                return value[0] if value else None
-            return value
-    except Exception:
-        pass
-
-    try:
-        params = st.experimental_get_query_params()
-        value = params.get(name)
-        if isinstance(value, list):
-            return value[0] if value else None
-        return value
-    except Exception:
-        return None
-
-
-def _remove_query_param(name: str) -> None:
-    try:
-        if name in st.query_params:
-            del st.query_params[name]
-            return
-    except Exception:
-        pass
-
-    try:
-        params = st.experimental_get_query_params()
-        params.pop(name, None)
-        st.experimental_set_query_params(**params)
-    except Exception:
-        pass
-
-
-def handle_seed_delete_query() -> None:
-    delete_seed = _get_query_param_value("delete_seed")
-    if delete_seed is None:
-        return
-
-    try:
-        seed_index = int(delete_seed)
-    except (TypeError, ValueError):
-        _remove_query_param("delete_seed")
-        return
-
+def delete_seed_increase(seed_index: int) -> None:
     seeds = list(st.session_state.get("seed_increases") or [])
     if not 0 <= seed_index < len(seeds):
-        _remove_query_param("delete_seed")
         return
 
     seeds.pop(seed_index)
-    st.session_state.seed_increases = seeds
+    st.session_state.seed_increases = _copy_seed_increases(seeds)
     if st.session_state.get("active_preset"):
         sync_active_preset_config_from_session()
-        save_active_preset_config()
+        st.session_state._preset_config_save_result = save_active_preset_config()
     st.session_state.positions_snapshot = {}
     st.session_state.trader = None
-    _remove_query_param("delete_seed")
-    st.rerun()
 
 
 def render_seed_entry(seed: dict, index: int) -> None:
@@ -826,20 +776,30 @@ def render_seed_entry(seed: dict, index: int) -> None:
     else:
         amount_text = f"-${abs(amount):,.0f}"
         amount_class = "negative"
-        amount_icon = "🔴"
+        amount_icon = "💸"
 
-    st.markdown(
-        f"""
-        <div class="seed-entry">
-            <div class="seed-entry-date">📅 {date_text}</div>
-            <div class="seed-entry-amount-line">
-                <span class="seed-entry-amount {amount_class}">{amount_icon} {html.escape(amount_text)}</span>
-                <a class="seed-delete-link" href="?delete_seed={index}" title="삭제" aria-label="시드증액 삭제">🗑️</a>
+    info_col, delete_col = st.columns([0.86, 0.14])
+    with info_col:
+        st.markdown(
+            f"""
+            <div class="seed-entry">
+                <div class="seed-entry-date">📅 {date_text}</div>
+                <div class="seed-entry-amount-line">
+                    <span class="seed-entry-amount {amount_class}">{amount_icon} {html.escape(amount_text)}</span>
+                </div>
             </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
+    with delete_col:
+        st.button(
+            "🗑️",
+            key=f"delete_seed_{index}_{seed.get('date', '')}_{amount}",
+            help="시드증액/인출 삭제",
+            on_click=delete_seed_increase,
+            args=(index,),
+            use_container_width=True,
+        )
 
 
 def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
@@ -1232,8 +1192,6 @@ def show_mobile_settings():
     if 'seed_increases' not in st.session_state:
         st.session_state.seed_increases = []
     
-    handle_seed_delete_query()
-
     if st.session_state.seed_increases:
         st.write("**등록된 시드증액/인출:**")
         for i, seed in enumerate(st.session_state.seed_increases):
