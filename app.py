@@ -752,17 +752,94 @@ def save_active_preset_config() -> tuple:
     st.session_state._preset_config_save_result = (ok, err)
     return ok, err
 
+def _snapshot_position_keys(snapshot: dict) -> list:
+    keys = []
+    for key, value in (snapshot or {}).items():
+        if not isinstance(value, dict) or "_" not in str(key):
+            continue
+        try:
+            _, date_text = str(key).split("_", 1)
+            datetime.strptime(date_text, "%Y-%m-%d")
+        except Exception:
+            continue
+        keys.append(key)
+    return keys
+
+def _adjust_snapshot_for_seed_change(snapshot: dict, seed: dict, action: str) -> dict:
+    adjusted = dict(snapshot or {})
+    if not adjusted:
+        return adjusted
+
+    try:
+        amount = float(seed.get("amount", 0) or 0)
+    except Exception:
+        amount = 0.0
+    seed_date = str(seed.get("date", "")).strip()
+    if not seed_date or amount == 0:
+        return adjusted
+
+    processed = [str(value) for value in adjusted.get("processed_seed_dates", []) or []]
+    processed_set = set(processed)
+
+    if action == "delete" and seed_date in processed_set:
+        if adjusted.get("available_cash") is not None:
+            adjusted["available_cash"] = float(adjusted.get("available_cash") or 0.0) - amount
+        remaining_same_date = any(str(item.get("date")) == seed_date for item in st.session_state.get("seed_increases", []) or [])
+        if not remaining_same_date:
+            processed = [value for value in processed if value != seed_date]
+    elif action == "add":
+        try:
+            seed_dt = datetime.strptime(seed_date, "%Y-%m-%d").date()
+        except Exception:
+            seed_dt = None
+        if seed_dt is not None and seed_dt <= datetime.now().date() and seed_date not in processed_set:
+            if adjusted.get("available_cash") is not None:
+                adjusted["available_cash"] = float(adjusted.get("available_cash") or 0.0) + amount
+                processed.append(seed_date)
+
+    if processed:
+        adjusted["processed_seed_dates"] = sorted(set(processed))
+    else:
+        adjusted.pop("processed_seed_dates", None)
+
+    for key in (
+        "compound_seed",
+        "compound_reference_seed",
+        "compound_profit_rate",
+        "compound_loss_rate",
+    ):
+        adjusted.pop(key, None)
+
+    if adjusted.get("available_cash") is not None and not _snapshot_position_keys(adjusted):
+        adjusted["manual_cash_lock"] = True
+        adjusted.setdefault("cash_snapshot_date", datetime.now().strftime("%Y-%m-%d"))
+
+    return adjusted
+
+def sync_active_preset_snapshot_after_seed_change(seed: dict, action: str) -> tuple:
+    preset_name = st.session_state.get("active_preset")
+    if not preset_name:
+        st.session_state.positions_snapshot = {}
+        return True, ""
+
+    current_snapshot = load_preset_snapshot(preset_name)
+    adjusted_snapshot = _adjust_snapshot_for_seed_change(current_snapshot, seed, action)
+    st.session_state.positions_snapshot = adjusted_snapshot
+    return save_preset_snapshot(preset_name, adjusted_snapshot)
+
 def delete_seed_increase(seed_index: int) -> None:
     seeds = list(st.session_state.get("seed_increases") or [])
     if not 0 <= seed_index < len(seeds):
         return
 
-    seeds.pop(seed_index)
+    removed_seed = seeds.pop(seed_index)
     st.session_state.seed_increases = _copy_seed_increases(seeds)
     if st.session_state.get("active_preset"):
         sync_active_preset_config_from_session()
         st.session_state._preset_config_save_result = save_active_preset_config()
-    st.session_state.positions_snapshot = {}
+        sync_active_preset_snapshot_after_seed_change(removed_seed, "delete")
+    else:
+        st.session_state.positions_snapshot = {}
     st.session_state.trader = None
 
 
@@ -1227,8 +1304,10 @@ def show_mobile_settings():
             st.session_state.seed_increases.append(seed_increase)
             if st.session_state.get('active_preset'):
                 sync_active_preset_config_from_session()
-                save_active_preset_config()
-            st.session_state.positions_snapshot = {}
+                st.session_state._preset_config_save_result = save_active_preset_config()
+                sync_active_preset_snapshot_after_seed_change(seed_increase, "add")
+            else:
+                st.session_state.positions_snapshot = {}
             st.session_state.trader = None  # 트레이더 재초기화
             if seed_amount > 0:
                 st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")

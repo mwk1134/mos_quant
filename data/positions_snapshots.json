@@ -37,10 +37,7 @@
       "round": 1,
       "mode": "SF"
     },
-    "available_cash": 115580.54002380371,
-    "processed_seed_dates": [
-      "2026-06-24"
-    ],
+    "available_cash": 84580.54002380371,
     "compound_seed": 87589.0,
     "compound_reference_seed": 87589.0,
     "compound_profit_rate": 0.7,
