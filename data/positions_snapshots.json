@@ -86,12 +86,7 @@
     "KMW2": {
       "initial_capital": 67612.0,
       "session_start_date": "2026-04-29",
-      "seed_increases": [
-        {
-          "date": "2026-06-24",
-          "amount": 31000.0
-        }
-      ],
+      "seed_increases": [],
       "position_edits": {}
     }
   }
