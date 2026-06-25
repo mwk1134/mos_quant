@@ -859,20 +859,20 @@ def render_seed_entry(seed: dict, index: int) -> None:
         amount_class = "negative"
         amount_icon = "💸"
 
-    info_col, delete_col = st.columns([0.92, 0.08], vertical_alignment="center")
-    with info_col:
+    st.markdown(
+        f'<div class="seed-entry-date">📅 {date_text}</div>',
+        unsafe_allow_html=True,
+    )
+    try:
+        amount_row = st.container(horizontal=True, vertical_alignment="center", gap="small")
+    except TypeError:
+        amount_row = st.container()
+
+    with amount_row:
         st.markdown(
-            f"""
-            <div class="seed-entry">
-                <div class="seed-entry-date">📅 {date_text}</div>
-                <div class="seed-entry-amount-line">
-                    <span class="seed-entry-amount {amount_class}">{amount_icon} {html.escape(amount_text)}</span>
-                </div>
-            </div>
-            """,
+            f'<span class="seed-entry-amount {amount_class}">{amount_icon} {html.escape(amount_text)}</span>',
             unsafe_allow_html=True,
         )
-    with delete_col:
         st.button(
             "🗑",
             key=f"delete_seed_{index}_{seed.get('date', '')}_{amount}",
