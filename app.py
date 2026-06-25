@@ -228,8 +228,6 @@ st.markdown("""
         }
 
         .stButton > button {
-            width: 100%;
-            height: 3rem;
             font-size: 1rem;
         }
         
@@ -861,7 +859,7 @@ def render_seed_entry(seed: dict, index: int) -> None:
         amount_class = "negative"
         amount_icon = "💸"
 
-    info_col, delete_col = st.columns([0.86, 0.14])
+    info_col, delete_col = st.columns([0.92, 0.08], vertical_alignment="center")
     with info_col:
         st.markdown(
             f"""
@@ -876,12 +874,12 @@ def render_seed_entry(seed: dict, index: int) -> None:
         )
     with delete_col:
         st.button(
-            "🗑️",
+            "🗑",
             key=f"delete_seed_{index}_{seed.get('date', '')}_{amount}",
             help="시드증액/인출 삭제",
             on_click=delete_seed_increase,
             args=(index,),
-            use_container_width=True,
+            use_container_width=False,
         )
 
 
