@@ -1,11 +1,17 @@
 {
   "KMW": {
-    "available_cash": 96560.65969848633,
+    "1_2026-06-26": {
+      "shares": 17,
+      "buy_price": 215.60000610351562,
+      "amount": 3665.2001037597656,
+      "round": 1,
+      "mode": "SF"
+    },
+    "available_cash": 92895.45959472656,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"
     ],
-    "cash_snapshot_date": "2026-06-24",
     "compound_seed": 95112.0,
     "compound_reference_seed": 95112.0,
     "compound_profit_rate": 0.7,
