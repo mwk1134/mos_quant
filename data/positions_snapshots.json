@@ -21,7 +21,14 @@
       "round": 3,
       "mode": "SF"
     },
-    "available_cash": 92070.91411376954,
+    "4_2026-07-16": {
+      "shares": 142,
+      "buy_price": 142.47999572753906,
+      "amount": 20232.159393310547,
+      "round": 4,
+      "mode": "SF"
+    },
+    "available_cash": 71838.754720459,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"
