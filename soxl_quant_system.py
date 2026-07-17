@@ -1971,6 +1971,57 @@ class SOXLQuantTrader:
         
         return final_mode, True
     
+    def _calculate_week_mode_from_completed_rsi(
+        self,
+        target_week_friday: datetime,
+        qqq_data: pd.DataFrame,
+        rsi_ref_data: Optional[dict] = None,
+    ) -> tuple[str | None, bool]:
+        """
+        Calculate the target week's mode using only completed weekly RSI data.
+
+        This is used when the app is opened on Friday before the regular
+        session closes. In that case the current Friday candle is incomplete,
+        but the current week's trading mode can still be determined from the
+        prior completed Fridays.
+        """
+        if rsi_ref_data is None:
+            rsi_ref_data = {}
+            try:
+                rsi_file_path = str(self._resolve_data_path("weekly_rsi_reference.json"))
+                if os.path.exists(rsi_file_path):
+                    with open(rsi_file_path, 'r', encoding='utf-8') as f:
+                        rsi_ref_data = json.load(f)
+            except Exception as e:
+                print(f"⚠️ RSI 참조 데이터 로드 실패: {e}")
+
+        if rsi_ref_data:
+            mode, success = self._calculate_week_mode_recursive_with_reference(
+                target_week_friday, rsi_ref_data
+            )
+            if success:
+                return mode, True
+
+        weekly_df = qqq_data.resample('W-FRI').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
+
+        if len(weekly_df) < 15:
+            print("⚠️ 완료 주간 데이터 부족, 현재 주차 모드 계산 불가")
+            return None, False
+
+        delta = weekly_df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
+        return self._calculate_week_mode_recursive(target_week_friday, weekly_df, rsi)
+
     def update_mode(self, qqq_data: pd.DataFrame) -> str:
         """
         QQQ 주간 RSI 기반으로 모드 업데이트
@@ -2016,7 +2067,16 @@ class SOXLQuantTrader:
                         print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 장 종료 전이므로 모드 업데이트하지 않음 (현재 모드: {self.current_mode})")
                         return self.current_mode
                     else:
-                        print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 장 종료 전이므로 모드 업데이트하지 않음")
+                        print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 장 종료 전이지만 현재 모드가 없어 완료 RSI로 이번 주 모드를 계산합니다.")
+                        fallback_mode, success = self._calculate_week_mode_from_completed_rsi(
+                            this_week_friday, qqq_data
+                        )
+                        if success and fallback_mode:
+                            self.current_week_friday = this_week_friday
+                            self.current_mode = fallback_mode
+                            print(f"✅ 금요일 장중 모드 복구: {this_week_friday.strftime('%Y-%m-%d')} 주차 모드 = {self.current_mode}")
+                            return self.current_mode
+                        print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 완료 RSI 기반 모드 계산 실패")
                         return None
             
             # 새로운 주차이거나 초기화인 경우 모드 업데이트
@@ -3193,8 +3253,16 @@ class SOXLQuantTrader:
                     print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 장 종료 전이므로 모드 업데이트하지 않음 (현재 모드: {self.current_mode})")
                     new_mode = self.current_mode
                 else:
-                    print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 장 종료 전이므로 모드 업데이트하지 않음")
-                    return {"error": "금요일 장 종료 전에는 모드를 결정할 수 없습니다."}
+                    print(f"⏳ 금요일 장 종료 전: {today.strftime('%Y-%m-%d')} 장 종료 전이지만 현재 모드가 없어 완료 RSI로 이번 주 모드를 계산합니다.")
+                    fallback_mode, success = self._calculate_week_mode_from_completed_rsi(
+                        this_week_friday_calc, qqq_data, rsi_ref_data
+                    )
+                    if not success or not fallback_mode:
+                        return {"error": "금요일 장 종료 전 완료 RSI 기반 모드 계산에 실패했습니다."}
+                    self.current_week_friday = this_week_friday_calc
+                    self.current_mode = fallback_mode
+                    new_mode = fallback_mode
+                    print(f"✅ 금요일 장중 모드 복구: {this_week_friday_date} 주차 모드 = {new_mode}")
             else:
                 # 금요일 장 종료 후이거나 금요일이 아닌 경우 모드 재계산
                 print(f"🔄 새로운 주차 모드 계산: {this_week_friday_date} 주차")
