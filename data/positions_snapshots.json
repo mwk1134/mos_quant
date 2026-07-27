@@ -147,7 +147,13 @@
       "amount": 13407.379760742188,
       "round": 6,
       "mode": "SF"
-    }
+    },
+    "available_cash": 25484.811965942383,
+    "processed_seed_dates": [],
+    "compound_seed": 84176.30196594239,
+    "compound_reference_seed": 84176.30196594239,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2
   },
   "JEH2": {
     "1_2026-07-01": {
