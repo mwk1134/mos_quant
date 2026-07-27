@@ -142,18 +142,12 @@
       "mode": "SF"
     },
     "6_2026-07-24": {
-      "shares": 90,
+      "shares": 98,
       "buy_price": 136.80999755859375,
-      "amount": 12312.899780273438,
+      "amount": 13407.379760742188,
       "round": 6,
       "mode": "SF"
-    },
-    "available_cash": 83407.15591857911,
-    "processed_seed_dates": [],
-    "compound_seed": 87589.0,
-    "compound_reference_seed": 87589.0,
-    "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    }
   },
   "JEH2": {
     "1_2026-07-01": {
