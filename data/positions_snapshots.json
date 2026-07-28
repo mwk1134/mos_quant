@@ -49,15 +49,12 @@
       "round": 7,
       "mode": "SF"
     },
-    "available_cash": 81812.40630126954,
+    "available_cash": 112812.40630126954,
     "processed_seed_dates": [
       "2025-10-21",
-      "2026-06-21"
-    ],
-    "compound_seed": 95112.0,
-    "compound_reference_seed": 95112.0,
-    "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+      "2026-06-21",
+      "2026-07-28"
+    ]
   },
   "JEH": {
     "1_2026-07-01": {
