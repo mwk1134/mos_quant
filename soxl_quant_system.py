@@ -508,6 +508,7 @@ class SOXLQuantTrader:
         self.compound_reference_seed = float(initial_capital)
         self.compound_settlements = []
         self._compound_processed_dates = set()
+        self._pending_buy_recommendation = None
 
     def set_test_today(self, date_str: Optional[str]):
         """테스트용 오늘 날짜 설정/해제. None 또는 빈문자면 해제."""
@@ -749,6 +750,52 @@ class SOXLQuantTrader:
         except Exception:
             return None
         return None
+
+    def _pending_buy_from_snapshot(self, snapshot: dict) -> Optional[dict]:
+        """Return an unfilled displayed buy recommendation stored in a snapshot."""
+        if not isinstance(snapshot, dict):
+            return None
+        pending = snapshot.get("pending_buy")
+        if not isinstance(pending, dict):
+            return None
+        try:
+            round_num = int(pending.get("round", 0) or 0)
+            order_date = str(pending.get("order_date", ""))
+            quantity = int(pending.get("quantity", 0) or 0)
+            datetime.strptime(order_date, "%Y-%m-%d")
+        except Exception:
+            return None
+        if round_num <= 0 or quantity <= 0:
+            return None
+
+        # A stored position is an actual fill and always wins over stale pending metadata.
+        if isinstance(snapshot.get(f"{round_num}_{order_date}"), dict):
+            return None
+        return {
+            "round": round_num,
+            "order_date": order_date,
+            "quantity": quantity,
+        }
+
+    def _pending_buy_quantity(self, round_num: int, current_date: datetime) -> Optional[int]:
+        pending = getattr(self, "_pending_buy_recommendation", None)
+        if not isinstance(pending, dict):
+            return None
+        try:
+            if isinstance(current_date, pd.Timestamp):
+                date_str = current_date.strftime("%Y-%m-%d")
+            elif isinstance(current_date, datetime):
+                date_str = current_date.strftime("%Y-%m-%d")
+            else:
+                date_str = pd.Timestamp(current_date).strftime("%Y-%m-%d")
+            if int(pending.get("round", 0)) != int(round_num):
+                return None
+            if str(pending.get("order_date", "")) != date_str:
+                return None
+            quantity = int(pending.get("quantity", 0))
+            return quantity if quantity > 0 else None
+        except Exception:
+            return None
 
     def _snapshot_processed_seed_dates(self, snapshot: dict) -> Optional[set]:
         if not isinstance(snapshot, dict):
@@ -1087,9 +1134,16 @@ class SOXLQuantTrader:
             f"{getattr(self, 'compounding_settlement_delay_days', 0)}_"
             f"{getattr(self, 'compounding_reference_renewal_days', 0)}"
         )
+        pending_buy = self._pending_buy_from_snapshot(snapshot)
+        pending_cache_key = (
+            f"pending_{pending_buy['round']}_{pending_buy['order_date']}_{pending_buy['quantity']}"
+            if pending_buy
+            else "pending_none"
+        )
         cache_key = (
             f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_"
-            f"{self.test_today_override or 'real'}_{seed_increases_str}_{compounding_cache_key}"
+            f"{self.test_today_override or 'real'}_{seed_increases_str}_"
+            f"{compounding_cache_key}_{pending_cache_key}"
         )
         if cache_key in self._simulation_cache:
             cached, cache_time = self._simulation_cache[cache_key]
@@ -1119,9 +1173,19 @@ class SOXLQuantTrader:
             self._sync_investment_capital_to_latest_total_assets()
         self._restore_compounding_from_snapshot(snapshot)
 
-        if quiet:
-            buf = io.StringIO()
-            with redirect_stdout(buf):
+        self._pending_buy_recommendation = pending_buy
+        try:
+            if quiet:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    result = self.run_backtest(
+                        start_after_snap, end_date_str,
+                        initial_positions=positions,
+                        initial_cash=available_cash,
+                        snapshot_max_date=max_snap_date,
+                        initial_processed_seed_dates=self._snapshot_processed_seed_dates(snapshot),
+                    )
+            else:
                 result = self.run_backtest(
                     start_after_snap, end_date_str,
                     initial_positions=positions,
@@ -1129,14 +1193,8 @@ class SOXLQuantTrader:
                     snapshot_max_date=max_snap_date,
                     initial_processed_seed_dates=self._snapshot_processed_seed_dates(snapshot),
                 )
-        else:
-            result = self.run_backtest(
-                start_after_snap, end_date_str,
-                initial_positions=positions,
-                initial_cash=available_cash,
-                snapshot_max_date=max_snap_date,
-                initial_processed_seed_dates=self._snapshot_processed_seed_dates(snapshot),
-            )
+        finally:
+            self._pending_buy_recommendation = None
 
         # 스냅샷 이후 구간에 데이터가 없으면(예: 2026년 테스트 데이터 vs 2025년 실제 데이터) 스냅샷만 적용
         if result and "error" in result and "해당 기간에 대한 데이터가 없습니다" in result.get("error", ""):
@@ -2337,8 +2395,18 @@ class SOXLQuantTrader:
         # 1회시드 금액 계산
         target_amount = self.calculate_position_size(self.current_round)
         
-        # LOC 주문가 기준 매수 수량은 정수 주식만 주문하므로 소수점은 절삭한다.
-        target_shares = int(target_amount / target_price)
+        # 전날 화면에 표시하고 스냅샷에 저장한 주문수량이 있으면 그 수량을 체결수량으로
+        # 이어간다. 이렇게 해야 장 마감 후 기준시드가 재평가되어도 매도수량이 바뀌지 않는다.
+        pending_quantity = self._pending_buy_quantity(self.current_round, current_date)
+        if pending_quantity is not None:
+            target_shares = pending_quantity
+            print(
+                f"📌 저장된 매수 추천수량 적용: {self.current_round}회차 "
+                f"{current_date.strftime('%Y-%m-%d')} = {target_shares}주"
+            )
+        else:
+            # LOC 주문가 기준 매수 수량은 정수 주식만 주문하므로 소수점은 절삭한다.
+            target_shares = int(target_amount / target_price)
         
         if target_shares <= 0:
             return False

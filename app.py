@@ -10,6 +10,7 @@ import html
 import hashlib
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Optional
 import plotly.graph_objects as go
 import requests as _requests
 import base64
@@ -426,10 +427,20 @@ def _snapshot_max_date(snapshot: dict) -> str:
         dates.append(date_str)
     return max(dates) if dates else ""
 
+def _is_snapshot_position(key: str, value: object) -> bool:
+    if not isinstance(key, str) or "_" not in key or not isinstance(value, dict):
+        return False
+    _, date_str = key.split("_", 1)
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return int(value.get("shares", 0) or 0) > 0
+    except Exception:
+        return False
+
 def _snapshot_has_positions(snapshot: dict) -> bool:
     return any(
-        isinstance(v, dict) and int(v.get("shares", 0) or 0) > 0
-        for v in (snapshot or {}).values()
+        _is_snapshot_position(key, value)
+        for key, value in (snapshot or {}).items()
     )
 
 def _is_manual_cash_locked_snapshot(snapshot: dict) -> bool:
@@ -446,6 +457,8 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
         return False
     if current_snapshot == (previous_snapshot or {}):
         return False
+    if current_snapshot.get("pending_buy") != (previous_snapshot or {}).get("pending_buy"):
+        return True
     prev_has_positions = _snapshot_has_positions(previous_snapshot)
     curr_has_positions = _snapshot_has_positions(current_snapshot)
     if _is_manual_cash_locked_snapshot(previous_snapshot) and not curr_has_positions:
@@ -501,6 +514,17 @@ def _build_snapshot_from_positions(
                 'round': int(pos['round']),
                 'mode': str(pos.get('mode') or 'SF'),
             }
+
+    # 아직 체결되지 않은 전날 표시 주문은 자동 프리셋 순회 중에도 보존한다.
+    # 같은 회차·주문일 포지션이 생겼다면 체결된 것이므로 pending 메타데이터를 제거한다.
+    pending_buy = (previous_snapshot or {}).get("pending_buy")
+    if isinstance(pending_buy, dict):
+        try:
+            pending_key = f"{int(pending_buy['round'])}_{pending_buy['order_date']}"
+        except Exception:
+            pending_key = ""
+        if pending_key and pending_key not in current_snapshot:
+            current_snapshot["pending_buy"] = dict(pending_buy)
     if include_runtime_state:
         current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
         current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
@@ -521,6 +545,32 @@ def _build_snapshot_from_positions(
         current_snapshot['compound_profit_rate'] = float(getattr(trader, 'profit_compounding_rate', 0.0) or 0.0)
         current_snapshot['compound_loss_rate'] = float(getattr(trader, 'loss_compounding_rate', 0.0) or 0.0)
     return current_snapshot
+
+def _pending_buy_from_recommendation(
+    trader: SOXLQuantTrader,
+    recommendation: dict,
+) -> Optional[dict]:
+    """Convert the exact displayed buy quantity into persistent pending-order metadata."""
+    if not recommendation.get("can_buy"):
+        return None
+    try:
+        round_num = int(recommendation["next_buy_round"])
+        target_price = float(recommendation["buy_price"])
+        target_amount = float(recommendation["next_buy_amount"])
+        basis_date = str(recommendation["basis_date"])
+        quantity = int(target_amount / target_price)
+        order_date = trader._get_next_trading_day(basis_date)
+    except Exception:
+        return None
+    if round_num <= 0 or target_price <= 0 or quantity <= 0:
+        return None
+    return {
+        "round": round_num,
+        "order_date": order_date,
+        "quantity": quantity,
+        "target_price": target_price,
+        "basis_date": basis_date,
+    }
 
 def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
     """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
@@ -1696,6 +1746,14 @@ def show_daily_recommendation():
                 }
         current_snapshot['available_cash'] = float(getattr(st.session_state.trader, 'available_cash', 0.0) or 0.0)
         current_snapshot['processed_seed_dates'] = sorted(list(getattr(st.session_state.trader, 'processed_seed_dates', set()) or []))
+        pending_buy = _pending_buy_from_recommendation(
+            st.session_state.trader,
+            recommendation,
+        )
+        if pending_buy:
+            current_snapshot["pending_buy"] = pending_buy
+        else:
+            current_snapshot.pop("pending_buy", None)
         st.session_state.positions_snapshot = current_snapshot
         
         # 포지션이 있으면 GitHub에 영구 저장.
