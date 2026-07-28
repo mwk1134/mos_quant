@@ -108,7 +108,16 @@
       "amount": 3972.6498107910156,
       "round": 7,
       "mode": "SF"
-    }
+    },
+    "available_cash": 6075.440999450686,
+    "processed_seed_dates": [
+      "2025-12-22",
+      "2026-01-15"
+    ],
+    "compound_seed": 29655.03987640381,
+    "compound_reference_seed": 29655.03987640381,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2
   },
   "KMW2": {
     "1_2026-07-01": {
