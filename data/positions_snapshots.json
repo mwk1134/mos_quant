@@ -225,7 +225,16 @@
       "amount": 768.8999633789062,
       "round": 7,
       "mode": "SF"
-    }
+    },
+    "available_cash": 1042.9900556945804,
+    "processed_seed_dates": [
+      "2026-01-15",
+      "2026-06-16"
+    ],
+    "compound_seed": 5400.089848175049,
+    "compound_reference_seed": 5400.089848175049,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2
   },
   "JSD": {
     "1_2026-07-01": {
