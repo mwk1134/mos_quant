@@ -54,7 +54,11 @@
       "2025-10-21",
       "2026-06-21",
       "2026-07-28"
-    ]
+    ],
+    "compound_seed": 183294.90294433595,
+    "compound_reference_seed": 183294.90294433595,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2
   },
   "JEH": {
     "1_2026-07-01": {
