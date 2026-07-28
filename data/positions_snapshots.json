@@ -220,21 +220,12 @@
       "mode": "SF"
     },
     "7_2026-07-27": {
-      "shares": 5,
+      "shares": 6,
       "buy_price": 128.14999389648438,
-      "amount": 640.7499694824219,
+      "amount": 768.8999633789062,
       "round": 7,
       "mode": "SF"
-    },
-    "available_cash": 4854.559948272705,
-    "processed_seed_dates": [
-      "2026-01-15",
-      "2026-06-16"
-    ],
-    "compound_seed": 6302.370232543945,
-    "compound_reference_seed": 6302.370232543945,
-    "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    }
   },
   "JSD": {
     "1_2026-07-01": {
