@@ -288,6 +288,8 @@ st.markdown("""
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
 _PRESET_CONFIGS_KEY = "_preset_configs"
+_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "JSD")
+_MAX_MDD_KEY = "maxMdd"
 
 def _gh_token() -> str:
     """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
@@ -443,6 +445,130 @@ def _snapshot_has_positions(snapshot: dict) -> bool:
         for key, value in (snapshot or {}).items()
     )
 
+def _snapshot_position_items(snapshot: dict) -> list:
+    return [
+        (key, value)
+        for key, value in (snapshot or {}).items()
+        if _is_snapshot_position(key, value)
+    ]
+
+def _snapshot_max_mdd(snapshot: dict) -> dict:
+    if not isinstance(snapshot, dict):
+        return {}
+    raw = snapshot.get(_MAX_MDD_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        percent = float(raw.get("percent", 0.0) or 0.0)
+    except Exception:
+        percent = 0.0
+    if percent <= 0:
+        return {}
+    result = dict(raw)
+    result["percent"] = percent
+    return result
+
+def _snapshot_max_mdd_percent(snapshot: dict) -> float:
+    return float(_snapshot_max_mdd(snapshot).get("percent", 0.0) or 0.0)
+
+def _merge_snapshot_max_mdd(snapshot: dict, previous_snapshot: dict) -> dict:
+    if not isinstance(snapshot, dict):
+        return snapshot
+    current_info = _snapshot_max_mdd(snapshot)
+    previous_info = _snapshot_max_mdd(previous_snapshot)
+    if previous_info and previous_info.get("percent", 0.0) > current_info.get("percent", 0.0):
+        snapshot[_MAX_MDD_KEY] = previous_info
+    return snapshot
+
+def _make_max_mdd_record(
+    preset_name: str,
+    mdd_info: dict,
+    current_price: Optional[float] = None,
+) -> dict:
+    try:
+        percent = float((mdd_info or {}).get("mdd_percent", 0.0) or 0.0)
+    except Exception:
+        percent = 0.0
+    if percent <= 0:
+        return {}
+
+    record = {
+        "percent": round(percent, 4),
+        "date": str((mdd_info or {}).get("mdd_date") or datetime.now().strftime("%Y-%m-%d")),
+        "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "preset": str(preset_name or ""),
+    }
+    if (mdd_info or {}).get("mdd_value") is not None:
+        record["value"] = float((mdd_info or {}).get("mdd_value") or 0.0)
+    if (mdd_info or {}).get("mdd_peak_date"):
+        record["peakDate"] = str((mdd_info or {}).get("mdd_peak_date"))
+    if (mdd_info or {}).get("overall_peak_value") is not None:
+        record["peakValue"] = float((mdd_info or {}).get("overall_peak_value") or 0.0)
+    if current_price is not None:
+        try:
+            record["soxlPrice"] = round(float(current_price), 4)
+        except Exception:
+            pass
+    return record
+
+def _apply_max_mdd_record(snapshot: dict, record: dict) -> bool:
+    if not isinstance(snapshot, dict) or not isinstance(record, dict):
+        return False
+    try:
+        new_percent = float(record.get("percent", 0.0) or 0.0)
+    except Exception:
+        new_percent = 0.0
+    if new_percent <= _snapshot_max_mdd_percent(snapshot):
+        return False
+    snapshot[_MAX_MDD_KEY] = record
+    return True
+
+def _record_snapshot_max_mdd(
+    preset_name: str,
+    snapshot: dict,
+    mdd_info: dict,
+    current_price: Optional[float] = None,
+) -> tuple:
+    if not preset_name or not isinstance(snapshot, dict):
+        return snapshot, _snapshot_max_mdd(snapshot), False
+    record = _make_max_mdd_record(preset_name, mdd_info, current_price)
+    changed = _apply_max_mdd_record(snapshot, record)
+    return snapshot, _snapshot_max_mdd(snapshot), changed
+
+def _calculate_trader_live_mdd_info(
+    trader: SOXLQuantTrader,
+    sim_result: dict,
+    snapshot: dict,
+) -> tuple:
+    try:
+        soxl_data = trader.get_stock_data("SOXL", "1mo")
+        if soxl_data is None or len(soxl_data) == 0:
+            return {}, None
+        current_price = float(soxl_data.iloc[-1]["Close"])
+        current_date = soxl_data.index[-1].strftime("%Y-%m-%d")
+        total_position_value = sum(
+            float(pos.get("shares", 0) or 0) * current_price
+            for pos in trader.positions
+        )
+        total_invested = sum(float(pos.get("amount", 0.0) or 0.0) for pos in trader.positions)
+        portfolio = {
+            "total_invested": total_invested,
+            "total_position_value": total_position_value,
+            "unrealized_pnl": total_position_value - total_invested,
+            "available_cash": float(getattr(trader, "available_cash", 0.0) or 0.0),
+            "total_portfolio_value": float(getattr(trader, "available_cash", 0.0) or 0.0) + total_position_value,
+        }
+        mdd_records = _build_portfolio_mdd_records(
+            sim_result,
+            portfolio,
+            snapshot,
+            current_date,
+            trader.positions,
+        )
+        return trader.calculate_mdd(mdd_records), current_price
+    except Exception:
+        return {}, None
+
 def _is_manual_cash_locked_snapshot(snapshot: dict) -> bool:
     return (
         isinstance(snapshot, dict)
@@ -457,6 +583,8 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
         return False
     if current_snapshot == (previous_snapshot or {}):
         return False
+    if _snapshot_max_mdd_percent(current_snapshot) > _snapshot_max_mdd_percent(previous_snapshot or {}):
+        return True
     if current_snapshot.get("pending_buy") != (previous_snapshot or {}).get("pending_buy"):
         return True
     prev_has_positions = _snapshot_has_positions(previous_snapshot)
@@ -544,6 +672,7 @@ def _build_snapshot_from_positions(
         current_snapshot['compound_reference_seed'] = float(getattr(trader, 'compound_reference_seed', 0.0) or 0.0)
         current_snapshot['compound_profit_rate'] = float(getattr(trader, 'profit_compounding_rate', 0.0) or 0.0)
         current_snapshot['compound_loss_rate'] = float(getattr(trader, 'loss_compounding_rate', 0.0) or 0.0)
+    _merge_snapshot_max_mdd(current_snapshot, previous_snapshot or {})
     return current_snapshot
 
 def _pending_buy_from_recommendation(
@@ -594,7 +723,14 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
     if sim_result and "error" in sim_result:
         return None, sim_result["error"]
 
-    return _build_snapshot_from_positions(temp_trader, previous_snapshot or {}), None
+    current_snapshot = _build_snapshot_from_positions(temp_trader, previous_snapshot or {})
+    mdd_info, current_price = _calculate_trader_live_mdd_info(
+        temp_trader,
+        sim_result,
+        current_snapshot,
+    )
+    _record_snapshot_max_mdd(preset_name, current_snapshot, mdd_info, current_price)
+    return current_snapshot, None
 
 def auto_save_all_preset_snapshots() -> list:
     """모든 프리셋을 순회해 새 확정 거래일 스냅샷이 있으면 저장."""
@@ -650,6 +786,8 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     previous_snapshot = (all_data or {}).get(preset_name, {})
     if _is_manual_cash_locked_snapshot(previous_snapshot) and not _snapshot_has_positions(snapshot):
         return True, ""
+    if snapshot:
+        snapshot = _merge_snapshot_max_mdd(dict(snapshot), previous_snapshot)
     all_data[preset_name] = snapshot
     ok, err = _gh_save_all_snapshots(all_data, sha)
     if not ok and "GitHub API" in str(err) and "(409)" in str(err):
@@ -657,6 +795,8 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         latest_previous = (latest_data or {}).get(preset_name, {})
         if _is_manual_cash_locked_snapshot(latest_previous) and not _snapshot_has_positions(snapshot):
             return True, ""
+        if snapshot:
+            snapshot = _merge_snapshot_max_mdd(dict(snapshot), latest_previous)
         latest_data[preset_name] = snapshot
         all_data = latest_data
         ok, err = _gh_save_all_snapshots(all_data, latest_sha)
@@ -672,6 +812,39 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     except Exception:
         pass
     return ok, err
+
+def _load_all_snapshots_for_display() -> dict:
+    all_data = getattr(st.session_state, "_gh_snapshot_all", None)
+    if isinstance(all_data, dict) and all_data:
+        return all_data
+    all_data, sha = _gh_load_all_snapshots()
+    if all_data:
+        st.session_state._gh_snapshot_all = all_data
+        st.session_state._gh_snapshot_sha = sha
+        return all_data
+    return _load_all_snapshots_fallback(prefer_local=True)
+
+def show_preset_max_mdd_summary() -> None:
+    all_data = _load_all_snapshots_for_display()
+    rows = []
+    for preset_name in _PRESET_NAMES:
+        snapshot = (all_data or {}).get(preset_name, {})
+        if st.session_state.get("active_preset") == preset_name and st.session_state.get("positions_snapshot"):
+            snapshot = st.session_state.positions_snapshot
+        info = _snapshot_max_mdd(snapshot)
+        percent = info.get("percent") if info else None
+        price = info.get("soxlPrice") if info else None
+        rows.append({
+            "프리셋": preset_name,
+            "최고 MDD": f"{float(percent):.2f}%" if percent is not None else "-",
+            "발생일": info.get("date", "-") if info else "-",
+            "SOXL": f"${float(price):.2f}" if price is not None else "-",
+            "갱신": info.get("updatedAt", "-") if info else "-",
+        })
+
+    st.subheader("📉 프리셋별 최고 MDD")
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption("저장된 스냅샷 기준으로 누적됩니다. 실제 예수금이 스냅샷과 다르면 MDD도 그만큼 달라집니다.")
 
 def _copy_seed_increases(seeds: list) -> list:
     """시드증액 목록을 JSON 저장 가능한 형태로 복사."""
@@ -982,21 +1155,13 @@ def _build_portfolio_mdd_records(
     baseline_date = None
 
     if isinstance(snapshot, dict) and snapshot:
-        snapshot_entries = [
-            item for key, item in snapshot.items()
-            if key != "available_cash" and isinstance(item, dict)
-        ]
-        snapshot_dates = [
-            key.split("_", 1)[1]
-            for key in snapshot.keys()
-            if key != "available_cash" and "_" in key and len(key.split("_", 1)) == 2
-        ]
-        if snapshot_entries and snapshot_dates:
+        snapshot_positions = _snapshot_position_items(snapshot)
+        if snapshot_positions:
             baseline_assets = (
                 float(portfolio.get("available_cash", 0.0) or 0.0)
-                + sum(float(item.get("amount", 0.0) or 0.0) for item in snapshot_entries)
+                + sum(float(item.get("amount", 0.0) or 0.0) for _, item in snapshot_positions)
             )
-            baseline_date = max(snapshot_dates)
+            baseline_date = max(key.split("_", 1)[1] for key, _ in snapshot_positions)
 
     if baseline_assets is None:
         invested = float(portfolio.get("total_invested", 0.0) or 0.0)
@@ -1297,6 +1462,8 @@ def show_mobile_settings():
             st.session_state.positions_snapshot = load_preset_snapshot("JSD")
             st.session_state.trader = None
             st.rerun()
+
+    show_preset_max_mdd_summary()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
@@ -2152,9 +2319,21 @@ def show_daily_recommendation():
     )
     mdd_info = st.session_state.trader.calculate_mdd(mdd_records)
     mdd_percent = float(mdd_info.get('mdd_percent', 0.0) or 0.0)
+    max_mdd_info = _snapshot_max_mdd(st.session_state.get('positions_snapshot', {}))
+    if st.session_state.get('active_preset'):
+        updated_snapshot, max_mdd_info, max_mdd_changed = _record_snapshot_max_mdd(
+            st.session_state.active_preset,
+            st.session_state.get('positions_snapshot', {}),
+            mdd_info,
+            recommendation.get('soxl_current_price'),
+        )
+        if max_mdd_changed:
+            st.session_state.positions_snapshot = updated_snapshot
+            ok, err = save_preset_snapshot(st.session_state.active_preset, updated_snapshot)
+            st.session_state._gh_save_result = (ok, err)
     total_shares = sum(p.get('shares', 0) for p in st.session_state.trader.positions)
     
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
         st.metric("📦 보유 포지션", f"{portfolio['positions_count']}개")
@@ -2176,6 +2355,11 @@ def show_daily_recommendation():
     with col5:
         st.metric("💵 총 자산", f"${portfolio['total_portfolio_value']:,.0f}", f"MDD {mdd_percent:.2f}%")
     
+    with col6:
+        max_mdd_percent = float((max_mdd_info or {}).get("percent", 0.0) or 0.0)
+        max_mdd_date = (max_mdd_info or {}).get("date", "")
+        st.metric("📉 최고 MDD", f"{max_mdd_percent:.2f}%" if max_mdd_percent > 0 else "-", max_mdd_date or None)
+
     # 보유 포지션 상세
     if st.session_state.trader.positions:
         st.subheader("📊 보유 포지션 상세")
