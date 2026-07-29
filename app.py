@@ -824,13 +824,62 @@ def _load_all_snapshots_for_display() -> dict:
         return all_data
     return _load_all_snapshots_fallback(prefer_local=True)
 
+def _refresh_preset_max_mdds_for_display(all_data: dict, ttl_seconds: int = 300) -> dict:
+    now_ts = datetime.now().timestamp()
+    cached_at = float(st.session_state.get("_preset_max_mdd_refresh_at") or 0)
+    if cached_at and (now_ts - cached_at) < ttl_seconds:
+        return all_data or {}
+
+    refreshed = dict(all_data or {})
+    results = []
+    for preset_name, preset in get_preset_configs().items():
+        try:
+            previous_snapshot = refreshed.get(preset_name, {})
+            previous_percent = _snapshot_max_mdd_percent(previous_snapshot)
+            current_snapshot, err = _simulate_preset_snapshot(preset_name, preset, previous_snapshot)
+            if err or current_snapshot is None:
+                results.append({"preset": preset_name, "status": "error", "message": err or "snapshot unavailable"})
+                continue
+
+            refreshed[preset_name] = current_snapshot
+            current_percent = _snapshot_max_mdd_percent(current_snapshot)
+            if current_percent > previous_percent:
+                ok, save_err = save_preset_snapshot(preset_name, current_snapshot)
+                results.append({
+                    "preset": preset_name,
+                    "status": "saved" if ok else "save_error",
+                    "message": save_err,
+                })
+            else:
+                results.append({"preset": preset_name, "status": "unchanged"})
+        except Exception as e:
+            results.append({"preset": preset_name, "status": "error", "message": str(e)})
+
+    st.session_state._preset_max_mdd_refresh_at = now_ts
+    st.session_state._preset_max_mdd_refresh_result = results
+    st.session_state._gh_snapshot_all = refreshed
+    return refreshed
+
 def show_preset_max_mdd_summary() -> None:
     all_data = _load_all_snapshots_for_display()
+    needs_refresh = any(
+        not _snapshot_max_mdd((all_data or {}).get(preset_name, {}))
+        for preset_name in _PRESET_NAMES
+    )
+    if needs_refresh:
+        with st.spinner("프리셋별 최고 MDD 계산 중..."):
+            all_data = _refresh_preset_max_mdds_for_display(all_data)
+    else:
+        all_data = _refresh_preset_max_mdds_for_display(all_data)
+
     rows = []
     for preset_name in _PRESET_NAMES:
         snapshot = (all_data or {}).get(preset_name, {})
         if st.session_state.get("active_preset") == preset_name and st.session_state.get("positions_snapshot"):
-            snapshot = st.session_state.positions_snapshot
+            active_snapshot = dict(st.session_state.positions_snapshot)
+            _merge_snapshot_max_mdd(active_snapshot, snapshot)
+            st.session_state.positions_snapshot = active_snapshot
+            snapshot = active_snapshot
         info = _snapshot_max_mdd(snapshot)
         percent = info.get("percent") if info else None
         price = info.get("soxlPrice") if info else None
@@ -845,6 +894,12 @@ def show_preset_max_mdd_summary() -> None:
     st.subheader("📉 프리셋별 최고 MDD")
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     st.caption("저장된 스냅샷 기준으로 누적됩니다. 실제 예수금이 스냅샷과 다르면 MDD도 그만큼 달라집니다.")
+    refresh_errors = [
+        item for item in st.session_state.get("_preset_max_mdd_refresh_result", [])
+        if item.get("status") in ("error", "save_error")
+    ]
+    if refresh_errors:
+        st.caption("일부 프리셋은 계산/저장에 실패해 기존 저장값을 표시했습니다.")
 
 def _copy_seed_increases(seeds: list) -> list:
     """시드증액 목록을 JSON 저장 가능한 형태로 복사."""
