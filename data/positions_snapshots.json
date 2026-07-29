@@ -266,14 +266,14 @@
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "maxMdd": {
-      "percent": 25.3305,
-      "date": "2026-07-28",
-      "updatedAt": "2026-07-29 11:12:32",
+      "percent": 34.6764,
+      "date": "2026-07-29",
+      "updatedAt": "2026-07-29 22:26:59",
       "preset": "JEH2",
-      "value": 4767.35005569458,
+      "value": 4170.6499830627445,
       "peakDate": "2026-07-27",
       "peakValue": 6384.600056304932,
-      "soxlPrice": 109.54
+      "soxlPrice": 91.99
     }
   },
   "JSD": {
