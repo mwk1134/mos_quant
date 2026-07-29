@@ -265,7 +265,17 @@
     "compound_seed": 5400.089848175049,
     "compound_reference_seed": 5400.089848175049,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    "compound_loss_rate": 0.2,
+    "maxMdd": {
+      "percent": 25.3305,
+      "date": "2026-07-28",
+      "updatedAt": "2026-07-29 11:12:32",
+      "preset": "JEH2",
+      "value": 4767.35005569458,
+      "peakDate": "2026-07-27",
+      "peakValue": 6384.600056304932,
+      "soxlPrice": 109.54
+    }
   },
   "JSD": {
     "1_2026-07-01": {
