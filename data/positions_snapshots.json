@@ -332,7 +332,17 @@
     "compound_seed": 34826.72143547058,
     "compound_reference_seed": 34826.72143547058,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    "compound_loss_rate": 0.2,
+    "maxMdd": {
+      "percent": 17.9133,
+      "date": "2026-07-28",
+      "updatedAt": "2026-07-29 11:12:36",
+      "preset": "JSD",
+      "value": 43147.54092399598,
+      "peakDate": "2026-07-27",
+      "peakValue": 52563.38098442078,
+      "soxlPrice": 109.54
+    }
   },
   "_preset_configs": {
     "KMW": {
