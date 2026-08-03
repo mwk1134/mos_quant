@@ -54,6 +54,10 @@
       "2025-10-21",
       "2026-06-21"
     ],
+    "compound_seed": 144908.40697265626,
+    "compound_reference_seed": 144908.40697265626,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2,
     "maxMdd": {
       "percent": 21.2669,
       "date": "2026-07-29",
