@@ -49,11 +49,10 @@
       "round": 7,
       "mode": "SF"
     },
-    "available_cash": 112812.40630126954,
+    "available_cash": 81812.40630126954,
     "processed_seed_dates": [
       "2025-10-21",
-      "2026-06-21",
-      "2026-08-03"
+      "2026-06-21"
     ],
     "maxMdd": {
       "percent": 21.2669,
