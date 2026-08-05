@@ -98,7 +98,7 @@
       "round": 5,
       "mode": "SF"
     },
-    "available_cash": 15895.940389099123,
+    "available_cash": 16329.390279235842,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15"
@@ -116,6 +116,13 @@
       "peakDate": "2026-07-23",
       "peakValue": 35420.99091094971,
       "soxlPrice": 139.9
+    },
+    "pending_buy": {
+      "round": 6,
+      "order_date": "2026-08-05",
+      "quantity": 34,
+      "target_price": 144.79649368286132,
+      "basis_date": "2026-08-04"
     }
   },
   "KMW2": {
