@@ -154,7 +154,14 @@
       "round": 5,
       "mode": "SF"
     },
-    "available_cash": 42693.67073059082,
+    "pending_buy": {
+      "round": 6,
+      "order_date": "2026-08-05",
+      "quantity": 98,
+      "target_price": 144.79649368286132,
+      "basis_date": "2026-08-04"
+    },
+    "available_cash": 43937.750411987305,
     "processed_seed_dates": [],
     "compound_seed": 84176.30196594239,
     "compound_reference_seed": 84176.30196594239,
@@ -169,13 +176,6 @@
       "peakDate": "2026-07-23",
       "peakValue": 96514.19219970703,
       "soxlPrice": 139.9
-    },
-    "pending_buy": {
-      "round": 6,
-      "order_date": "2026-08-05",
-      "quantity": 98,
-      "target_price": 144.79649368286132,
-      "basis_date": "2026-08-04"
     }
   },
   "JEH2": {
