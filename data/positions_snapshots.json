@@ -105,14 +105,14 @@
       "round": 5,
       "mode": "SF"
     },
-    "pending_buy": {
+    "6_2026-08-05": {
+      "shares": 34,
+      "buy_price": 132.07000732421875,
+      "amount": 4490.3802490234375,
       "round": 6,
-      "order_date": "2026-08-05",
-      "quantity": 34,
-      "target_price": 144.79649368286132,
-      "basis_date": "2026-08-04"
+      "mode": "SF"
     },
-    "available_cash": 17629.739949646,
+    "available_cash": 13572.80959075928,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15"
