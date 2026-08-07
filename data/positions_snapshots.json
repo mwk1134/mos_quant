@@ -42,7 +42,14 @@
       "round": 6,
       "mode": "SF"
     },
-    "available_cash": 103503.36949707032,
+    "7_2026-08-06": {
+      "shares": 148,
+      "buy_price": 132.3300018310547,
+      "amount": 19584.840270996094,
+      "round": 7,
+      "mode": "SF"
+    },
+    "available_cash": 83918.52922607423,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"
@@ -60,13 +67,6 @@
       "peakDate": "2026-07-23",
       "peakValue": 171722.82547546388,
       "soxlPrice": 139.9
-    },
-    "pending_buy": {
-      "round": 7,
-      "order_date": "2026-08-06",
-      "quantity": 148,
-      "target_price": 136.69245758056638,
-      "basis_date": "2026-08-05"
     }
   },
   "JEH": {
