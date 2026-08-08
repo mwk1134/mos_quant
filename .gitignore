@@ -38,6 +38,14 @@ Thumbs.db
 # Streamlit
 .streamlit/
 
+# Local Codex workspace
+.codex-remote-attachments/
+.external/
+
+# Generated backtest artifacts
+outputs/
+data/backtest_exports/
+
 # Data files (if sensitive)
 
 *.xlsx

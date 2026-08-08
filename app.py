@@ -1109,6 +1109,59 @@ def sync_active_preset_snapshot_after_seed_change(seed: dict, action: str) -> tu
     st.session_state.positions_snapshot = adjusted_snapshot
     return save_preset_snapshot(preset_name, adjusted_snapshot)
 
+
+def apply_seed_increase(seed: dict) -> None:
+    """확인된 시드증액/인출을 세션, 프리셋 설정, 스냅샷에 반영."""
+    seed_increase = {
+        "date": str(seed.get("date", "")),
+        "amount": float(seed.get("amount", 0) or 0),
+    }
+    seeds = list(st.session_state.get("seed_increases") or [])
+    st.session_state.seed_increases = _copy_seed_increases([*seeds, seed_increase])
+
+    if st.session_state.get("active_preset"):
+        sync_active_preset_config_from_session()
+        st.session_state._preset_config_save_result = save_active_preset_config()
+        sync_active_preset_snapshot_after_seed_change(seed_increase, "add")
+    else:
+        st.session_state.positions_snapshot = {}
+
+    st.session_state.trader = None
+    amount = seed_increase["amount"]
+    if amount > 0:
+        st.session_state._seed_increase_feedback = (
+            "success",
+            f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${amount:,.0f}",
+        )
+    else:
+        st.session_state._seed_increase_feedback = (
+            "warning",
+            f"⚠️ 시드인출이 추가되었습니다: {seed_increase['date']} - ${abs(amount):,.0f}",
+        )
+
+
+@st.dialog("시드증액/인출 적용 확인")
+def confirm_seed_increase(seed: dict) -> None:
+    """입력한 시드 변경을 실제 반영하기 전에 사용자 확인을 받음."""
+    seed_date = str(seed.get("date", ""))
+    amount = float(seed.get("amount", 0) or 0)
+    action_label = "시드증액" if amount > 0 else "시드인출"
+    signed_amount = f"+${amount:,.0f}" if amount > 0 else f"-${abs(amount):,.0f}"
+
+    st.write(f"다음 {action_label}을 적용할까요?")
+    st.markdown(f"**날짜:** {seed_date}  \n**금액:** {signed_amount}")
+    st.caption("적용하면 현재 프리셋 설정과 투자 스냅샷에 즉시 반영됩니다.")
+
+    cancel_col, confirm_col = st.columns(2)
+    with cancel_col:
+        if st.button("취소", use_container_width=True):
+            st.rerun()
+    with confirm_col:
+        if st.button("적용", type="primary", use_container_width=True):
+            apply_seed_increase(seed)
+            st.rerun()
+
+
 def delete_seed_increase(seed_index: int) -> None:
     seeds = list(st.session_state.get("seed_increases") or [])
     if not 0 <= seed_index < len(seeds):
@@ -1534,6 +1587,14 @@ def show_mobile_settings():
     # 시드증액 설정
     st.subheader("💰 시드증액")
 
+    seed_feedback = st.session_state.pop("_seed_increase_feedback", None)
+    if seed_feedback:
+        feedback_type, feedback_message = seed_feedback
+        if feedback_type == "success":
+            st.success(feedback_message)
+        else:
+            st.warning(feedback_message)
+
     preset_config_save_result = st.session_state.get('_preset_config_save_result')
     if preset_config_save_result is not None:
         ok, err = preset_config_save_result
@@ -1578,19 +1639,7 @@ def show_mobile_settings():
                 "date": seed_date.strftime('%Y-%m-%d'),
                 "amount": seed_amount
             }
-            st.session_state.seed_increases.append(seed_increase)
-            if st.session_state.get('active_preset'):
-                sync_active_preset_config_from_session()
-                st.session_state._preset_config_save_result = save_active_preset_config()
-                sync_active_preset_snapshot_after_seed_change(seed_increase, "add")
-            else:
-                st.session_state.positions_snapshot = {}
-            st.session_state.trader = None  # 트레이더 재초기화
-            if seed_amount > 0:
-                st.success(f"✅ 시드증액이 추가되었습니다: {seed_increase['date']} - ${seed_amount:,.0f}")
-            else:
-                st.warning(f"⚠️ 시드인출이 추가되었습니다: {seed_increase['date']} - ${abs(seed_amount):,.0f}")
-            st.rerun()
+            confirm_seed_increase(seed_increase)
         else:
             st.error("❌ 금액을 입력해주세요. (0은 불가)")
     
@@ -1690,7 +1739,7 @@ def show_dashboard():
     
     # 시뮬레이션 실행하여 현재 상태 업데이트
     # 테스트 날짜 오버라이드 고려
-    today_for_calc = datetime.now()
+    today_for_calc = st.session_state.trader.get_today_date()
     if st.session_state.trader and st.session_state.trader.test_today_override:
         today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
     start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -1756,11 +1805,10 @@ def show_dashboard():
         st.info(f"📅 최근 거래일: {latest_trading_day.strftime('%Y-%m-%d (%A)')}")
     
     with col2:
-        is_market_closed = st.session_state.trader.is_market_closed(datetime.now())
-        if is_market_closed:
-            st.warning("🚫 현재 시장 휴장")
-        else:
+        if st.session_state.trader.is_regular_session_open_now():
             st.success("✅ 현재 시장 개장")
+        else:
+            st.warning("🚫 현재 시장 폐장")
     
     # 10/10일 매수 조건 확인 정보 표시
     if latest_trading_day.strftime('%Y-%m-%d') == '2025-10-10':
@@ -1860,7 +1908,7 @@ def show_daily_recommendation():
     
     # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
     # 테스트 날짜 오버라이드 고려
-    today_for_calc = datetime.now()
+    today_for_calc = st.session_state.trader.get_today_date()
     if st.session_state.trader and st.session_state.trader.test_today_override:
         today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
     start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -2320,7 +2368,7 @@ def show_daily_recommendation():
                 mode_name = "안전모드" if mode == "SF" else "공세모드"
                 
                 # 손절 예정일 계산
-                config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+                config = st.session_state.trader.get_position_config(pos)
                 stop_loss_date = ""
                 if buy_date_dt:
                     stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
@@ -2422,10 +2470,12 @@ def show_daily_recommendation():
         positions_data = []
         for pos in st.session_state.trader.positions:
             # 테스트 날짜 오버라이드 고려
-            today_for_hold_days = datetime.now()
+            today_for_hold_days = st.session_state.trader.get_today_date()
             if st.session_state.trader and st.session_state.trader.test_today_override:
                 today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
-            hold_days = (today_for_hold_days - pos['buy_date']).days
+            hold_days = st.session_state.trader.count_trading_days(
+                pos['buy_date'], today_for_hold_days
+            )
             current_value = pos['shares'] * recommendation['soxl_current_price']
             pnl = current_value - pos['amount']
             pnl_rate = (pnl / pos['amount']) * 100
@@ -2444,7 +2494,7 @@ def show_daily_recommendation():
             mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
             
             # 매도 목표가 계산
-            position_config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+            position_config = st.session_state.trader.get_position_config(pos)
             target_sell_price = pos['buy_price'] * (1 + position_config['sell_threshold'] / 100)
             
             positions_data.append({
@@ -2581,7 +2631,7 @@ def show_portfolio():
     
     # 시뮬레이션 실행 - 투자시작일 기준으로 재계산
     # 테스트 날짜 오버라이드 고려
-    today_for_calc = datetime.now()
+    today_for_calc = st.session_state.trader.get_today_date()
     if st.session_state.trader and st.session_state.trader.test_today_override:
         today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
     start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -2679,10 +2729,12 @@ def show_portfolio():
         positions_data = []
         for pos in st.session_state.trader.positions:
             # 테스트 날짜 오버라이드 고려
-            today_for_hold_days = datetime.now()
+            today_for_hold_days = st.session_state.trader.get_today_date()
             if st.session_state.trader and st.session_state.trader.test_today_override:
                 today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
-            hold_days = (today_for_hold_days - pos['buy_date']).days
+            hold_days = st.session_state.trader.count_trading_days(
+                pos['buy_date'], today_for_hold_days
+            )
             current_value = pos['shares'] * current_price if 'current_price' in locals() else pos['amount']
             pnl = current_value - pos['amount']
             pnl_rate = (pnl / pos['amount']) * 100

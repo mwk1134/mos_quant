@@ -525,7 +525,7 @@ def show_dashboard():
     
     # 시뮬레이션 실행하여 현재 상태 업데이트
     # 테스트 날짜 오버라이드 고려
-    today_for_calc = datetime.now()
+    today_for_calc = st.session_state.trader.get_today_date()
     if st.session_state.trader and st.session_state.trader.test_today_override:
         today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
     start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -587,11 +587,10 @@ def show_dashboard():
         st.info(f"📅 최근 거래일: {latest_trading_day.strftime('%Y-%m-%d (%A)')}")
     
     with col2:
-        is_market_closed = st.session_state.trader.is_market_closed(datetime.now())
-        if is_market_closed:
-            st.warning("🚫 현재 시장 휴장")
-        else:
+        if st.session_state.trader.is_regular_session_open_now():
             st.success("✅ 현재 시장 개장")
+        else:
+            st.warning("🚫 현재 시장 폐장")
     
     # 10/10일 매수 조건 확인 정보 표시
     if latest_trading_day.strftime('%Y-%m-%d') == '2025-10-10':
@@ -677,7 +676,7 @@ def show_daily_recommendation():
     
     # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
     # 테스트 날짜 오버라이드 고려
-    today_for_calc = datetime.now()
+    today_for_calc = st.session_state.trader.get_today_date()
     if st.session_state.trader and st.session_state.trader.test_today_override:
         today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
     start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -864,7 +863,7 @@ def show_daily_recommendation():
                 mode_name = "안전모드" if mode == "SF" else "공세모드"
                 
                 # 손절 예정일 계산
-                config = st.session_state.trader.sf_config if mode == "SF" else st.session_state.trader.ag_config
+                config = st.session_state.trader.get_position_config(pos)
                 stop_loss_date = ""
                 if buy_date_dt:
                     stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
@@ -929,10 +928,12 @@ def show_daily_recommendation():
         positions_data = []
         for pos in st.session_state.trader.positions:
             # 테스트 날짜 오버라이드 고려
-            today_for_hold_days = datetime.now()
+            today_for_hold_days = st.session_state.trader.get_today_date()
             if st.session_state.trader and st.session_state.trader.test_today_override:
                 today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
-            hold_days = (today_for_hold_days - pos['buy_date']).days
+            hold_days = st.session_state.trader.count_trading_days(
+                pos['buy_date'], today_for_hold_days
+            )
             current_value = pos['shares'] * recommendation['soxl_current_price']
             pnl = current_value - pos['amount']
             pnl_rate = (pnl / pos['amount']) * 100
@@ -1049,7 +1050,7 @@ def show_portfolio():
     
     # 시뮬레이션 실행 - 투자시작일 기준으로 재계산
     # 테스트 날짜 오버라이드 고려
-    today_for_calc = datetime.now()
+    today_for_calc = st.session_state.trader.get_today_date()
     if st.session_state.trader and st.session_state.trader.test_today_override:
         today_for_calc = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
     start_date = st.session_state.session_start_date or (today_for_calc - timedelta(days=365)).strftime('%Y-%m-%d')
@@ -1103,10 +1104,12 @@ def show_portfolio():
         positions_data = []
         for pos in st.session_state.trader.positions:
             # 테스트 날짜 오버라이드 고려
-            today_for_hold_days = datetime.now()
+            today_for_hold_days = st.session_state.trader.get_today_date()
             if st.session_state.trader and st.session_state.trader.test_today_override:
                 today_for_hold_days = datetime.strptime(st.session_state.trader.test_today_override, '%Y-%m-%d')
-            hold_days = (today_for_hold_days - pos['buy_date']).days
+            hold_days = st.session_state.trader.count_trading_days(
+                pos['buy_date'], today_for_hold_days
+            )
             current_value = pos['shares'] * current_price if 'current_price' in locals() else pos['amount']
             pnl = current_value - pos['amount']
             pnl_rate = (pnl / pos['amount']) * 100

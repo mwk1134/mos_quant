@@ -1,6 +1,6 @@
 import requests
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
 from typing import Dict, List, Tuple, Optional
@@ -12,6 +12,17 @@ import sys
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from us_market_calendar import is_us_equity_trading_day
+
+
+try:
+    US_EASTERN_TZ = ZoneInfo("America/New_York")
+except ZoneInfoNotFoundError:  # Windows installations without the IANA tzdata package
+    from dateutil.tz import gettz
+
+    US_EASTERN_TZ = gettz("America/New_York")
 
 
 class SOXLQuantTrader:
@@ -409,35 +420,9 @@ class SOXLQuantTrader:
 
         self.current_mode = None  # RSI 기준에 따라 동적으로 결정
         
-        # 미국 주식 시장 휴장일 목록 (2024-2025)
-        self.us_holidays = [
-            # 2024년 휴장일
-            "2024-01-01",  # New Year's Day
-            "2024-01-15",  # Martin Luther King Jr. Day
-            "2024-02-19",  # Washington's Birthday
-            "2024-03-29",  # Good Friday
-            "2024-05-27",  # Memorial Day
-            "2024-06-19",  # Juneteenth
-            "2024-07-04",  # Independence Day
-            "2024-09-02",  # Labor Day
-            "2024-11-28",  # Thanksgiving Day
-            "2024-12-25",  # Christmas Day
-            
-            # 2025년 휴장일
-            "2025-01-01",  # New Year's Day
-            "2025-01-20",  # Martin Luther King Jr. Day
-            "2025-02-17",  # Washington's Birthday
-            "2025-04-18",  # Good Friday
-            "2025-05-26",  # Memorial Day
-            "2025-06-19",  # Juneteenth
-            "2025-07-04",  # Independence Day
-            "2025-09-01",  # Labor Day
-            "2025-11-27",  # Thanksgiving Day
-            "2025-12-25",  # Christmas Day
-            
-            # 특별 휴장일
-            "2025-01-09",  # Jimmy Carter National Day of Mourning
-        ]
+        # 표준·특별 휴장일은 us_market_calendar에서 연도별로 계산한다.
+        # 이 집합에는 운영 중 임시로 추가할 휴장일(YYYY-MM-DD)만 넣는다.
+        self.us_holidays = set()
         
         # RSI 참조 데이터 확인 및 업데이트 (오류 발생 시에도 계속 진행)
         try:
@@ -684,12 +669,7 @@ class SOXLQuantTrader:
 
     def _get_next_trading_day(self, date_str: str) -> str:
         """주어진 날짜의 다음 거래일 반환"""
-        dt = datetime.strptime(date_str, "%Y-%m-%d").date()
-        for _ in range(14):  # 최대 2주 탐색
-            dt += timedelta(days=1)
-            if not self.is_market_closed(datetime(dt.year, dt.month, dt.day)):
-                return dt.strftime("%Y-%m-%d")
-        return date_str
+        return self.get_trading_date_after(date_str, 1).strftime("%Y-%m-%d")
 
     def _sync_investment_capital_to_latest_total_assets(self) -> None:
         """
@@ -819,12 +799,7 @@ class SOXLQuantTrader:
             return ""
 
         def previous_trading_day(date_obj) -> str:
-            prev_date = date_obj
-            for _ in range(14):
-                prev_date -= timedelta(days=1)
-                if not self.is_market_closed(datetime(prev_date.year, prev_date.month, prev_date.day)):
-                    return prev_date.strftime("%Y-%m-%d")
-            return date_obj.strftime("%Y-%m-%d")
+            return self.get_previous_trading_date(date_obj).strftime("%Y-%m-%d")
 
         def cap_to_before_latest_trading_day(date_text: str) -> str:
             candidate = datetime.strptime(date_text, "%Y-%m-%d").date()
@@ -1312,28 +1287,23 @@ class SOXLQuantTrader:
         Returns:
             bool: 휴장일이면 True, 거래일이면 False
         """
-        # 주말 확인 (토요일=5, 일요일=6)
-        if date.weekday() >= 5:
-            return True
-        
-        # 휴장일 확인
-        date_str = date.strftime("%Y-%m-%d")
-        if date_str in self.us_holidays:
-            return True
-        
-        return False
+        return not self.is_trading_day(date)
 
     def _is_dst_approx(self, dt_utc: datetime) -> bool:
         """미국 서머타임 대략 판별 (3~10월은 DST라고 가정)."""
         return 3 <= dt_utc.month <= 10
 
     def get_us_eastern_now(self) -> datetime:
-        """미국 동부시간(ET) 현재시각 (DST 단순 가정)."""
+        """미국 동부시간(ET) 현재시각."""
         if self.test_today_override:
             # 테스트 날짜 기준 정오(12:00) ET로 간주
             d = datetime.strptime(self.test_today_override, "%Y-%m-%d")
             return datetime(d.year, d.month, d.day, 12, 0, 0)
-        now_utc = datetime.utcnow()
+        if US_EASTERN_TZ is not None:
+            return datetime.now(timezone.utc).astimezone(US_EASTERN_TZ).replace(tzinfo=None)
+
+        # dateutil/zoneinfo 데이터가 모두 없는 비정상 환경에서만 사용하는 보수적 fallback.
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         offset_hours = 4 if self._is_dst_approx(now_utc) else 5
         return now_utc - timedelta(hours=offset_hours)
 
@@ -1345,6 +1315,14 @@ class SOXLQuantTrader:
             return True
         # 16:00 ET 이후면 마감
         return et_now.hour > 16 or (et_now.hour == 16 and et_now.minute >= 0)
+
+    def is_regular_session_open_now(self) -> bool:
+        """Return whether the US regular session is currently open."""
+        et_now = self.get_us_eastern_now()
+        if not self.is_trading_day(et_now):
+            return False
+        minutes = et_now.hour * 60 + et_now.minute
+        return 9 * 60 + 30 <= minutes < 16 * 60
     
     def get_latest_trading_day(self) -> datetime:
         """
@@ -1352,24 +1330,21 @@ class SOXLQuantTrader:
         Returns:
             datetime: 가장 최근 거래일
         """
-        # 미국 시장이 마감되었는지 확인
-        if self.is_regular_session_closed_now():
-            # 시장이 마감되었으면 오늘을 최신 거래일로 사용
-            today = self.get_today_date()
-            print(f"📊 미국 시장 마감됨 - 오늘을 최신 거래일로 사용: {today.strftime('%Y-%m-%d')}")
-            return today
+        et_now = self.get_us_eastern_now()
+        today = datetime(et_now.year, et_now.month, et_now.day)
+
+        if self.is_trading_day(today) and (
+            et_now.hour > 16 or (et_now.hour == 16 and et_now.minute >= 0)
+        ):
+            latest = today
         else:
-            # 시장이 아직 열려있으면 어제를 최신 거래일로 사용
-            yesterday = self.get_today_date() - timedelta(days=1)
-            print(f"📊 미국 시장 개장 중 - 어제를 최신 거래일로 사용: {yesterday.strftime('%Y-%m-%d')}")
-            return yesterday
-        
-        # 데이터를 가져올 수 없는 경우 기존 로직 사용
-        today = self.get_today_date()
-        while self.is_market_closed(today):
-            today -= timedelta(days=1)
-        print(f"⚠️ 데이터 없음, 계산된 최신 거래일: {today.strftime('%Y-%m-%d')}")
-        return today
+            # 장중이면 전 거래일, 주말/휴장일이면 가장 가까운 이전 거래일.
+            latest = today - timedelta(days=1) if self.is_trading_day(today) else today
+            while not self.is_trading_day(latest):
+                latest -= timedelta(days=1)
+
+        print(f"📊 계산된 최신 거래일: {latest.strftime('%Y-%m-%d')}")
+        return latest
         
     def get_stock_data(self, symbol: str, period: str = "1mo") -> Optional[pd.DataFrame]:
         """
@@ -2307,6 +2282,56 @@ class SOXLQuantTrader:
             return 0.0
     
 
+    @staticmethod
+    def _market_date(value) -> datetime:
+        """Normalize a date-like value to a naive midnight datetime."""
+        if isinstance(value, str):
+            parsed = datetime.strptime(value, "%Y-%m-%d")
+            return datetime(parsed.year, parsed.month, parsed.day)
+        if hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+            return datetime(int(value.year), int(value.month), int(value.day))
+        raise TypeError(f"지원하지 않는 날짜 형식입니다: {type(value).__name__}")
+
+    def get_trading_date_after(self, start_date, trading_days: int) -> datetime:
+        """Return the date after ``trading_days`` sessions, excluding start_date."""
+        trading_days = int(trading_days)
+        if trading_days < 0:
+            raise ValueError("trading_days는 0 이상이어야 합니다.")
+
+        current_date = self._market_date(start_date)
+        counted = 0
+        while counted < trading_days:
+            current_date += timedelta(days=1)
+            if self.is_trading_day(current_date):
+                counted += 1
+        return current_date
+
+    def get_previous_trading_date(self, start_date) -> datetime:
+        """Return the closest trading date strictly before start_date."""
+        current_date = self._market_date(start_date) - timedelta(days=1)
+        while not self.is_trading_day(current_date):
+            current_date -= timedelta(days=1)
+        return current_date
+
+    def count_trading_days(self, start_date, end_date) -> int:
+        """Count sessions in ``(start_date, end_date]``.
+
+        This matches the maximum-holding-period rule: the execution date is day
+        zero and the next trading session is holding day one.
+        """
+        start = self._market_date(start_date)
+        end = self._market_date(end_date)
+        if end <= start:
+            return 0
+
+        count = 0
+        current_date = start
+        while current_date < end:
+            current_date += timedelta(days=1)
+            if self.is_trading_day(current_date):
+                count += 1
+        return count
+
     def calculate_stop_loss_date(self, buy_date: datetime, max_hold_days: int) -> str:
         """
         거래일 기준 손절예정일 계산 (주말 + 미국증시 휴장일 제외)
@@ -2320,16 +2345,7 @@ class SOXLQuantTrader:
             # 요일을 한글로 변환
             weekdays_korean = ['월', '화', '수', '목', '금', '토', '일']
             
-            # 거래일 기준으로 날짜 계산 (주말 + 휴장일 제외)
-            current_date = buy_date
-            trading_days_count = 0
-            
-            while trading_days_count < max_hold_days:
-                current_date += timedelta(days=1)
-                
-                # 거래일인지 확인 (주말이 아니고 휴장일이 아닌 경우)
-                if self.is_trading_day(current_date):
-                    trading_days_count += 1
+            current_date = self.get_trading_date_after(buy_date, max_hold_days)
             
             weekday_korean = weekdays_korean[current_date.weekday()]
             return current_date.strftime(f"%m.%d.({weekday_korean})")
@@ -2349,16 +2365,7 @@ class SOXLQuantTrader:
         Returns:
             bool: 거래일이면 True, 아니면 False
         """
-        # 주말 확인 (토요일=5, 일요일=6)
-        if date.weekday() >= 5:
-            return False
-        
-        # 미국증시 휴장일 확인
-        date_str = date.strftime("%Y-%m-%d")
-        if date_str in self.us_holidays:
-            return False
-        
-        return True
+        return is_us_equity_trading_day(date, self.us_holidays)
     
     def can_buy_next_round(self) -> bool:
         """다음 회차 매수 가능 여부 확인"""
@@ -2542,12 +2549,9 @@ class SOXLQuantTrader:
 
             # 2. 손절예정일이 지난 경우 종가 기준으로 LOC 매도
             # 손절예정일 계산 (거래일 기준)
-            stop_loss_date = buy_date
-            trading_days_count = 0
-            while trading_days_count < position_config["max_hold_days"]:
-                stop_loss_date += timedelta(days=1)
-                if self.is_trading_day(stop_loss_date):
-                    trading_days_count += 1
+            stop_loss_date = self.get_trading_date_after(
+                buy_date, position_config["max_hold_days"]
+            )
             
             # 손절예정일이 지났는지 확인 (손절예정일 포함하여 그 이후 날짜)
             # future_data에서 손절예정일 이후 데이터 확인
@@ -2612,23 +2616,15 @@ class SOXLQuantTrader:
             buy_date = position["buy_date"]
 
             # 거래일 기준으로 보유기간 계산
-            hold_days = 0
-            temp_date = buy_date
-            while temp_date < current_date:
-                temp_date += timedelta(days=1)
-                if self.is_trading_day(temp_date):
-                    hold_days += 1
+            hold_days = self.count_trading_days(buy_date, current_date)
             
             # 해당 포지션의 모드 설정 가져오기
             position_config = self.get_position_config(position)
             
             # 손절예정일 계산 (거래일 기준)
-            stop_loss_date = buy_date
-            trading_days_count = 0
-            while trading_days_count < position_config["max_hold_days"]:
-                stop_loss_date += timedelta(days=1)
-                if self.is_trading_day(stop_loss_date):
-                    trading_days_count += 1
+            stop_loss_date = self.get_trading_date_after(
+                buy_date, position_config["max_hold_days"]
+            )
 
             # 해당 포지션의 매수체결가 기준으로 매도가 계산
             position_buy_price = position["buy_price"]
@@ -3593,7 +3589,7 @@ class SOXLQuantTrader:
         print("-" * 40)
         if self.positions:
             for pos in self.positions:
-                hold_days = (datetime.now() - pos['buy_date']).days
+                hold_days = self.count_trading_days(pos['buy_date'], self.get_today_date())
                 current_value = pos['shares'] * rec['soxl_current_price']
                 pnl = current_value - pos['amount']
                 pnl_rate = (pnl / pos['amount']) * 100
@@ -3848,13 +3844,14 @@ class SOXLQuantTrader:
             )
         
         # 날짜 파싱 (종료일은 해당 날짜의 23:59:59로 설정하여 당일 데이터 포함)
+        market_now = self.get_us_eastern_now()
         try:
             start_dt = datetime.strptime(start_date, "%Y-%m-%d")
             if end_date:
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d")
                 end_dt = end_dt.replace(hour=23, minute=59, second=59)
             else:
-                end_dt = datetime.now()
+                end_dt = market_now
         except ValueError:
             return {"error": "날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식으로 입력해주세요."}
         
@@ -3873,7 +3870,7 @@ class SOXLQuantTrader:
         
 
         # SOXL 데이터 가져오기 (2011년부터 데이터 확보)
-        period_days = (datetime.now() - data_start).days
+        period_days = (market_now - data_start).days
         if period_days <= 365:
             period = "1y"
         elif period_days <= 730:
@@ -3898,9 +3895,9 @@ class SOXLQuantTrader:
         
         # 정규장 미마감이고, 마지막 인덱스 날짜가 오늘이면 무조건 제외 (공급사 조기 생성 일봉 방지)
         try:
-            today_date = datetime.now().date()
+            today_date = market_now.date()
             # 오늘이 거래일이고 정규장이 아직 마감되지 않았다면 오늘 데이터 제외
-            if self.is_trading_day(datetime.now()) and not self.is_regular_session_closed_now():
+            if self.is_trading_day(market_now) and not self.is_regular_session_closed_now():
                 if len(soxl_data) > 0 and soxl_data.index.max().date() == today_date:
                     soxl_data = soxl_data[soxl_data.index.date < today_date]
                 if len(qqq_data) > 0 and qqq_data.index.max().date() == today_date:
@@ -3914,7 +3911,7 @@ class SOXLQuantTrader:
             if end_date:
                 end_d = datetime.strptime(end_date, "%Y-%m-%d").date()
                 last_date = soxl_data.index.max().date() if len(soxl_data) > 0 else None
-                today_date = datetime.now().date()
+                today_date = market_now.date()
                 
                 # 종료일이 오늘이 아니거나, 오늘이더라도 정규장이 마감되었다면 포함
                 if last_date and end_d == last_date:
@@ -4589,15 +4586,9 @@ class SOXLQuantTrader:
 
                                             sell_date = sell_date.replace(year=buy_date.year)
                                         
-                                        # 거래일 계산 (주말 + 휴장일 제외)
-                                        holding_days = 0
-                                        temp_date = buy_date
-                                        while temp_date <= sell_date:
-                                            if self.is_trading_day(temp_date):
-                                                holding_days += 1
-                                            temp_date += timedelta(days=1)
-                                        
-                                        record['holding_days'] = holding_days
+                                        record['holding_days'] = self.count_trading_days(
+                                            buy_date, sell_date
+                                        )
                                         
                                     except Exception as e:
                                         print(f"⚠️ 보유기간 계산 오류: {e}")
@@ -5175,7 +5166,7 @@ def main():
                 print("\n💼 현재 포트폴리오:")
                 print("-" * 30)
                 for pos in trader.positions:
-                    hold_days = (datetime.now() - pos['buy_date']).days
+                    hold_days = trader.count_trading_days(pos['buy_date'], trader.get_today_date())
                     print(f"{pos['round']}회차: {pos['shares']}주 @ ${pos['buy_price']:.2f} ({hold_days}일)")
                 print(f"\n현금잔고: ${trader.available_cash:,.0f}")
             else:

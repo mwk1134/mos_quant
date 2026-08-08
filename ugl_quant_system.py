@@ -103,7 +103,7 @@ def main():
                 print("\n💼 현재 포트폴리오:")
                 print("-" * 30)
                 for pos in trader.positions:
-                    hold_days = (datetime.now() - pos['buy_date']).days
+                    hold_days = trader.count_trading_days(pos['buy_date'], trader.get_today_date())
                     print(f"{pos['round']}회차: {pos['shares']}주 @ ${pos['buy_price']:.2f} ({hold_days}일)")
                 print(f"\n현금잔고: ${trader.available_cash:,.0f}")
             else:
@@ -179,4 +179,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
