@@ -656,6 +656,14 @@ def _build_snapshot_from_positions(
     if include_runtime_state:
         current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
         current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
+        try:
+            current_snapshot['as_of_date'] = trader.get_latest_trading_day().strftime("%Y-%m-%d")
+        except Exception:
+            # Keep a prior exact checkpoint if market-calendar data is temporarily
+            # unavailable. Falling back to a wall-clock date could skip trades.
+            previous_as_of = str((previous_snapshot or {}).get('as_of_date') or '').strip()
+            if previous_as_of:
+                current_snapshot['as_of_date'] = previous_as_of
         if not _snapshot_has_positions(current_snapshot):
             try:
                 latest_day = trader.get_latest_trading_day().date()

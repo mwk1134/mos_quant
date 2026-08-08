@@ -843,6 +843,19 @@ class SOXLQuantTrader:
 
         return ""
 
+    def _snapshot_as_of_date(self, snapshot: dict) -> str:
+        """Return the exact market date represented by a persisted runtime state."""
+        if not isinstance(snapshot, dict):
+            return ""
+        value = str(snapshot.get("as_of_date") or "").strip()
+        if not value:
+            return ""
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except Exception:
+            return ""
+        return value
+
     def _snapshot_to_positions_and_state(self, snapshot: dict) -> Tuple[List[dict], str, float]:
         """
         스냅샷을 포지션 리스트와 초기 상태로 변환.
@@ -868,9 +881,15 @@ class SOXLQuantTrader:
                 continue
             dates.append(date_str)
         if not dates:
-            resume_date = self._snapshot_cash_resume_date(snapshot)
+            resume_date = self._snapshot_as_of_date(snapshot) or self._snapshot_cash_resume_date(snapshot)
             return [], resume_date, snapshot_cash if snapshot_cash is not None else self.initial_capital
-        max_snap_date = max(dates)
+        # A position's buy date is not a state checkpoint.  When a portfolio has
+        # been carried for several days without a new buy, resuming from the last
+        # buy date replays the same sales/cash movements on every app refresh.
+        # New snapshots persist the exact date represented by their cash/runtime
+        # state, so simulation resumes strictly after that date.
+        as_of_date = self._snapshot_as_of_date(snapshot)
+        max_snap_date = max(dates + ([as_of_date] if as_of_date else []))
         positions = []
         total_invested = 0.0
         for key, val in snapshot.items():
