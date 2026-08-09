@@ -659,6 +659,7 @@ def _build_snapshot_from_positions(
     trader: SOXLQuantTrader,
     previous_snapshot: dict,
     include_runtime_state: bool = True,
+    preserve_saved_positions: bool = True,
 ) -> dict:
     """트레이더 보유 포지션을 저장용 스냅샷으로 변환. 기존 저장 수량은 우선 보존."""
     current_snapshot = {}
@@ -666,8 +667,8 @@ def _build_snapshot_from_positions(
         buy_date = pos['buy_date']
         buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
         snap_key = f"{pos['round']}_{buy_date_str}"
-        saved = previous_snapshot.get(snap_key) if previous_snapshot else None
-        if not saved and previous_snapshot:
+        saved = previous_snapshot.get(snap_key) if previous_snapshot and preserve_saved_positions else None
+        if not saved and previous_snapshot and preserve_saved_positions:
             for sk, sv in previous_snapshot.items():
                 if sk.endswith(f"_{buy_date_str}"):
                     saved = sv
@@ -700,14 +701,7 @@ def _build_snapshot_from_positions(
         if pending_key and pending_key not in current_snapshot:
             current_snapshot["pending_buy"] = dict(pending_buy)
     if include_runtime_state:
-        if (
-            (previous_snapshot or {}).get('manual_cash_lock')
-            and (previous_snapshot or {}).get('available_cash') is not None
-        ):
-            current_snapshot['available_cash'] = float(previous_snapshot.get('available_cash') or 0.0)
-            current_snapshot['manual_cash_lock'] = True
-        else:
-            current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
+        current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
         current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
         try:
             current_snapshot['as_of_date'] = trader.get_latest_trading_day().strftime("%Y-%m-%d")
@@ -1363,6 +1357,16 @@ def _restore_snapshot_cash_when_positions_unchanged(trader, snapshot: dict) -> b
         return False
     trader.available_cash = float(snapshot.get('available_cash') or 0.0)
     return True
+
+def _sync_recommendation_portfolio_cash(recommendation: dict, trader) -> None:
+    """Keep displayed totals aligned after restoring read-only snapshot cash."""
+    portfolio = (recommendation or {}).get('portfolio')
+    if not isinstance(portfolio, dict):
+        return
+    cash = float(getattr(trader, 'available_cash', 0.0) or 0.0)
+    position_value = float(portfolio.get('total_position_value', 0.0) or 0.0)
+    portfolio['available_cash'] = cash
+    portfolio['total_portfolio_value'] = cash + position_value
 
 # 세션 상태 초기화
 if 'trader' not in st.session_state:
@@ -2043,9 +2047,13 @@ def show_daily_recommendation():
         # Daily recommendation is read-only when the persisted positions did not
         # change. Verification helpers may inspect/rebuild transient positions;
         # they must not silently rewrite the confirmed account cash balance.
-        _restore_snapshot_cash_when_positions_unchanged(
+        cash_restored = _restore_snapshot_cash_when_positions_unchanged(
             st.session_state.trader, snapshot or {}
         )
+        if cash_restored:
+            _sync_recommendation_portfolio_cash(
+                recommendation, st.session_state.trader
+            )
         
         # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)
         # preset일 때: 원본 스냅샷의 수량 유지 (시뮬레이션 결과로 덮어쓰지 않음)
@@ -2321,7 +2329,14 @@ def show_daily_recommendation():
                      (pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])) == buy_date_str)
                     for pos in st.session_state.trader.positions
                 )
-                if not already_exists:
+                if already_exists:
+                    st.warning("⚠️ 이미 저장된 체결입니다. 예수금은 다시 차감하지 않았습니다.")
+                elif confirm_amount > st.session_state.trader.available_cash:
+                    st.error(
+                        f"❌ 예수금 부족: 필요 ${confirm_amount:,.2f}, "
+                        f"보유 ${st.session_state.trader.available_cash:,.2f}"
+                    )
+                else:
                     new_pos = {
                         "round": int(confirm_round),
                         "buy_date": buy_date_dt,
@@ -2331,35 +2346,28 @@ def show_daily_recommendation():
                         "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF')
                     }
                     st.session_state.trader.positions.append(new_pos)
-                
-                # 스냅샷 재구성 및 저장
-                new_snapshot = _build_snapshot_from_positions(
-                    st.session_state.trader,
-                    snapshot_for_btn or {},
-                    include_runtime_state=False,
-                )
-                for pos in st.session_state.trader.positions:
-                    bd = pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])
-                    sk = f"{pos['round']}_{bd}"
-                    new_snapshot[sk] = {
-                        'shares': int(pos['shares']),
-                        'buy_price': float(pos['buy_price']),
-                        'amount': float(pos['amount']),
-                        'round': int(pos['round']),
-                        'mode': str(pos.get('mode') or 'SF'),
-                    }
-                st.session_state.positions_snapshot = new_snapshot
-                if st.session_state.get('active_preset'):
-                    gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
-                    if gh_ok:
-                        st.success(f"✅ {int(confirm_round)}회차 매수 체결이 스냅샷에 저장되었습니다!")
+                    st.session_state.trader.available_cash -= float(confirm_amount)
+
+                    # Explicit fills are the only place where a buy changes cash.
+                    new_snapshot = _build_snapshot_from_positions(
+                        st.session_state.trader,
+                        snapshot_for_btn or {},
+                        include_runtime_state=True,
+                        preserve_saved_positions=False,
+                    )
+                    new_snapshot.pop('manual_cash_lock', None)
+                    st.session_state.positions_snapshot = new_snapshot
+                    if st.session_state.get('active_preset'):
+                        gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
+                        if gh_ok:
+                            st.success(f"✅ {int(confirm_round)}회차 매수 체결이 스냅샷에 저장되었습니다!")
+                        else:
+                            st.warning(f"⚠️ GitHub 저장 실패: {gh_err}")
+                            st.success(f"✅ 세션에는 저장되었습니다. (GitHub 미반영)")
                     else:
-                        st.warning(f"⚠️ GitHub 저장 실패: {gh_err}")
-                        st.success(f"✅ 세션에는 저장되었습니다. (GitHub 미반영)")
-                else:
-                    st.success(f"✅ {int(confirm_round)}회차 매수 체결이 세션 스냅샷에 저장되었습니다.")
-                st.session_state.trader.clear_cache()
-                st.rerun()
+                        st.success(f"✅ {int(confirm_round)}회차 매수 체결이 세션 스냅샷에 저장되었습니다.")
+                    st.session_state.trader.clear_cache()
+                    st.rerun()
     
     with col2:
         st.subheader("🔴 매도 추천")
@@ -2659,17 +2667,13 @@ def show_daily_recommendation():
                         }
                         
                         # 스냅샷을 trader.positions 기준으로 재구성 후 GitHub에 영구 저장 (실제 체결 수량 반영)
-                        current_snapshot = {}
-                        for pos in st.session_state.trader.positions:
-                            p_buy_date = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
-                            snap_key = f"{pos['round']}_{p_buy_date}"
-                            current_snapshot[snap_key] = {
-                                'shares': int(pos['shares']),
-                                'buy_price': float(pos['buy_price']),
-                                'amount': float(pos['amount']),
-                                'round': int(pos['round']),
-                                'mode': str(pos.get('mode') or 'SF'),
-                            }
+                        current_snapshot = _build_snapshot_from_positions(
+                            st.session_state.trader,
+                            st.session_state.get('positions_snapshot', {}) or {},
+                            include_runtime_state=True,
+                            preserve_saved_positions=False,
+                        )
+                        current_snapshot.pop('manual_cash_lock', None)
                         st.session_state.positions_snapshot = current_snapshot
                         gh_ok = True
                         if st.session_state.get('active_preset'):
