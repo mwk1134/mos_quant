@@ -290,6 +290,7 @@ _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
 _PRESET_CONFIGS_KEY = "_preset_configs"
 _PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "JSD")
 _MAX_MDD_KEY = "maxMdd"
+_MDD_CALCULATION_VERSION = "full_history_v1"
 
 def _gh_token() -> str:
     """Streamlit secrets 또는 환경변수에서 GitHub 토큰 가져오기"""
@@ -476,7 +477,15 @@ def _merge_snapshot_max_mdd(snapshot: dict, previous_snapshot: dict) -> dict:
         return snapshot
     current_info = _snapshot_max_mdd(snapshot)
     previous_info = _snapshot_max_mdd(previous_snapshot)
-    if previous_info and previous_info.get("percent", 0.0) > current_info.get("percent", 0.0):
+    current_version = current_info.get("calculationVersion")
+    previous_version = previous_info.get("calculationVersion")
+    if previous_info and not current_info:
+        snapshot[_MAX_MDD_KEY] = previous_info
+    elif (
+        previous_info
+        and current_version == previous_version
+        and previous_info.get("percent", 0.0) > current_info.get("percent", 0.0)
+    ):
         snapshot[_MAX_MDD_KEY] = previous_info
     return snapshot
 
@@ -498,6 +507,9 @@ def _make_max_mdd_record(
         "updatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "preset": str(preset_name or ""),
     }
+    calculation_version = str((mdd_info or {}).get("calculation_version") or "").strip()
+    if calculation_version:
+        record["calculationVersion"] = calculation_version
     if (mdd_info or {}).get("mdd_value") is not None:
         record["value"] = float((mdd_info or {}).get("mdd_value") or 0.0)
     if (mdd_info or {}).get("mdd_peak_date"):
@@ -518,6 +530,12 @@ def _apply_max_mdd_record(snapshot: dict, record: dict) -> bool:
         new_percent = float(record.get("percent", 0.0) or 0.0)
     except Exception:
         new_percent = 0.0
+    current = _snapshot_max_mdd(snapshot)
+    new_version = record.get("calculationVersion")
+    current_version = current.get("calculationVersion")
+    if new_version and new_version != current_version:
+        snapshot[_MAX_MDD_KEY] = record
+        return True
     if new_percent <= _snapshot_max_mdd_percent(snapshot):
         return False
     snapshot[_MAX_MDD_KEY] = record
@@ -591,7 +609,9 @@ def _calculate_preset_full_history_mdd(preset: dict) -> dict:
         records = result.get('daily_records') or []
         if not records:
             return {}
-        return trader.calculate_mdd(records)
+        result = trader.calculate_mdd(records)
+        result["calculation_version"] = _MDD_CALCULATION_VERSION
+        return result
     except Exception:
         return {}
 
@@ -870,15 +890,15 @@ def _refresh_preset_max_mdds_for_display(all_data: dict, ttl_seconds: int = 300)
     for preset_name, preset in get_preset_configs().items():
         try:
             previous_snapshot = refreshed.get(preset_name, {})
-            previous_percent = _snapshot_max_mdd_percent(previous_snapshot)
+            previous_mdd = _snapshot_max_mdd(previous_snapshot)
             current_snapshot, err = _simulate_preset_snapshot(preset_name, preset, previous_snapshot)
             if err or current_snapshot is None:
                 results.append({"preset": preset_name, "status": "error", "message": err or "snapshot unavailable"})
                 continue
 
             refreshed[preset_name] = current_snapshot
-            current_percent = _snapshot_max_mdd_percent(current_snapshot)
-            if current_percent > previous_percent:
+            current_mdd = _snapshot_max_mdd(current_snapshot)
+            if current_mdd != previous_mdd:
                 ok, save_err = save_preset_snapshot(preset_name, current_snapshot)
                 results.append({
                     "preset": preset_name,

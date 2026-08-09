@@ -35,14 +35,7 @@
       "round": 5,
       "mode": "SF"
     },
-    "pending_buy": {
-      "round": 6,
-      "order_date": "2026-08-10",
-      "quantity": 122,
-      "target_price": 145.299,
-      "basis_date": "2026-08-07"
-    },
-    "available_cash": 50970.60861206055,
+    "available_cash": 47806.0,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"
@@ -51,17 +44,7 @@
     "compound_seed": 98015.5,
     "compound_reference_seed": 98015.5,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
-    "maxMdd": {
-      "percent": 29.1806,
-      "date": "2026-07-29",
-      "updatedAt": "2026-08-09 07:05:53",
-      "preset": "KMW",
-      "value": 69349.12067901612,
-      "peakDate": "2026-07-22",
-      "peakValue": 97923.902661438,
-      "soxlPrice": 140.25
-    }
+    "compound_loss_rate": 0.2
   },
   "JEH": {
     "1_2026-07-01": {
@@ -114,17 +97,7 @@
     "compound_seed": 29655.03987640381,
     "compound_reference_seed": 29655.03987640381,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
-    "maxMdd": {
-      "percent": 35.0622,
-      "date": "2026-07-29",
-      "updatedAt": "2026-08-05 08:08:12",
-      "preset": "JEH",
-      "value": 23001.60060638428,
-      "peakDate": "2026-07-23",
-      "peakValue": 35420.99091094971,
-      "soxlPrice": 139.9
-    }
+    "compound_loss_rate": 0.2
   },
   "KMW2": {
     "1_2026-07-01": {
@@ -167,17 +140,7 @@
     "compound_seed": 84176.30196594239,
     "compound_reference_seed": 84176.30196594239,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
-    "maxMdd": {
-      "percent": 35.9278,
-      "date": "2026-07-29",
-      "updatedAt": "2026-08-05 08:08:16",
-      "preset": "KMW2",
-      "value": 61838.761390686035,
-      "peakDate": "2026-07-23",
-      "peakValue": 96514.19219970703,
-      "soxlPrice": 139.9
-    }
+    "compound_loss_rate": 0.2
   },
   "JEH2": {
     "1_2026-07-01": {
@@ -230,17 +193,7 @@
     "compound_seed": 5400.089848175049,
     "compound_reference_seed": 5400.089848175049,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
-    "maxMdd": {
-      "percent": 35.5749,
-      "date": "2026-07-29",
-      "updatedAt": "2026-08-05 08:08:28",
-      "preset": "JEH2",
-      "value": 4170.6499830627445,
-      "peakDate": "2026-07-23",
-      "peakValue": 6473.640034332276,
-      "soxlPrice": 139.9
-    }
+    "compound_loss_rate": 0.2
   },
   "JSD": {
     "1_2026-07-01": {
@@ -284,17 +237,7 @@
     "compound_seed": 34826.72143547058,
     "compound_reference_seed": 34826.72143547058,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
-    "maxMdd": {
-      "percent": 29.0493,
-      "date": "2026-07-29",
-      "updatedAt": "2026-08-09 07:06:00",
-      "preset": "JSD",
-      "value": 24787.190399703977,
-      "peakDate": "2026-07-22",
-      "peakValue": 34935.801102218626,
-      "soxlPrice": 140.25
-    }
+    "compound_loss_rate": 0.2
   },
   "_preset_configs": {
     "KMW": {
