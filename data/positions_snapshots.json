@@ -227,15 +227,27 @@
       "target_price": 145.15875,
       "basis_date": "2026-08-07"
     },
-    "available_cash": 4232.949391021729,
+    "available_cash": 4395.829319610596,
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
     ],
+    "as_of_date": "2026-08-07",
     "compound_seed": 5400.089848175049,
     "compound_reference_seed": 5400.089848175049,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    "compound_loss_rate": 0.2,
+    "maxMdd": {
+      "percent": 22.4703,
+      "date": "2026-07-29",
+      "updatedAt": "2026-08-09 07:25:17",
+      "preset": "JEH2",
+      "calculationVersion": "full_history_v1",
+      "value": 4915.1099592590335,
+      "peakDate": "2026-07-22",
+      "peakValue": 6394.129971160889,
+      "soxlPrice": 140.25
+    }
   },
   "JSD": {
     "1_2026-07-01": {
