@@ -35,14 +35,8 @@
       "round": 5,
       "mode": "SF"
     },
-    "pending_buy": {
-      "round": 6,
-      "order_date": "2026-08-10",
-      "quantity": 122,
-      "target_price": 145.299,
-      "basis_date": "2026-08-07"
-    },
-    "available_cash": 50970.60861206055,
+    "available_cash": 47806.0,
+    "manual_cash_lock": true,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"

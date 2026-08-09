@@ -700,7 +700,14 @@ def _build_snapshot_from_positions(
         if pending_key and pending_key not in current_snapshot:
             current_snapshot["pending_buy"] = dict(pending_buy)
     if include_runtime_state:
-        current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
+        if (
+            (previous_snapshot or {}).get('manual_cash_lock')
+            and (previous_snapshot or {}).get('available_cash') is not None
+        ):
+            current_snapshot['available_cash'] = float(previous_snapshot.get('available_cash') or 0.0)
+            current_snapshot['manual_cash_lock'] = True
+        else:
+            current_snapshot['available_cash'] = float(getattr(trader, 'available_cash', 0.0) or 0.0)
         current_snapshot['processed_seed_dates'] = sorted(list(getattr(trader, 'processed_seed_dates', set()) or []))
         try:
             current_snapshot['as_of_date'] = trader.get_latest_trading_day().strftime("%Y-%m-%d")
