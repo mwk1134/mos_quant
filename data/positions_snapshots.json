@@ -165,12 +165,24 @@
       "round": 5,
       "mode": "SF"
     },
-    "available_cash": 62786.942611694336,
+    "available_cash": 65513.78141784668,
     "processed_seed_dates": [],
+    "as_of_date": "2026-08-07",
     "compound_seed": 84176.30196594239,
     "compound_reference_seed": 84176.30196594239,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    "compound_loss_rate": 0.2,
+    "maxMdd": {
+      "percent": 30.5094,
+      "date": "2026-07-29",
+      "updatedAt": "2026-08-09 07:25:15",
+      "preset": "KMW2",
+      "calculationVersion": "full_history_v1",
+      "value": 64149.04147338867,
+      "peakDate": "2026-07-22",
+      "peakValue": 92313.31341552734,
+      "soxlPrice": 140.25
+    }
   },
   "JEH2": {
     "1_2026-07-01": {
