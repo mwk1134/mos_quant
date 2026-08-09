@@ -569,6 +569,32 @@ def _calculate_trader_live_mdd_info(
     except Exception:
         return {}, None
 
+def _calculate_preset_full_history_mdd(preset: dict) -> dict:
+    """Calculate MDD from the preset's complete daily equity curve."""
+    try:
+        trader = SOXLQuantTrader(
+            initial_capital=preset['initial_capital'],
+            sf_config=st.session_state.get('sf_config'),
+            ag_config=st.session_state.get('ag_config'),
+        )
+        configure_app_trader(trader)
+        trader.session_start_date = preset.get('session_start_date')
+        trader.set_seed_increases(preset.get('seed_increases') or [])
+        if st.session_state.get('test_today_override'):
+            trader.set_test_today(st.session_state.test_today_override)
+        trader.clear_cache()
+        result = trader.simulate_from_start_to_today(
+            preset.get('session_start_date'), quiet=True
+        )
+        if not isinstance(result, dict) or result.get('error'):
+            return {}
+        records = result.get('daily_records') or []
+        if not records:
+            return {}
+        return trader.calculate_mdd(records)
+    except Exception:
+        return {}
+
 def _is_manual_cash_locked_snapshot(snapshot: dict) -> bool:
     return (
         isinstance(snapshot, dict)
@@ -732,11 +758,12 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
         return None, sim_result["error"]
 
     current_snapshot = _build_snapshot_from_positions(temp_trader, previous_snapshot or {})
-    mdd_info, current_price = _calculate_trader_live_mdd_info(
+    _, current_price = _calculate_trader_live_mdd_info(
         temp_trader,
         sim_result,
         current_snapshot,
     )
+    mdd_info = _calculate_preset_full_history_mdd(preset)
     _record_snapshot_max_mdd(preset_name, current_snapshot, mdd_info, current_price)
     return current_snapshot, None
 
@@ -1265,42 +1292,8 @@ def _build_portfolio_mdd_records(
     current_date: str,
     positions: list = None,
 ) -> list:
-    """Build MDD records for the live portfolio card, including snapshot baseline and current value."""
+    """Build MDD records without inventing a historical peak from current cost basis."""
     records = []
-    baseline_assets = None
-    baseline_date = None
-
-    if isinstance(snapshot, dict) and snapshot:
-        snapshot_positions = _snapshot_position_items(snapshot)
-        if snapshot_positions:
-            baseline_assets = (
-                float(portfolio.get("available_cash", 0.0) or 0.0)
-                + sum(float(item.get("amount", 0.0) or 0.0) for _, item in snapshot_positions)
-            )
-            baseline_date = max(key.split("_", 1)[1] for key, _ in snapshot_positions)
-
-    if baseline_assets is None:
-        invested = float(portfolio.get("total_invested", 0.0) or 0.0)
-        if invested > 0:
-            baseline_assets = float(portfolio.get("available_cash", 0.0) or 0.0) + invested
-            if positions:
-                position_dates = []
-                for pos in positions:
-                    buy_date = pos.get("buy_date") if isinstance(pos, dict) else None
-                    if hasattr(buy_date, "strftime"):
-                        position_dates.append(buy_date.strftime("%Y-%m-%d"))
-                    elif buy_date:
-                        position_dates.append(str(buy_date))
-                baseline_date = max(position_dates) if position_dates else current_date
-            else:
-                baseline_date = current_date
-
-    if baseline_assets and baseline_assets > 0:
-        records.append({
-            "date": baseline_date or current_date or datetime.now().strftime("%Y-%m-%d"),
-            "total_assets": baseline_assets,
-            "source": "portfolio_cost_baseline",
-        })
 
     if isinstance(sim_result, dict):
         for record in sim_result.get("daily_records", []) or []:
@@ -1316,6 +1309,33 @@ def _build_portfolio_mdd_records(
         })
 
     return records
+
+def _restore_snapshot_cash_when_positions_unchanged(trader, snapshot: dict) -> bool:
+    """Keep a persisted cash balance immutable during read-only recommendation work."""
+    if not isinstance(snapshot, dict) or snapshot.get('available_cash') is None:
+        return False
+
+    snapshot_positions = {}
+    for key, item in _snapshot_position_items(snapshot):
+        snapshot_positions[key] = (
+            int(item.get('shares', 0) or 0),
+            round(float(item.get('buy_price', 0.0) or 0.0), 8),
+        )
+
+    runtime_positions = {}
+    for pos in getattr(trader, 'positions', []) or []:
+        buy_date = pos.get('buy_date')
+        date_text = buy_date.strftime('%Y-%m-%d') if hasattr(buy_date, 'strftime') else str(buy_date)
+        key = f"{int(pos.get('round', 0) or 0)}_{date_text}"
+        runtime_positions[key] = (
+            int(pos.get('shares', 0) or 0),
+            round(float(pos.get('buy_price', 0.0) or 0.0), 8),
+        )
+
+    if runtime_positions != snapshot_positions:
+        return False
+    trader.available_cash = float(snapshot.get('available_cash') or 0.0)
+    return True
 
 # 세션 상태 초기화
 if 'trader' not in st.session_state:
@@ -1991,6 +2011,13 @@ def show_daily_recommendation():
         # 스냅샷 있으면 preserve_snapshot_shares=True로 모드 재검증 시 수량 덮어쓰기 방지
         recommendation = st.session_state.trader.get_daily_recommendation(
             skip_simulate=True, preserve_snapshot_shares=bool(snapshot)
+        )
+
+        # Daily recommendation is read-only when the persisted positions did not
+        # change. Verification helpers may inspect/rebuild transient positions;
+        # they must not silently rewrite the confirmed account cash balance.
+        _restore_snapshot_cash_when_positions_unchanged(
+            st.session_state.trader, snapshot or {}
         )
         
         # 시뮬레이션 결과를 스냅샷으로 저장 (표시와 동기화 - 매도된 포지션 제거)

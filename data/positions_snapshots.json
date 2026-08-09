@@ -35,14 +35,7 @@
       "round": 5,
       "mode": "SF"
     },
-    "pending_buy": {
-      "round": 6,
-      "order_date": "2026-08-10",
-      "quantity": 122,
-      "target_price": 145.299,
-      "basis_date": "2026-08-07"
-    },
-    "available_cash": 50970.60861206055,
+    "available_cash": 47806.0,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"
@@ -51,17 +44,7 @@
     "compound_seed": 98015.5,
     "compound_reference_seed": 98015.5,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
-    "maxMdd": {
-      "percent": 9.5609,
-      "date": "2026-08-07",
-      "updatedAt": "2026-08-08 14:30:19",
-      "preset": "KMW",
-      "value": 101180.10861206055,
-      "peakDate": "2026-07-23",
-      "peakValue": 111876.47950744629,
-      "soxlPrice": 140.25
-    }
+    "compound_loss_rate": 0.2
   },
   "JEH": {
     "1_2026-07-01": {
