@@ -285,23 +285,9 @@
       "round": 5,
       "mode": "SF"
     },
-    "6_2026-08-10": {
-      "shares": 43,
-      "buy_price": 130.0,
-      "amount": 5590.0,
-      "round": 6,
-      "mode": "AG"
-    },
-    "7_2026-08-11": {
-      "shares": 48,
-      "buy_price": 133.0,
-      "amount": 6384.0,
-      "round": 7,
-      "mode": "AG"
-    },
-    "available_cash": 28755.676577682498,
+    "available_cash": 41692.23691093445,
     "processed_seed_dates": [],
-    "as_of_date": "2026-08-11",
+    "as_of_date": "2026-08-12",
     "compound_seed": 34826.72143547058,
     "compound_reference_seed": 34826.72143547058,
     "compound_profit_rate": 0.7,
