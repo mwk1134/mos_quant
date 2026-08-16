@@ -360,7 +360,23 @@
       "soxlPrice": 140.25
     }
   },
-  "KHW": {},
+  "KHW": {
+    "available_cash": 5638.0,
+    "processed_seed_dates": [],
+    "as_of_date": "2026-08-14",
+    "cash_snapshot_date": "2026-08-13",
+    "compound_seed": 5638.0,
+    "compound_reference_seed": 5638.0,
+    "compound_profit_rate": 0.7,
+    "compound_loss_rate": 0.2,
+    "pending_buy": {
+      "round": 1,
+      "order_date": "2026-08-17",
+      "quantity": 2,
+      "target_price": 150.16819683837892,
+      "basis_date": "2026-08-14"
+    }
+  },
   "_preset_configs": {
     "KMW": {
       "initial_capital": 9000.0,
