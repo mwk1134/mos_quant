@@ -288,7 +288,7 @@ st.markdown("""
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
 _PRESET_CONFIGS_KEY = "_preset_configs"
-_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "JSD")
+_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "JSD", "KHW")
 _MAX_MDD_KEY = "maxMdd"
 _MDD_CALCULATION_VERSION = "full_history_v1"
 
@@ -653,6 +653,7 @@ def get_preset_configs() -> dict:
         "KMW2": st.session_state.kmw2_preset,
         "JEH2": st.session_state.jeh2_preset,
         "JSD": st.session_state.jsd_preset,
+        "KHW": st.session_state.khw_preset,
     }
 
 def _build_snapshot_from_positions(
@@ -1448,6 +1449,13 @@ if 'kmw2_preset' not in st.session_state:
         'seed_increases': [],
         'position_edits': {}
     }
+if 'khw_preset' not in st.session_state:
+    st.session_state.khw_preset = {
+        'initial_capital': 5638.0,
+        'session_start_date': "2026-08-15",
+        'seed_increases': [],
+        'position_edits': {}
+    }
 
 apply_persisted_preset_configs()
 ensure_preset_seed_increase("JEH2", "2026-06-16", 600.0)
@@ -1557,8 +1565,8 @@ def show_mobile_settings():
         max_value=datetime.now()
     )
     
-    # 프리셋 불러오기 버튼 (가로 1줄, 5열)
-    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5 = st.columns(5)
+    # 프리셋 불러오기 버튼 (가로 1줄, 6열)
+    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5, pr_col6 = st.columns(6)
     with pr_col1:
         if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000", use_container_width=True):
             kmw = st.session_state.kmw_preset
@@ -1627,6 +1635,20 @@ def show_mobile_settings():
                 st.session_state.position_edits = {}
             st.session_state.active_preset = "JSD"
             st.session_state.positions_snapshot = load_preset_snapshot("JSD")
+            st.session_state.trader = None
+            st.rerun()
+    with pr_col6:
+        if st.button("KHW", help="초기설정: 5638달러, 시작일 2026/08/15, 시드증액 없음", use_container_width=True):
+            khw = st.session_state.khw_preset
+            st.session_state.initial_capital = khw['initial_capital']
+            st.session_state.session_start_date = khw['session_start_date']
+            st.session_state.seed_increases = _copy_seed_increases(khw['seed_increases'])
+            if 'position_edits' in khw and khw['position_edits']:
+                st.session_state.position_edits = khw['position_edits'].copy()
+            else:
+                st.session_state.position_edits = {}
+            st.session_state.active_preset = "KHW"
+            st.session_state.positions_snapshot = load_preset_snapshot("KHW")
             st.session_state.trader = None
             st.rerun()
 

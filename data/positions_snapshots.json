@@ -360,6 +360,7 @@
       "soxlPrice": 140.25
     }
   },
+  "KHW": {},
   "_preset_configs": {
     "KMW": {
       "initial_capital": 9000.0,
@@ -379,6 +380,12 @@
     "KMW2": {
       "initial_capital": 67612.0,
       "session_start_date": "2026-04-29",
+      "seed_increases": [],
+      "position_edits": {}
+    },
+    "KHW": {
+      "initial_capital": 5638.0,
+      "session_start_date": "2026-08-15",
       "seed_increases": [],
       "position_edits": {}
     }
