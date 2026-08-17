@@ -193,23 +193,16 @@
       "round": 5,
       "mode": "SF"
     },
-    "6_2026-08-13": {
-      "shares": 104,
-      "buy_price": 145.36000061035156,
-      "amount": 15117.440063476562,
+    "pending_buy": {
       "round": 6,
-      "mode": "AG"
+      "order_date": "2026-08-18",
+      "quantity": 97,
+      "target_price": 156.98507873535158,
+      "basis_date": "2026-08-17"
     },
-    "7_2026-08-14": {
-      "shares": 103,
-      "buy_price": 144.9499969482422,
-      "amount": 14929.849685668945,
-      "round": 7,
-      "mode": "AG"
-    },
-    "available_cash": 37805.852478027344,
+    "available_cash": 69172.5622253418,
     "processed_seed_dates": [],
-    "as_of_date": "2026-08-14",
+    "as_of_date": "2026-08-17",
     "compound_seed": 84176.30196594239,
     "compound_reference_seed": 84176.30196594239,
     "compound_profit_rate": 0.7,
@@ -224,13 +217,6 @@
       "peakDate": "2026-07-22",
       "peakValue": 92313.31341552734,
       "soxlPrice": 140.25
-    },
-    "pending_buy": {
-      "round": 8,
-      "order_date": "2026-08-17",
-      "quantity": 11,
-      "target_price": 150.16819683837892,
-      "basis_date": "2026-08-14"
     }
   },
   "JEH2": {
