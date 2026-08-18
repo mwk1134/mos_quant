@@ -1451,8 +1451,8 @@ if 'kmw2_preset' not in st.session_state:
     }
 if 'khw_preset' not in st.session_state:
     st.session_state.khw_preset = {
-        'initial_capital': 5638.0,
-        'session_start_date': "2026-08-15",
+        'initial_capital': 21199.0,
+        'session_start_date': "2026-08-17",
         'seed_increases': [],
         'position_edits': {}
     }
@@ -1638,7 +1638,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with pr_col6:
-        if st.button("KHW", help="초기설정: 5638달러, 시작일 2026/08/15, 시드증액 없음", use_container_width=True):
+        if st.button("KHW", help="초기설정: 21199달러, 시작일 2026/08/17, 시드증액 없음", use_container_width=True):
             khw = st.session_state.khw_preset
             st.session_state.initial_capital = khw['initial_capital']
             st.session_state.session_start_date = khw['session_start_date']
