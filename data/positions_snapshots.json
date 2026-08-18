@@ -312,7 +312,14 @@
     "compound_seed": 21199.0,
     "compound_reference_seed": 21199.0,
     "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2
+    "compound_loss_rate": 0.2,
+    "pending_buy": {
+      "round": 1,
+      "order_date": "2026-08-18",
+      "quantity": 8,
+      "target_price": 156.98508,
+      "basis_date": "2026-08-17"
+    }
   },
   "_preset_configs": {
     "KMW": {
