@@ -278,13 +278,6 @@
     }
   },
   "JSD": {
-    "1_2026-07-01": {
-      "shares": 6,
-      "buy_price": 217.5500030517578,
-      "amount": 1305.3000183105469,
-      "round": 1,
-      "mode": "SF"
-    },
     "2_2026-07-10": {
       "shares": 22,
       "buy_price": 192.25999450683594,
@@ -327,9 +320,16 @@
       "round": 7,
       "mode": "AG"
     },
-    "available_cash": 31280.96676933289,
+    "8_2026-08-20": {
+      "shares": 5,
+      "buy_price": 122.20999908447266,
+      "amount": 611.0499954223633,
+      "round": 8,
+      "mode": "AG"
+    },
+    "available_cash": 31403.17676841736,
     "processed_seed_dates": [],
-    "as_of_date": "2026-08-19",
+    "as_of_date": "2026-08-20",
     "compound_seed": 34826.72143547058,
     "compound_reference_seed": 34826.72143547058,
     "compound_profit_rate": 0.7,
