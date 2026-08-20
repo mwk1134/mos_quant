@@ -213,13 +213,6 @@
     }
   },
   "JEH2": {
-    "1_2026-07-01": {
-      "shares": 1,
-      "buy_price": 217.5500030517578,
-      "amount": 217.5500030517578,
-      "round": 1,
-      "mode": "SF"
-    },
     "2_2026-07-10": {
       "shares": 4,
       "buy_price": 192.25999450683594,
@@ -262,12 +255,12 @@
       "round": 7,
       "mode": "AG"
     },
-    "available_cash": 2989.6293455505374,
+    "available_cash": 3111.83934463501,
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
     ],
-    "as_of_date": "2026-08-19",
+    "as_of_date": "2026-08-20",
     "compound_seed": 5400.089848175049,
     "compound_reference_seed": 5400.089848175049,
     "compound_profit_rate": 0.7,
