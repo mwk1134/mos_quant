@@ -3463,6 +3463,9 @@ class SOXLQuantTrader:
         # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round()
         next_buy_amount = self.calculate_position_size(self.current_round) if can_buy else 0
+        # 추천 계산의 기준 종가일과 실제 주문일을 분리한다. 장 마감 후에는
+        # display_date가 기준 종가일과 같아도 주문은 다음 거래일 주문이다.
+        buy_order_date = self._get_next_trading_day(prev_close_basis_date) if can_buy else None
         
         # 9. 포트폴리오 현황
         total_position_value = sum([pos["shares"] * current_price for pos in self.positions])
@@ -3472,6 +3475,7 @@ class SOXLQuantTrader:
         recommendation = {
             "date": display_date,  # 화면 표시용 날짜 (가능하면 오늘)
             "basis_date": prev_close_basis_date,  # 매수가 계산에 사용된 기준 종가의 날짜
+            "buy_order_date": buy_order_date,  # 실제 매수 주문을 제출할 거래일
             "data_last_date": latest_data_date.strftime("%Y-%m-%d"),  # 확정종가 마지막 날짜
             "market_closed": market_closed,  # 미국 정규장 마감 여부
             "mode": self.current_mode,

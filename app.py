@@ -744,7 +744,11 @@ def _pending_buy_from_recommendation(
         target_amount = float(recommendation["next_buy_amount"])
         basis_date = str(recommendation["basis_date"])
         quantity = int(target_amount / target_price)
-        order_date = trader._get_next_trading_day(basis_date)
+        # 화면에 표시한 주문일과 스냅샷에 저장하는 주문일은 반드시 같아야 한다.
+        order_date = str(
+            recommendation.get("buy_order_date")
+            or trader._get_next_trading_day(basis_date)
+        )
     except Exception:
         return None
     if round_num <= 0 or target_price <= 0 or quantity <= 0:
@@ -2205,10 +2209,13 @@ def show_daily_recommendation():
     # 데이터 기준 상태 표시
     data_last = recommendation.get('data_last_date', '')
     basis_date = recommendation.get('basis_date', '')
+    buy_order_date = recommendation.get('buy_order_date', '')
     market_closed = recommendation.get('market_closed', True)
     market_status = "장 마감" if market_closed else "장중"
     market_icon = "🔴" if not market_closed else "🟢"
-    status_text = f"{market_icon} 미국시장: **{market_status}** · 확정종가: **{data_last}**까지 반영 · 매수/매도 추천: **{basis_date} 종가** 기준"
+    status_text = f"{market_icon} 미국시장: **{market_status}** · 확정종가: **{data_last}**까지 반영 · 추천 계산: **{basis_date} 종가** 기준"
+    if buy_order_date:
+        status_text += f" · 매수 주문일: **{buy_order_date}**"
     st.info(status_text)
     
     # GitHub 스냅샷 저장 결과 표시
@@ -2243,7 +2250,7 @@ def show_daily_recommendation():
         st.metric("💰 SOXL 현재가", f"${recommendation['soxl_current_price']:.2f}")
     
     # 매매 추천
-    st.subheader("📋 오늘의 매매 추천")
+    st.subheader("📋 주문일 기준 매매 추천")
     
     col1, col2 = st.columns(2)
     
@@ -2259,7 +2266,8 @@ def show_daily_recommendation():
             current_config = st.session_state.trader.get_current_config()
             split_ratios = current_config.get("split_ratios", [])
             buy_ratio_pct = split_ratios[buy_round - 1] * 100 if buy_round <= len(split_ratios) else 0
-            st.success(f"✅ 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
+            st.success(f"✅ {buy_order_date} 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
+            st.info(f"📅 주문일: **{buy_order_date}** · 계산 기준: **{basis_date} 종가**")
             st.info(f"💰 매수가: \\${recommendation['buy_price']:.2f} (LOC 주문)")
             st.info(f"💵 매수금액: \\${recommendation['next_buy_amount']:,.0f}")
             inv_base = float(
