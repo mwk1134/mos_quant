@@ -141,6 +141,13 @@
       "peakDate": "2026-07-22",
       "peakValue": 34001.511327209475,
       "soxlPrice": 140.25
+    },
+    "pending_buy": {
+      "round": 8,
+      "order_date": "2026-08-21",
+      "quantity": 4,
+      "target_price": 126.60955905151367,
+      "basis_date": "2026-08-20"
     }
   },
   "KMW2": {
