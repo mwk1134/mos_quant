@@ -411,11 +411,11 @@
       "mode": "AG"
     },
     "pending_buy": {
-      "round": 6,
-      "order_date": "2026-08-25",
-      "quantity": 33,
-      "target_price": 115.16176379394531,
-      "basis_date": "2026-08-24"
+      "round": 5,
+      "order_date": "2026-08-26",
+      "quantity": 26,
+      "target_price": 119.83411810302735,
+      "basis_date": "2026-08-25"
     },
     "available_cash": 11915.969917297363,
     "processed_seed_dates": [],
