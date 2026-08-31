@@ -253,12 +253,12 @@
       "buy_price": 111.34,
       "amount": 111.34,
       "round": 8,
-      "mode": "SF"
+      "mode": "AG"
     },
     "pending_buy": {
-      "round": 6,
+      "round": 7,
       "order_date": "2026-08-31",
-      "quantity": 7,
+      "quantity": 6,
       "target_price": 115.23689620971679,
       "basis_date": "2026-08-28"
     },
