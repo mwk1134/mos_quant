@@ -130,71 +130,64 @@
   },
   "KMW2": {
     "3_2026-07-15": {
-      "shares": 110,
+      "shares": 103,
       "buy_price": 165.5500030517578,
-      "amount": 18210.50033569336,
+      "amount": 17051.650314331055,
       "round": 3,
       "mode": "SF"
     },
     "4_2026-07-22": {
-      "shares": 137,
+      "shares": 128,
       "buy_price": 160.99000549316406,
-      "amount": 22055.630752563477,
+      "amount": 20606.720703125,
       "round": 4,
       "mode": "SF"
     },
     "5_2026-07-23": {
-      "shares": 14,
+      "shares": 13,
       "buy_price": 157.5,
-      "amount": 2205.0,
+      "amount": 2047.5,
       "round": 5,
       "mode": "SF"
     },
-    "8_2026-08-21": {
-      "shares": 13,
-      "buy_price": 120.5999984741211,
-      "amount": 1567.7999801635742,
-      "round": 8,
-      "mode": "AG"
-    },
     "8_2026-08-28": {
-      "shares": 13,
+      "shares": 14,
       "buy_price": 111.33999633789062,
-      "amount": 1447.4199523925781,
+      "amount": 1558.7599487304688,
       "round": 8,
       "mode": "AG"
     },
     "7_2026-08-31": {
-      "shares": 102,
+      "shares": 109,
       "buy_price": 112.79000091552734,
-      "amount": 11504.580093383789,
+      "amount": 12294.11009979248,
       "round": 7,
       "mode": "SF"
     },
-    "available_cash": 60800.5015335083,
+    "7_2026-09-01": {
+      "shares": 108,
+      "buy_price": 105.91000366210938,
+      "amount": 11438.280395507812,
+      "round": 7,
+      "mode": "SF"
+    },
+    "available_cash": 29072.760398864746,
     "processed_seed_dates": [],
-    "as_of_date": "2026-08-31",
-    "compound_seed": 84176.30196594239,
-    "compound_reference_seed": 84176.30196594239,
+    "as_of_date": "2026-09-01",
+    "compound_seed": 91188.09953765872,
+    "compound_reference_seed": 90500.07654876712,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "maxMdd": {
       "percent": 30.5094,
       "date": "2026-07-29",
-      "updatedAt": "2026-08-09 07:25:15",
+      "updatedAt": "2026-09-02 10:17:07",
       "preset": "KMW2",
       "calculationVersion": "full_history_v1",
       "value": 64149.04147338867,
       "peakDate": "2026-07-22",
-      "peakValue": 92313.31341552734,
-      "soxlPrice": 140.25
-    },
-    "pending_buy": {
-      "round": 7,
-      "order_date": "2026-09-01",
-      "quantity": 100,
-      "target_price": 116.73765094757078,
-      "basis_date": "2026-08-31"
+      "peakValue": 95898.71105957031,
+      "soxlPrice": 105.91
     }
   },
   "JEH2": {
