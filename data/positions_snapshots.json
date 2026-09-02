@@ -257,16 +257,16 @@
   },
   "JSD": {
     "3_2026-07-15": {
-      "shares": 43,
+      "shares": 37,
       "buy_price": 165.5500030517578,
-      "amount": 7118.650131225586,
+      "amount": 6125.350112915039,
       "round": 3,
       "mode": "SF"
     },
     "4_2026-07-22": {
-      "shares": 54,
+      "shares": 47,
       "buy_price": 160.99000549316406,
-      "amount": 8693.46029663086,
+      "amount": 7566.530258178711,
       "round": 4,
       "mode": "SF"
     },
@@ -277,13 +277,6 @@
       "round": 5,
       "mode": "SF"
     },
-    "8_2026-08-21": {
-      "shares": 5,
-      "buy_price": 120.5999984741211,
-      "amount": 602.9999923706055,
-      "round": 8,
-      "mode": "AG"
-    },
     "8_2026-08-28": {
       "shares": 5,
       "buy_price": 111.33999633789062,
@@ -292,29 +285,36 @@
       "mode": "AG"
     },
     "7_2026-08-31": {
-      "shares": 42,
+      "shares": 38,
       "buy_price": 112.79000091552734,
-      "amount": 4737.180038452148,
+      "amount": 4286.020034790039,
       "round": 7,
       "mode": "SF"
     },
-    "available_cash": 38786.04662620545,
+    "7_2026-09-01": {
+      "shares": 39,
+      "buy_price": 105.91000366210938,
+      "amount": 4130.490142822266,
+      "round": 7,
+      "mode": "SF"
+    },
+    "available_cash": 12141.540009078977,
     "processed_seed_dates": [],
-    "as_of_date": "2026-08-31",
-    "compound_seed": 34826.72143547058,
-    "compound_reference_seed": 34826.72143547058,
+    "as_of_date": "2026-09-01",
+    "compound_seed": 32730.51362418366,
+    "compound_reference_seed": 32730.51362418366,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "maxMdd": {
       "percent": 29.0493,
       "date": "2026-07-29",
-      "updatedAt": "2026-08-09 07:25:20",
+      "updatedAt": "2026-09-02 10:17:18",
       "preset": "JSD",
       "calculationVersion": "full_history_v1",
       "value": 24787.190399703977,
       "peakDate": "2026-07-22",
-      "peakValue": 34935.801102218626,
-      "soxlPrice": 140.25
+      "peakValue": 36222.89024406433,
+      "soxlPrice": 105.91
     }
   },
   "KHW": {
