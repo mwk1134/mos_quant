@@ -1,55 +1,54 @@
 {
   "KMW": {
     "3_2026-07-15": {
-      "shares": 119,
+      "shares": 90,
       "buy_price": 165.5500030517578,
-      "amount": 19700.45036315918,
+      "amount": 14899.500274658203,
       "round": 3,
       "mode": "SF"
     },
     "4_2026-07-22": {
-      "shares": 148,
+      "shares": 113,
       "buy_price": 160.99000549316406,
-      "amount": 23826.52081298828,
+      "amount": 18191.87062072754,
       "round": 4,
       "mode": "SF"
     },
     "5_2026-07-23": {
-      "shares": 15,
+      "shares": 12,
       "buy_price": 157.5,
-      "amount": 2362.5,
+      "amount": 1890.0,
       "round": 5,
       "mode": "SF"
     },
-    "8_2026-08-21": {
-      "shares": 15,
-      "buy_price": 120.5999984741211,
-      "amount": 1808.9999771118164,
-      "round": 8,
-      "mode": "AG"
-    },
     "8_2026-08-28": {
-      "shares": 15,
+      "shares": 12,
       "buy_price": 111.33999633789062,
-      "amount": 1670.0999450683594,
+      "amount": 1336.0799560546875,
       "round": 8,
       "mode": "AG"
     },
     "7_2026-08-31": {
-      "shares": 119,
+      "shares": 97,
       "buy_price": 112.79000091552734,
-      "amount": 13422.010108947754,
+      "amount": 10940.630088806152,
       "round": 7,
       "mode": "SF"
     },
-    "available_cash": 41700.170150756836,
+    "7_2026-09-01": {
+      "shares": 95,
+      "buy_price": 105.91000366210938,
+      "amount": 10061.45034790039,
+      "round": 7,
+      "mode": "SF"
+    },
+    "available_cash": 30195.799901123057,
     "processed_seed_dates": [
-      "2025-10-21",
-      "2026-06-21"
+      "2025-10-21"
     ],
-    "as_of_date": "2026-08-31",
-    "compound_seed": 98015.5,
-    "compound_reference_seed": 98015.5,
+    "as_of_date": "2026-09-01",
+    "compound_seed": 79706.19643423466,
+    "compound_reference_seed": 79935.01244375615,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "maxMdd": {
@@ -62,13 +61,6 @@
       "peakDate": "2026-07-22",
       "peakValue": 97923.902661438,
       "soxlPrice": 140.25
-    },
-    "pending_buy": {
-      "round": 7,
-      "order_date": "2026-09-01",
-      "quantity": 117,
-      "target_price": 116.73765094757078,
-      "basis_date": "2026-08-31"
     }
   },
   "JEH": {
