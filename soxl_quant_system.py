@@ -1065,6 +1065,9 @@ class SOXLQuantTrader:
         """
         스냅샷을 기반으로 스냅샷 최신일 이후만 시뮬레이션. 스냅샷에 없는 회차는 생성되지 않음.
         """
+        if not isinstance(snapshot, dict) or not snapshot:
+            return {"error": "기존 스냅샷이 비어 있어 전체 재시뮬레이션을 중단했습니다."}
+
         positions, max_snap_date, available_cash = self._snapshot_to_positions_and_state(snapshot)
         if not positions:
             snapshot_cash = self._snapshot_available_cash(snapshot)
@@ -1081,7 +1084,7 @@ class SOXLQuantTrader:
                     return {"from_snapshot": True, "max_snap_date": max_snap_date, "cash_only": True}
                 available_cash = snapshot_cash
             else:
-                return self.simulate_from_start_to_today(original_start_date, quiet)
+                return {"error": "체결 포지션과 예수금이 없는 스냅샷은 자동 복원할 수 없습니다."}
 
         # [버그픽스] 스냅샷에 mode가 저장돼있지 않은 과거 포지션은 매수일 주간 RSI로 재계산.
         # 이 작업을 run_backtest 호출 전에 수행해, 재시뮬 매도조건 체크가 올바른 모드(SF/AG)로

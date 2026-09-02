@@ -69,6 +69,21 @@ class PendingBuyQuantityTests(unittest.TestCase):
 
         self.assertIsNone(self.trader._pending_buy_from_snapshot(snapshot))
 
+    def test_empty_snapshot_never_falls_back_to_full_resimulation(self):
+        with patch.object(
+            self.trader,
+            "simulate_from_start_to_today",
+            side_effect=AssertionError("full resimulation must not run"),
+        ):
+            result = self.trader.simulate_from_snapshot_to_today(
+                {},
+                "2025-08-27",
+                quiet=True,
+            )
+
+        self.assertIn("error", result)
+        self.assertIn("스냅샷", result["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

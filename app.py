@@ -288,7 +288,7 @@ st.markdown("""
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
 _PRESET_CONFIGS_KEY = "_preset_configs"
-_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "JSD", "KHW")
+_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "KHW")
 _MAX_MDD_KEY = "maxMdd"
 _MDD_CALCULATION_VERSION = "full_history_v1"
 
@@ -652,7 +652,6 @@ def get_preset_configs() -> dict:
         "JEH": st.session_state.jeh_preset,
         "KMW2": st.session_state.kmw2_preset,
         "JEH2": st.session_state.jeh2_preset,
-        "JSD": st.session_state.jsd_preset,
         "KHW": st.session_state.khw_preset,
     }
 
@@ -763,6 +762,9 @@ def _pending_buy_from_recommendation(
 
 def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
     """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
+    if not previous_snapshot:
+        return None, "기존 스냅샷을 불러오지 못해 자동 갱신을 중단했습니다."
+
     temp_trader = SOXLQuantTrader(
         initial_capital=preset['initial_capital'],
         sf_config=st.session_state.get('sf_config'),
@@ -776,10 +778,7 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
     temp_trader.clear_cache()
 
     start_date = preset.get('session_start_date')
-    if previous_snapshot:
-        sim_result = temp_trader.simulate_from_snapshot_to_today(previous_snapshot, start_date, quiet=True)
-    else:
-        sim_result = temp_trader.simulate_from_start_to_today(start_date, quiet=True)
+    sim_result = temp_trader.simulate_from_snapshot_to_today(previous_snapshot, start_date, quiet=True)
     if sim_result and "error" in sim_result:
         return None, sim_result["error"]
 
@@ -799,6 +798,13 @@ def auto_save_all_preset_snapshots() -> list:
     for preset_name, preset in get_preset_configs().items():
         try:
             previous_snapshot = load_preset_snapshot(preset_name)
+            if not previous_snapshot:
+                results.append({
+                    "preset": preset_name,
+                    "status": "missing_snapshot",
+                    "message": "기존 스냅샷을 불러오지 못해 자동 저장을 건너뛰었습니다.",
+                })
+                continue
             current_snapshot, err = _simulate_preset_snapshot(preset_name, preset, previous_snapshot)
             if err:
                 results.append({"preset": preset_name, "status": "error", "message": err})
@@ -896,6 +902,13 @@ def _refresh_preset_max_mdds_for_display(all_data: dict, ttl_seconds: int = 300)
     for preset_name, preset in get_preset_configs().items():
         try:
             previous_snapshot = refreshed.get(preset_name, {})
+            if not previous_snapshot:
+                results.append({
+                    "preset": preset_name,
+                    "status": "missing_snapshot",
+                    "message": "기존 스냅샷을 불러오지 못해 MDD 자동 갱신을 건너뛰었습니다.",
+                })
+                continue
             previous_mdd = _snapshot_max_mdd(previous_snapshot)
             current_snapshot, err = _simulate_preset_snapshot(preset_name, preset, previous_snapshot)
             if err or current_snapshot is None:
@@ -1007,6 +1020,10 @@ def apply_persisted_preset_configs() -> None:
     if st.session_state.get("_preset_configs_loaded"):
         return
     persisted = load_persisted_preset_configs()
+    if not persisted:
+        # Secrets/네트워크가 복구된 뒤 다음 rerun에서 다시 읽는다. 빈 결과를
+        # 로드 완료로 고정하면 기본 프리셋 설정으로 전체 재시뮬레이션될 수 있다.
+        return
     for preset_name, persisted_config in persisted.items():
         key = _preset_state_key(preset_name)
         if key not in st.session_state or not isinstance(persisted_config, dict):
@@ -1416,14 +1433,10 @@ if 'kmw_preset' not in st.session_state:
     st.session_state.kmw_preset = {
         'initial_capital': 9000.0,
         'session_start_date': "2025-08-27",
-        'seed_increases': [{"date": "2025-10-21", "amount": 31000.0}],
-        'position_edits': {}  # 포지션 수정 정보 저장
-    }
-if 'jsd_preset' not in st.session_state:
-    st.session_state.jsd_preset = {
-        'initial_capital': 17300.0,
-        'session_start_date': "2025-10-30",
-        'seed_increases': [],
+        'seed_increases': [
+            {"date": "2025-10-21", "amount": 31000.0},
+            {"date": "2026-06-21", "amount": 11293.0},
+        ],
         'position_edits': {}  # 포지션 수정 정보 저장
     }
 if 'jeh_preset' not in st.session_state:
@@ -1462,6 +1475,7 @@ if 'khw_preset' not in st.session_state:
     }
 
 apply_persisted_preset_configs()
+ensure_preset_seed_increase("KMW", "2026-06-21", 11293.0)
 ensure_preset_seed_increase("JEH2", "2026-06-16", 600.0)
 
 def login_page():
@@ -1569,10 +1583,10 @@ def show_mobile_settings():
         max_value=datetime.now()
     )
     
-    # 프리셋 불러오기 버튼 (가로 1줄, 6열)
-    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5, pr_col6 = st.columns(6)
+    # 프리셋 불러오기 버튼 (가로 1줄, 5열)
+    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5 = st.columns(5)
     with pr_col1:
-        if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000", use_container_width=True):
+        if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000, 2026/06/21 +11,293", use_container_width=True):
             kmw = st.session_state.kmw_preset
             st.session_state.initial_capital = kmw['initial_capital']
             st.session_state.session_start_date = kmw['session_start_date']
@@ -1628,20 +1642,6 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with pr_col5:
-        if st.button("JSD", help="초기설정: 17300달러, 시작일 2025/10/30, 시드증액 없음", use_container_width=True):
-            jsd = st.session_state.jsd_preset
-            st.session_state.initial_capital = jsd['initial_capital']
-            st.session_state.session_start_date = jsd['session_start_date']
-            st.session_state.seed_increases = _copy_seed_increases(jsd['seed_increases'])
-            if 'position_edits' in jsd and jsd['position_edits']:
-                st.session_state.position_edits = jsd['position_edits'].copy()
-            else:
-                st.session_state.position_edits = {}
-            st.session_state.active_preset = "JSD"
-            st.session_state.positions_snapshot = load_preset_snapshot("JSD")
-            st.session_state.trader = None
-            st.rerun()
-    with pr_col6:
         if st.button("KHW", help="초기설정: 21199달러, 시작일 2026/08/17, 시드증액 없음", use_container_width=True):
             khw = st.session_state.khw_preset
             st.session_state.initial_capital = khw['initial_capital']
@@ -1990,6 +1990,14 @@ def show_daily_recommendation():
                     st.session_state.positions_snapshot = data.get(st.session_state.active_preset, {})
             except Exception:
                 pass
+
+        if not st.session_state.positions_snapshot:
+            st.error(
+                "프리셋 스냅샷을 불러오지 못했습니다. 실제 체결 수량 보호를 위해 "
+                "전체 재시뮬레이션과 자동 저장을 중단합니다."
+            )
+            st.caption("Streamlit Secrets의 GITHUB_TOKEN과 GitHub 연결 상태를 확인한 뒤 다시 시도해주세요.")
+            return
     
     # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
     # 테스트 날짜 오버라이드 고려
