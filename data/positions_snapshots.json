@@ -302,6 +302,13 @@
       "peakDate": "2026-08-27",
       "peakValue": 21554.320251464844,
       "soxlPrice": 105.91
+    },
+    "pending_buy": {
+      "round": 5,
+      "order_date": "2026-09-03",
+      "quantity": 5,
+      "target_price": 110.07224842071533,
+      "basis_date": "2026-09-02"
     }
   },
   "_preset_configs": {
