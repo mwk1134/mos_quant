@@ -1,5 +1,7 @@
 import requests
 import json
+import time
+from threading import RLock
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
@@ -15,6 +17,18 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from us_market_calendar import is_us_equity_trading_day
+
+
+# Market data is identical for every preset.  Keep one process-wide cache so a
+# preset switch (which creates a new trader instance) does not immediately hit
+# Yahoo again.  The lock only protects the small dictionaries; network calls
+# are intentionally made outside it.
+_SHARED_STOCK_DATA_CACHE = {}
+_SHARED_STOCK_DATA_RETRY_AFTER = {}
+_SHARED_STOCK_DATA_CACHE_LOCK = RLock()
+_STOCK_DATA_CACHE_TTL_SECONDS = 300
+_STOCK_DATA_RETRY_COOLDOWN_SECONDS = 60
+_STOCK_DATA_STALE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
 try:
@@ -394,20 +408,30 @@ class SOXLQuantTrader:
             print(f"[ERROR] RSI 참조 파일 업데이트 오류: {e}")
             return False
     
-    def __init__(self, initial_capital: float = 40000, sf_config: Optional[Dict] = None, ag_config: Optional[Dict] = None):
+    def __init__(
+        self,
+        initial_capital: float = 40000,
+        sf_config: Optional[Dict] = None,
+        ag_config: Optional[Dict] = None,
+        auto_update_rsi: bool = True,
+    ):
         """
         초기화
         Args:
             initial_capital: 투자원금 (기본값: 40000달러)
             sf_config: SF 모드 설정 (None이면 기본값 사용)
             ag_config: AG 모드 설정 (None이면 기본값 사용)
+            auto_update_rsi: 생성자에서 RSI 참조 파일 자동 갱신 여부
         """
         self.initial_capital = initial_capital
         self.ticker = "SOXL"  # SHNYQuantTrader가 "SHNY"로 오버라이드
 
         # 성능 최적화를 위한 캐시
-        self._stock_data_cache = {}  # 주식 데이터 캐시
+        # 프리셋 전환으로 인스턴스가 바뀌어도 동일한 시세를 재사용한다.
+        self._stock_data_cache = _SHARED_STOCK_DATA_CACHE
+        self._stock_data_retry_after = _SHARED_STOCK_DATA_RETRY_AFTER
         self._simulation_cache = {}  # 시뮬레이션 결과 캐시
+        self._stock_data_fallbacks = {}
         
         # 데이터 경고 저장 (Close가 None인 날짜들)
         self._data_warnings = []
@@ -424,17 +448,20 @@ class SOXLQuantTrader:
         # 이 집합에는 운영 중 임시로 추가할 휴장일(YYYY-MM-DD)만 넣는다.
         self.us_holidays = set()
         
-        # RSI 참조 데이터 확인 및 업데이트 (오류 발생 시에도 계속 진행)
-        try:
-            if not self.check_and_update_rsi_data():
-                print("[INFO] RSI 참조 데이터 업데이트 중...")
-                if self.update_rsi_reference_file():
-                    print("[SUCCESS] RSI 참조 데이터 업데이트 완료")
-                else:
-                    print("[ERROR] RSI 참조 데이터 업데이트 실패")
-        except Exception as e:
-            # RSI 업데이트 실패해도 백테스트는 계속 진행
-            print(f"[WARNING] RSI 업데이트 중 오류 발생 (무시하고 계속 진행): {str(e)[:100]}")
+        # CLI 호환을 위해 기본값은 유지하되, Streamlit은 False로 생성한 뒤 세션
+        # 단위로 한 번만 갱신한다. 생성자와 앱에서 같은 15년 데이터를 중복 요청하던
+        # 것이 Yahoo 호출 폭증의 원인이었다.
+        if auto_update_rsi:
+            try:
+                if not self.check_and_update_rsi_data():
+                    print("[INFO] RSI 참조 데이터 업데이트 중...")
+                    if self.update_rsi_reference_file():
+                        print("[SUCCESS] RSI 참조 데이터 업데이트 완료")
+                    else:
+                        print("[ERROR] RSI 참조 데이터 업데이트 실패")
+            except Exception as e:
+                # RSI 업데이트 실패해도 백테스트는 계속 진행
+                print(f"[WARNING] RSI 업데이트 중 오류 발생 (무시하고 계속 진행): {str(e)[:100]}")
         
         # SF모드 설정 (사용자 지정 또는 기본값)
         if sf_config is not None:
@@ -1367,6 +1394,90 @@ class SOXLQuantTrader:
 
         print(f"📊 계산된 최신 거래일: {latest.strftime('%Y-%m-%d')}")
         return latest
+
+    def _required_cached_market_date(self, symbol: str):
+        """Oldest market date that is still safe for a temporary fallback."""
+        if str(symbol).upper() != "QQQ":
+            return self.get_latest_trading_day().date()
+
+        # QQQ is used only for the completed weekly RSI signal.  During the
+        # current week, data through the most recently completed Friday is
+        # sufficient; on Friday itself that Friday counts only after close.
+        effective_today = self.get_today_date()
+        days_since_friday = (effective_today.weekday() - 4) % 7
+        if days_since_friday == 0 and not self.is_regular_session_closed_now():
+            days_since_friday = 7
+        required = effective_today - timedelta(days=days_since_friday)
+        while not self.is_trading_day(required):
+            required -= timedelta(days=1)
+        return required.date()
+
+    def _can_use_stale_stock_data(
+        self,
+        symbol: str,
+        cached_data: Optional[pd.DataFrame],
+        cache_time: Optional[datetime],
+        current_time: datetime,
+    ) -> bool:
+        if cached_data is None or cache_time is None or len(cached_data) == 0:
+            return False
+        age_seconds = (current_time - cache_time).total_seconds()
+        if age_seconds < 0 or age_seconds > _STOCK_DATA_STALE_MAX_AGE_SECONDS:
+            return False
+        return self._stock_data_covers_required_market_date(symbol, cached_data)
+
+    def _stock_data_covers_required_market_date(
+        self,
+        symbol: str,
+        stock_data: Optional[pd.DataFrame],
+    ) -> bool:
+        if stock_data is None or len(stock_data) == 0:
+            return False
+        try:
+            latest_market_date = pd.Timestamp(stock_data.index.max()).date()
+            return latest_market_date >= self._required_cached_market_date(symbol)
+        except Exception:
+            return False
+
+    def _drop_unfinished_daily_bar(self, stock_data: pd.DataFrame) -> pd.DataFrame:
+        """Never share an in-progress current-session daily candle."""
+        if stock_data is None or len(stock_data) == 0:
+            return stock_data
+        try:
+            et_now = self.get_us_eastern_now()
+            if self.is_trading_day(et_now) and not self.is_regular_session_closed_now():
+                if pd.Timestamp(stock_data.index.max()).date() == et_now.date():
+                    return stock_data[stock_data.index.date < et_now.date()]
+        except Exception:
+            pass
+        return stock_data
+
+    def _use_stale_stock_data(
+        self,
+        cache_key: str,
+        symbol: str,
+        period: str,
+        cached_data: pd.DataFrame,
+        cache_time: datetime,
+        reason: str,
+    ) -> pd.DataFrame:
+        latest_date = pd.Timestamp(cached_data.index.max()).strftime("%Y-%m-%d")
+        self._stock_data_fallbacks[cache_key] = {
+            "symbol": symbol,
+            "period": period,
+            "latest_date": latest_date,
+            "cached_at": cache_time.isoformat(timespec="seconds"),
+            "reason": reason,
+        }
+        print(
+            f"⚠️ {symbol} 실시간 조회 실패로 마지막 정상 데이터 사용 "
+            f"(시장 기준일: {latest_date}, 기간: {period})"
+        )
+        return cached_data.copy(deep=True)
+
+    def get_stock_data_fallbacks(self) -> List[Dict]:
+        """Return market-data fallbacks used by this trader's current run."""
+        return list(self._stock_data_fallbacks.values())
         
     def get_stock_data(self, symbol: str, period: str = "1mo") -> Optional[pd.DataFrame]:
         """
@@ -1381,16 +1492,35 @@ class SOXLQuantTrader:
         cache_key = f"{symbol}_{period}"
         current_time = datetime.now()
         
-        # 캐시된 데이터가 있고 1분 이내면 재사용 (더 자주 업데이트)
-        if cache_key in self._stock_data_cache:
-            cached_data, cache_time = self._stock_data_cache[cache_key]
-            if (current_time - cache_time).seconds < 60:  # 1분 캐시
-                print(f"📊 {symbol} 데이터 캐시에서 로드 (기간: {period})")
-                return cached_data
+        with _SHARED_STOCK_DATA_CACHE_LOCK:
+            cached_entry = self._stock_data_cache.get(cache_key)
+            retry_after = self._stock_data_retry_after.get(cache_key)
+        cached_data, cache_time = cached_entry if cached_entry else (None, None)
+
+        # 정상 응답은 5분간 모든 프리셋에서 공유한다. timedelta.seconds는 하루가
+        # 지나면 값이 순환하므로 반드시 total_seconds()를 사용한다.
+        if cached_entry:
+            age_seconds = (current_time - cache_time).total_seconds()
+            if (
+                0 <= age_seconds < _STOCK_DATA_CACHE_TTL_SECONDS
+                and self._stock_data_covers_required_market_date(symbol, cached_data)
+            ):
+                self._stock_data_fallbacks.pop(cache_key, None)
+                print(f"📊 {symbol} 데이터 공유 캐시에서 로드 (기간: {period})")
+                return cached_data.copy(deep=True)
+
+        # 직전 요청이 실패한 직후 프리셋을 연속 클릭해 Yahoo를 다시 폭격하지
+        # 않는다. 안전한 마지막 데이터가 있으면 cooldown 동안 그대로 쓴다.
+        if retry_after and current_time < retry_after:
+            if self._can_use_stale_stock_data(symbol, cached_data, cache_time, current_time):
+                return self._use_stale_stock_data(
+                    cache_key, symbol, period, cached_data, cache_time,
+                    "provider retry cooldown",
+                )
+            print(f"⚠️ {symbol} 데이터 재시도 대기 중 (기간: {period})")
+            return None
         
         try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-            
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
@@ -1411,15 +1541,34 @@ class SOXLQuantTrader:
                 ]
             else:
                 params_list = [{'range': period, 'interval': '1d'}]
+
+            yahoo_hosts = (
+                "https://query1.finance.yahoo.com",
+                "https://query2.finance.yahoo.com",
+                "https://query1.finance.yahoo.com",
+            )
+            if period == "15y":
+                request_plan = [
+                    (yahoo_hosts[index % len(yahoo_hosts)], params)
+                    for index, params in enumerate(params_list)
+                ]
+            else:
+                # 일반 조회도 한 번 실패했다고 즉시 화면을 중단하지 않는다.
+                request_plan = [(host, params_list[0]) for host in yahoo_hosts]
             
             print(f"[INFO] {symbol} 데이터 가져오는 중...")
             
-            # 여러 파라미터 시도
-            for i, params in enumerate(params_list):
+            # query1/query2 및 장기조회 파라미터를 순차 시도한다.
+            for request_index, (host, params) in enumerate(request_plan):
+                response = None
                 try:
+                    url = f"{host}/v8/finance/chart/{symbol}"
                     param_label = params.get('range') or f"period1={params.get('period1')}, period2={params.get('period2')}"
-                    print(f"   시도 {i+1}/{len(params_list)}: {param_label}")
-                    response = requests.get(url, headers=headers, params=params, timeout=15)
+                    print(
+                        f"   시도 {request_index + 1}/{len(request_plan)}: "
+                        f"{host.split('//', 1)[-1]} · {param_label}"
+                    )
+                    response = requests.get(url, headers=headers, params=params, timeout=10)
                     
                     if response.status_code == 200:
                         data = response.json()
@@ -1610,12 +1759,28 @@ class SOXLQuantTrader:
                                 df = df.dropna(subset=['Close'])  # Close가 있으면 유효한 거래일로 간주
                                 df.set_index('Date', inplace=True)
                                 df.index = df.index.normalize()
+                                df = self._drop_unfinished_daily_bar(df)
                                 
-                                # 캐시에 저장
-                                self._stock_data_cache[cache_key] = (df, current_time)
+                                if len(df) == 0:
+                                    print(f"   ❌ 유효한 종가 데이터 없음")
+                                    continue
+                                if not self._stock_data_covers_required_market_date(symbol, df):
+                                    latest_date = pd.Timestamp(df.index.max()).strftime("%Y-%m-%d")
+                                    required_date = self._required_cached_market_date(symbol).strftime("%Y-%m-%d")
+                                    print(
+                                        f"   ❌ 최신 확정 데이터 미반영: "
+                                        f"응답 {latest_date}, 필요 {required_date}"
+                                    )
+                                    continue
+
+                                # 정상 응답만 공유 캐시에 저장한다.
+                                with _SHARED_STOCK_DATA_CACHE_LOCK:
+                                    self._stock_data_cache[cache_key] = (df.copy(deep=True), current_time)
+                                    self._stock_data_retry_after.pop(cache_key, None)
+                                self._stock_data_fallbacks.pop(cache_key, None)
                                 
                                 print(f"[SUCCESS] {symbol} 데이터 가져오기 성공! ({len(df)}일치 데이터)")
-                                return df
+                                return df.copy(deep=True)
                             else:
                                 print(f"   ❌ 차트 데이터 구조 오류")
                         else:
@@ -1626,15 +1791,42 @@ class SOXLQuantTrader:
                 except Exception as e:
                     print(f"   ❌ 요청 오류: {e}")
                     
-                # 마지막 시도가 아니면 계속
-                if i < len(params_list) - 1:
-                    print(f"   다음 파라미터로 재시도...")
+                # 마지막 시도가 아니면 짧게 대기한 뒤 재시도한다. 429의
+                # Retry-After는 UI를 장시간 막지 않도록 2초까지만 존중한다.
+                if request_index < len(request_plan) - 1:
+                    retry_delay = min(0.25 * (2 ** request_index), 1.0)
+                    try:
+                        retry_after_header = response.headers.get("Retry-After") if response is not None else None
+                        if retry_after_header:
+                            retry_delay = min(max(float(retry_after_header), retry_delay), 2.0)
+                    except Exception:
+                        pass
+                    print(f"   {retry_delay:.2f}초 후 재시도...")
+                    time.sleep(retry_delay)
             
             print(f"❌ {symbol} 모든 파라미터 시도 실패")
+            with _SHARED_STOCK_DATA_CACHE_LOCK:
+                self._stock_data_retry_after[cache_key] = (
+                    current_time + timedelta(seconds=_STOCK_DATA_RETRY_COOLDOWN_SECONDS)
+                )
+            if self._can_use_stale_stock_data(symbol, cached_data, cache_time, current_time):
+                return self._use_stale_stock_data(
+                    cache_key, symbol, period, cached_data, cache_time,
+                    "Yahoo request failed",
+                )
             return None
                 
         except Exception as e:
             print(f"❌ {symbol} 데이터 가져오기 오류: {e}")
+            with _SHARED_STOCK_DATA_CACHE_LOCK:
+                self._stock_data_retry_after[cache_key] = (
+                    current_time + timedelta(seconds=_STOCK_DATA_RETRY_COOLDOWN_SECONDS)
+                )
+            if self._can_use_stale_stock_data(symbol, cached_data, cache_time, current_time):
+                return self._use_stale_stock_data(
+                    cache_key, symbol, period, cached_data, cache_time,
+                    str(e)[:120],
+                )
             return None
     
     def get_intraday_last_price(self, symbol: str) -> Optional[Tuple[datetime, float]]:
@@ -3664,11 +3856,17 @@ class SOXLQuantTrader:
         if getattr(self, "profit_loss_compounding_enabled", False):
             self._reset_compounding_state(self.initial_capital)
     
-    def clear_cache(self):
-        """캐시 초기화 (설정 변경 시 호출)"""
-        self._stock_data_cache.clear()
+    def clear_cache(self, clear_market_data: bool = False):
+        """Clear simulation state while preserving reusable market data by default."""
         self._simulation_cache.clear()
-        print("🧹 캐시 초기화 완료")
+        self._stock_data_fallbacks.clear()
+        if clear_market_data:
+            with _SHARED_STOCK_DATA_CACHE_LOCK:
+                self._stock_data_cache.clear()
+                self._stock_data_retry_after.clear()
+            print("🧹 시뮬레이션·시세 캐시 초기화 완료")
+        else:
+            print("🧹 시뮬레이션 캐시 초기화 완료 (시세 캐시 유지)")
     
     def check_backtest_starting_state(self, start_date: str, rsi_ref_data: dict) -> dict:
         """
@@ -3914,11 +4112,6 @@ class SOXLQuantTrader:
         if soxl_data is None:
             return {"error": "SOXL 데이터를 가져올 수 없습니다."}
         
-        # QQQ 데이터 가져오기
-        qqq_data = self.get_stock_data("QQQ", period)
-        if qqq_data is None:
-            return {"error": "QQQ 데이터를 가져올 수 없습니다."}
-        
         # 정규장 미마감이고, 마지막 인덱스 날짜가 오늘이면 무조건 제외 (공급사 조기 생성 일봉 방지)
         try:
             today_date = market_now.date()
@@ -3926,8 +4119,6 @@ class SOXLQuantTrader:
             if self.is_trading_day(market_now) and not self.is_regular_session_closed_now():
                 if len(soxl_data) > 0 and soxl_data.index.max().date() == today_date:
                     soxl_data = soxl_data[soxl_data.index.date < today_date]
-                if len(qqq_data) > 0 and qqq_data.index.max().date() == today_date:
-                    qqq_data = qqq_data[qqq_data.index.date < today_date]
         except Exception:
             pass
 
@@ -3947,7 +4138,6 @@ class SOXLQuantTrader:
                     else:
                         # 오늘이고 정규장이 아직 마감되지 않았다면 제외
                         soxl_data = soxl_data[soxl_data.index.date < last_date]
-                        qqq_data = qqq_data[qqq_data.index.date < last_date]
         except Exception:
             pass
 

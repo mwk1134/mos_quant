@@ -594,6 +594,7 @@ def _calculate_preset_full_history_mdd(preset: dict) -> dict:
             initial_capital=preset['initial_capital'],
             sf_config=st.session_state.get('sf_config'),
             ag_config=st.session_state.get('ag_config'),
+            auto_update_rsi=False,
         )
         configure_app_trader(trader)
         trader.session_start_date = preset.get('session_start_date')
@@ -768,7 +769,8 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
     temp_trader = SOXLQuantTrader(
         initial_capital=preset['initial_capital'],
         sf_config=st.session_state.get('sf_config'),
-        ag_config=st.session_state.get('ag_config')
+        ag_config=st.session_state.get('ag_config'),
+        auto_update_rsi=False,
     )
     configure_app_trader(temp_trader)
     temp_trader.session_start_date = preset.get('session_start_date')
@@ -936,15 +938,17 @@ def _refresh_preset_max_mdds_for_display(all_data: dict, ttl_seconds: int = 300)
 
 def show_preset_max_mdd_summary() -> None:
     all_data = _load_all_snapshots_for_display()
-    needs_refresh = any(
-        not _snapshot_max_mdd((all_data or {}).get(preset_name, {}))
-        for preset_name in _PRESET_NAMES
-    )
-    if needs_refresh:
+    st.subheader("📉 프리셋별 최고 MDD")
+    # 화면/프리셋 버튼 rerun 때마다 5개 계좌를 재시뮬레이션하면 Yahoo 호출이
+    # 폭증한다. 저장값을 즉시 표시하고, 무거운 전체 계산은 사용자가 요청할 때만 한다.
+    if st.button(
+        "🔄 프리셋 MDD 수동 갱신",
+        key="refresh_all_preset_mdds",
+        help="5개 프리셋의 전체 이력을 다시 계산합니다. 평소에는 저장된 값을 표시합니다.",
+        use_container_width=True,
+    ):
         with st.spinner("프리셋별 최고 MDD 계산 중..."):
-            all_data = _refresh_preset_max_mdds_for_display(all_data)
-    else:
-        all_data = _refresh_preset_max_mdds_for_display(all_data)
+            all_data = _refresh_preset_max_mdds_for_display(all_data, ttl_seconds=0)
 
     rows = []
     for preset_name in _PRESET_NAMES:
@@ -965,9 +969,8 @@ def show_preset_max_mdd_summary() -> None:
             "갱신": info.get("updatedAt", "-") if info else "-",
         })
 
-    st.subheader("📉 프리셋별 최고 MDD")
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    st.caption("저장된 스냅샷 기준으로 누적됩니다. 실제 예수금이 스냅샷과 다르면 MDD도 그만큼 달라집니다.")
+    st.caption("저장된 스냅샷 기준입니다. 전체 재계산은 위 수동 갱신 버튼으로 실행합니다.")
     refresh_errors = [
         item for item in st.session_state.get("_preset_max_mdd_refresh_result", [])
         if item.get("status") in ("error", "save_error")
@@ -1513,7 +1516,8 @@ def initialize_trader():
                 st.session_state.trader = SOXLQuantTrader(
                     initial_capital=st.session_state.initial_capital,
                     sf_config=sf_config,
-                    ag_config=ag_config
+                    ag_config=ag_config,
+                    auto_update_rsi=False,
                 )
                 configure_app_trader(st.session_state.trader)
                 if st.session_state.test_today_override:
@@ -1521,18 +1525,26 @@ def initialize_trader():
                 
                 # 시드증액은 아래 set_seed_increases로 매 호출 동기화
                 
-                # RSI 참조 데이터 자동 업데이트 체크 (웹앱 실행 시마다)
-                try:
-                    if not st.session_state.trader.check_and_update_rsi_data():
-                        # 최신 데이터가 아니면 자동으로 업데이트
-                        with st.spinner('RSI 참조 데이터 업데이트 중...'):
-                            if st.session_state.trader.update_rsi_reference_file():
-                                st.success("✅ RSI 참조 데이터가 최신 상태로 업데이트되었습니다.")
-                            else:
-                                st.warning("⚠️ RSI 참조 데이터 업데이트에 실패했습니다. 기존 데이터를 사용합니다.")
-                except Exception as e:
-                    # RSI 업데이트 실패해도 웹앱은 계속 진행
-                    st.warning(f"⚠️ RSI 데이터 확인 중 오류 발생 (무시하고 계속 진행): {str(e)[:100]}")
+                # 프리셋마다 Trader가 다시 만들어져도 15년 QQQ 갱신은 세션 단위로
+                # 제한한다. 성공 시 12시간, 실패 시 10분 뒤에만 다시 시도한다.
+                now_ts = datetime.now().timestamp()
+                next_check_at = float(st.session_state.get('_rsi_reference_next_check_at') or 0)
+                if now_ts >= next_check_at:
+                    refresh_ok = False
+                    try:
+                        refresh_ok = st.session_state.trader.check_and_update_rsi_data()
+                        if not refresh_ok:
+                            with st.spinner('RSI 참조 데이터 업데이트 중...'):
+                                refresh_ok = st.session_state.trader.update_rsi_reference_file()
+                                if refresh_ok:
+                                    st.success("✅ RSI 참조 데이터가 최신 상태로 업데이트되었습니다.")
+                                else:
+                                    st.warning("⚠️ RSI 참조 데이터 업데이트에 실패했습니다. 기존 데이터를 사용합니다.")
+                    except Exception as e:
+                        # RSI 업데이트 실패해도 백테스트/추천은 기존 참조값으로 계속한다.
+                        st.warning(f"⚠️ RSI 데이터 확인 중 오류 발생 (기존 데이터 사용): {str(e)[:100]}")
+                    cooldown = 12 * 60 * 60 if refresh_ok else 10 * 60
+                    st.session_state._rsi_reference_next_check_at = now_ts + cooldown
         except Exception as e:
             st.error(f"시스템 초기화 실패: {str(e)}")
             st.info("페이지를 새로고침해주세요.")
@@ -2077,6 +2089,11 @@ def show_daily_recommendation():
         recommendation = st.session_state.trader.get_daily_recommendation(
             skip_simulate=True, preserve_snapshot_shares=bool(snapshot)
         )
+        if "error" in recommendation:
+            # 데이터가 불완전한 실행 결과로 스냅샷/예수금을 저장하지 않는다.
+            st.error(f"추천 생성 실패: {recommendation['error']}")
+            st.info("잠시 후 다시 시도해주세요. 기존 체결 스냅샷은 변경되지 않았습니다.")
+            return
 
         # Daily recommendation is read-only when the persisted positions did not
         # change. Verification helpers may inspect/rebuild transient positions;
@@ -2142,12 +2159,20 @@ def show_daily_recommendation():
             ok, err = save_preset_snapshot(st.session_state.active_preset, current_snapshot)
             st.session_state._gh_save_result = (ok, err)
 
-        if st.session_state.get('active_preset'):
-            st.session_state._all_preset_snapshot_save_result = auto_save_all_preset_snapshots_if_needed(current_snapshot)
+        # 현재 프리셋 전환은 현재 프리셋만 갱신한다. 여기서 나머지 4개까지
+        # 재시뮬레이션하면 단순 버튼 클릭 한 번에 Yahoo 요청이 수십 건 발생한다.
     
-    if "error" in recommendation:
-        st.error(f"추천 생성 실패: {recommendation['error']}")
-        return
+    market_data_fallbacks = st.session_state.trader.get_stock_data_fallbacks()
+    if market_data_fallbacks:
+        fallback_labels = sorted({
+            f"{item['symbol']}({item['latest_date']})"
+            for item in market_data_fallbacks
+        })
+        st.warning(
+            "⚠️ 시세 제공처의 일시 오류로 마지막 정상 데이터를 사용했습니다: "
+            + ", ".join(fallback_labels)
+            + ". 주문 전 화면의 기준일을 확인해주세요."
+        )
     
     # 데이터 경고 표시 (Close가 None인 날짜들)
     if hasattr(st.session_state.trader, '_data_warnings') and st.session_state.trader._data_warnings:
