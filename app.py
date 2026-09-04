@@ -25,7 +25,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 # 기존 SOXLQuantTrader 클래스 import
-from soxl_quant_system import SOXLQuantTrader
+from soxl_quant_system import SOXLQuantTrader, calculate_cash_limited_order
 
 APP_COMPOUNDING_ENABLED = True
 APP_PROFIT_COMPOUNDING_RATE = 0.70
@@ -2319,10 +2319,21 @@ def show_daily_recommendation():
             
             # 예수금 부족 시 안내
             if available_cash < recommendation['next_buy_amount']:
-                possible_shares = int(available_cash / recommendation['buy_price'])
-                possible_amount = possible_shares * recommendation['buy_price']
-                st.warning(f"⚠️ 예수금 부족: 목표 금액 \\${recommendation['next_buy_amount']:,.0f} 대비 예수금 \\${available_cash:,.0f} 부족")
-                st.info(f"💡 가능한 매수: {possible_shares}주 (약 \\${possible_amount:,.0f})")
+                affordability = calculate_cash_limited_order(
+                    target_amount=recommendation['next_buy_amount'],
+                    available_cash=available_cash,
+                    buy_price=recommendation['buy_price'],
+                )
+                st.warning(
+                    f"⚠️ 예수금 부족: 목표 \\${recommendation['next_buy_amount']:,.0f} · "
+                    f"보유 예수금 \\${available_cash:,.0f} · "
+                    f"부족액 \\${affordability['cash_shortfall']:,.0f}"
+                )
+                st.info(
+                    f"💡 가능한 매수: {affordability['possible_shares']}주 "
+                    f"(주문금액 약 \\${affordability['possible_amount']:,.0f} · "
+                    f"주문 후 잔액 약 \\${affordability['remaining_cash']:,.0f})"
+                )
             
             # 장중 주문 가이드(현재가가 존재하는 경우 간단 안내)
             current_price = recommendation.get('soxl_current_price')

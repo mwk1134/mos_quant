@@ -31,6 +31,28 @@ _STOCK_DATA_RETRY_COOLDOWN_SECONDS = 60
 _STOCK_DATA_STALE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 
 
+def calculate_cash_limited_order(
+    target_amount: float,
+    available_cash: float,
+    buy_price: float,
+) -> dict:
+    """Return whole-share affordability without confusing cash with shortfall."""
+    target_amount = max(0.0, float(target_amount))
+    available_cash = max(0.0, float(available_cash))
+    buy_price = float(buy_price)
+    if buy_price <= 0:
+        raise ValueError("buy_price must be greater than zero")
+
+    possible_shares = int(available_cash / buy_price)
+    possible_amount = possible_shares * buy_price
+    return {
+        "cash_shortfall": max(0.0, target_amount - available_cash),
+        "possible_shares": possible_shares,
+        "possible_amount": possible_amount,
+        "remaining_cash": max(0.0, available_cash - possible_amount),
+    }
+
+
 try:
     US_EASTERN_TZ = ZoneInfo("America/New_York")
 except ZoneInfoNotFoundError:  # Windows installations without the IANA tzdata package
