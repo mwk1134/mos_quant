@@ -42,6 +42,13 @@
       "round": 6,
       "mode": "SF"
     },
+    "pending_buy": {
+      "round": 7,
+      "order_date": "2026-09-04",
+      "quantity": 124,
+      "target_price": 110.47589999999998,
+      "basis_date": "2026-09-03"
+    },
     "available_cash": 13103.800369262695,
     "processed_seed_dates": [
       "2025-10-21",
@@ -62,13 +69,6 @@
       "peakDate": "2026-07-22",
       "peakValue": 97923.902661438,
       "soxlPrice": 140.25
-    },
-    "pending_buy": {
-      "round": 7,
-      "order_date": "2026-09-04",
-      "quantity": 124,
-      "target_price": 110.47589778900145,
-      "basis_date": "2026-09-03"
     }
   },
   "JEH": {
