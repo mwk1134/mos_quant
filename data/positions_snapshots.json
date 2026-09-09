@@ -175,15 +175,15 @@
   "KHW": {
     "pending_buy": {
       "round": 1,
-      "order_date": "2026-09-08",
+      "order_date": "2026-09-09",
       "quantity": 8,
-      "target_price": 121.38479873657225,
-      "basis_date": "2026-09-04"
+      "target_price": 127.58444652557372,
+      "basis_date": "2026-09-08"
     },
     "available_cash": 22119.889846801758,
     "processed_seed_dates": [],
-    "as_of_date": "2026-09-04",
-    "cash_snapshot_date": "2026-09-03",
+    "as_of_date": "2026-09-08",
+    "cash_snapshot_date": "2026-09-04",
     "compound_seed": 21199.0,
     "compound_reference_seed": 21199.0,
     "compound_profit_rate": 0.7,
