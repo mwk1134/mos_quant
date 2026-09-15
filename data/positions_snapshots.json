@@ -210,7 +210,12 @@
     "KHW": {
       "initial_capital": 21199.0,
       "session_start_date": "2026-08-17",
-      "seed_increases": [],
+      "seed_increases": [
+        {
+          "date": "2026-09-15",
+          "amount": 367.0
+        }
+      ],
       "position_edits": {}
     }
   }
