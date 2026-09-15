@@ -159,13 +159,11 @@
       "round": 2,
       "mode": "AG"
     },
-    "available_cash": 19009.26987915039,
-    "processed_seed_dates": [],
+    "available_cash": 19376.26987915039,
+    "processed_seed_dates": [
+      "2026-09-15"
+    ],
     "as_of_date": "2026-09-14",
-    "compound_seed": 21199.0,
-    "compound_reference_seed": 21199.0,
-    "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
     "maxMdd": {
       "percent": 6.0586,
       "date": "2026-09-01",
