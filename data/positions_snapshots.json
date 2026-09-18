@@ -236,32 +236,18 @@
       "round": 1,
       "mode": "SF"
     },
-    "2_2026-09-14": {
-      "shares": 22,
-      "buy_price": 101.12999725341797,
-      "amount": 2224.8599395751953,
+    "pending_buy": {
       "round": 2,
-      "mode": "AG"
+      "order_date": "2026-09-18",
+      "quantity": 25,
+      "target_price": 118.9535196838379,
+      "basis_date": "2026-09-17"
     },
-    "3_2026-09-15": {
-      "shares": 25,
-      "buy_price": 102.31999969482422,
-      "amount": 2557.9999923706055,
-      "round": 3,
-      "mode": "AG"
-    },
-    "4_2026-09-16": {
-      "shares": 31,
-      "buy_price": 103.97000122070312,
-      "amount": 3223.070037841797,
-      "round": 4,
-      "mode": "AG"
-    },
-    "available_cash": 13595.199848937988,
+    "available_cash": 22551.159825134277,
     "processed_seed_dates": [
       "2026-09-15"
     ],
-    "as_of_date": "2026-09-16",
+    "as_of_date": "2026-09-17",
     "compound_seed": 22410.16979675293,
     "compound_reference_seed": 22410.16979675293,
     "compound_profit_rate": 0.7,
@@ -276,13 +262,6 @@
       "peakDate": "2026-08-27",
       "peakValue": 21554.320251464844,
       "soxlPrice": 105.91
-    },
-    "pending_buy": {
-      "round": 5,
-      "order_date": "2026-09-17",
-      "quantity": 31,
-      "target_price": 107.71292126464844,
-      "basis_date": "2026-09-16"
     }
   },
   "_preset_configs": {
