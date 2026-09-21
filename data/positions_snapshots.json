@@ -46,17 +46,17 @@
     },
     "pending_buy": {
       "round": 2,
-      "order_date": "2026-09-18",
-      "quantity": 33,
-      "target_price": 118.9535196838379,
-      "basis_date": "2026-09-17"
+      "order_date": "2026-09-21",
+      "quantity": 31,
+      "target_price": 128.12211810302736,
+      "basis_date": "2026-09-18"
     },
     "available_cash": 29566.599723815918,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15"
     ],
-    "as_of_date": "2026-09-17",
+    "as_of_date": "2026-09-18",
     "compound_seed": 29655.03987640381,
     "compound_reference_seed": 29655.03987640381,
     "compound_profit_rate": 0.7,
