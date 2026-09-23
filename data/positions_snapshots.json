@@ -64,15 +64,15 @@
   "KMW2": {
     "pending_buy": {
       "round": 1,
-      "order_date": "2026-09-22",
-      "quantity": 35,
-      "target_price": 147.03947241210938,
-      "basis_date": "2026-09-21"
+      "order_date": "2026-09-23",
+      "quantity": 33,
+      "target_price": 157.4202,
+      "basis_date": "2026-09-22"
     },
     "available_cash": 93363.16814422607,
     "processed_seed_dates": [],
-    "as_of_date": "2026-09-21",
-    "cash_snapshot_date": "2026-09-18",
+    "as_of_date": "2026-09-22",
+    "cash_snapshot_date": "2026-09-21",
     "compound_seed": 84176.30196594239,
     "compound_reference_seed": 84176.30196594239,
     "compound_profit_rate": 0.7,
