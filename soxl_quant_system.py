@@ -64,6 +64,28 @@ except ZoneInfoNotFoundError:  # Windows installations without the IANA tzdata p
 class SOXLQuantTrader:
     """SOXL 퀀트투자 시스템"""
 
+    # Strict SOXL moving-average alignment strategy (friend preset V1.1-R).
+    # These are intentionally separate from sf_config/ag_config so opting out is
+    # completely backward compatible with the existing presets.
+    MA_ALIGNMENT_STRATEGY_NAME = "dongpa_ma_v1_1_r"
+    MA_ALIGNMENT_SF_CONFIG = {
+        "buy_threshold": 6.5,
+        "sell_threshold": 1.8,
+        "max_hold_days": 30,
+        "split_count": 10,
+        "split_ratios": [0.1397, 0.0856, 0.0200, 0.2219, 0.0955,
+                         0.0565, 0.2028, 0.0335, 0.0812, 0.0633],
+        "strategy_name": MA_ALIGNMENT_STRATEGY_NAME,
+    }
+    MA_ALIGNMENT_AG_CONFIG = {
+        "buy_threshold": 16.0,
+        "sell_threshold": 6.8,
+        "max_hold_days": 7,
+        "split_count": 4,
+        "split_ratios": [0.2041, 0.1959, 0.3000, 0.3000],
+        "strategy_name": MA_ALIGNMENT_STRATEGY_NAME,
+    }
+
     
     def _resolve_data_path(self, filename: str) -> Path:
         base_dir = Path(__file__).resolve().parent
@@ -544,6 +566,12 @@ class SOXLQuantTrader:
         self._compound_processed_dates = set()
         self._pending_buy_recommendation = None
 
+        # Per-preset/user opt-in.  False preserves every existing caller's
+        # behavior.  The explicit flag prevents an older snapshot from
+        # overwriting a choice the user just made in the web app.
+        self.ma_alignment_switch_enabled = False
+        self._ma_alignment_switch_explicitly_set = False
+
     def set_test_today(self, date_str: Optional[str]):
         """테스트용 오늘 날짜 설정/해제. None 또는 빈문자면 해제."""
         if not date_str:
@@ -971,6 +999,8 @@ class SOXLQuantTrader:
                 "mode": str(stored_mode) if stored_mode else "SF",
                 "_mode_needs_recalc": stored_mode is None,
             }
+            if val.get("buy_threshold") is not None:
+                position["buy_threshold"] = float(val.get("buy_threshold"))
             if val.get("sell_threshold") is not None:
                 position["sell_threshold"] = float(val.get("sell_threshold"))
             if val.get("max_hold_days") is not None:
@@ -1117,6 +1147,10 @@ class SOXLQuantTrader:
         if not isinstance(snapshot, dict) or not snapshot:
             return {"error": "기존 스냅샷이 비어 있어 전체 재시뮬레이션을 중단했습니다."}
 
+        # A just-made UI choice wins over persisted metadata; otherwise restore
+        # the per-preset opt-in value when resuming in a new process/session.
+        self.restore_ma_alignment_switch_from_snapshot(snapshot)
+
         positions, max_snap_date, available_cash = self._snapshot_to_positions_and_state(snapshot)
         if not positions:
             snapshot_cash = self._snapshot_available_cash(snapshot)
@@ -1180,6 +1214,7 @@ class SOXLQuantTrader:
             f"{getattr(self, 'compounding_settlement_delay_days', 0)}_"
             f"{getattr(self, 'compounding_reference_renewal_days', 0)}"
         )
+        ma_alignment_cache_key = f"ma_{int(bool(self.ma_alignment_switch_enabled))}"
         pending_buy = self._pending_buy_from_snapshot(snapshot)
         pending_cache_key = (
             f"pending_{pending_buy['round']}_{pending_buy['order_date']}_{pending_buy['quantity']}"
@@ -1189,7 +1224,7 @@ class SOXLQuantTrader:
         cache_key = (
             f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_"
             f"{self.test_today_override or 'real'}_{seed_increases_str}_"
-            f"{compounding_cache_key}_{pending_cache_key}"
+            f"{compounding_cache_key}_{ma_alignment_cache_key}_{pending_cache_key}"
         )
         if cache_key in self._simulation_cache:
             cached, cache_time = self._simulation_cache[cache_key]
@@ -1296,7 +1331,8 @@ class SOXLQuantTrader:
             f"{getattr(self, 'compounding_settlement_delay_days', 0)}_"
             f"{getattr(self, 'compounding_reference_renewal_days', 0)}"
         )
-        cache_key = f"{self.ticker}_{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}_{seed_increases_str}_{compounding_cache_key}"
+        ma_alignment_cache_key = f"ma_{int(bool(self.ma_alignment_switch_enabled))}"
+        cache_key = f"{self.ticker}_{start_date}_{self.initial_capital}_{self.test_today_override or 'real'}_{seed_increases_str}_{compounding_cache_key}_{ma_alignment_cache_key}"
         
         # 캐시된 결과가 있고 2분 이내면 재사용
         if cache_key in self._simulation_cache:
@@ -2456,17 +2492,141 @@ class SOXLQuantTrader:
         """현재 모드에 따른 설정 반환"""
         return self.sf_config if self.current_mode == "SF" else self.ag_config
 
-    def get_mode_config(self, mode: str, current_date: Optional[datetime] = None, soxl_history: Optional[pd.DataFrame] = None) -> Dict:
-        """Return the trading config for a mode at a specific date.
+    @staticmethod
+    def _copy_strategy_config(config: Dict) -> Dict:
+        """Copy a strategy config without sharing its mutable ratio list."""
+        copied = dict(config)
+        if "split_ratios" in copied:
+            copied["split_ratios"] = list(copied["split_ratios"])
+        return copied
 
-        Subclasses can override this to apply date-dependent strategy variants.
+    def set_ma_alignment_switch(self, enabled: bool) -> None:
+        """Explicitly opt this trader/preset into or out of MA switching."""
+        self.ma_alignment_switch_enabled = bool(enabled)
+        self._ma_alignment_switch_explicitly_set = True
+
+    def restore_ma_alignment_switch_from_snapshot(
+        self,
+        snapshot: Optional[Dict],
+        force: bool = False,
+    ) -> bool:
+        """Restore the per-preset opt-in flag, unless the UI already set it.
+
+        Returns True only when the snapshot value was applied.  Old snapshots
+        without the key leave the backward-compatible default (False) intact.
         """
-        return self.sf_config if mode == "SF" else self.ag_config
+        if not isinstance(snapshot, dict) or "ma_alignment_switch_enabled" not in snapshot:
+            return False
+        if self._ma_alignment_switch_explicitly_set and not force:
+            return False
+        self.ma_alignment_switch_enabled = bool(snapshot.get("ma_alignment_switch_enabled"))
+        return True
+
+    def get_ma_alignment_snapshot_state(self) -> Dict[str, bool]:
+        """Return metadata that callers can merge into a preset snapshot."""
+        return {"ma_alignment_switch_enabled": bool(self.ma_alignment_switch_enabled)}
+
+    def _ma_alignment_config_for_mode(self, mode: str) -> Dict:
+        config = self.MA_ALIGNMENT_SF_CONFIG if mode == "SF" else self.MA_ALIGNMENT_AG_CONFIG
+        return self._copy_strategy_config(config)
+
+    def get_ma_alignment_status(
+        self,
+        current_date: Optional[datetime] = None,
+        soxl_history: Optional[pd.DataFrame] = None,
+    ) -> Dict:
+        """Return strict prior-close SMA5>SMA20>SMA60 alignment status.
+
+        ``current_date`` is the prospective order date.  Rows on that date are
+        always excluded, which prevents a backtest or live recommendation from
+        looking at an uncompleted order-day close.
+        """
+        history = soxl_history
+        if history is None:
+            history = self.get_stock_data("SOXL", "6mo")
+
+        status = {
+            "available": False,
+            "condition_met": False,
+            "enabled": bool(self.ma_alignment_switch_enabled),
+            "active": False,
+            "strategy_name": self.MA_ALIGNMENT_STRATEGY_NAME,
+            "basis_date": None,
+            "sma5": None,
+            "sma20": None,
+            "sma60": None,
+            "next_round": len(self.positions) + 1,
+            "split_count": None,
+        }
+        if history is None or len(history) == 0 or "Close" not in history.columns:
+            return status
+
+        try:
+            closes = history[["Close"]].copy()
+            closes.index = pd.to_datetime(closes.index)
+            if getattr(closes.index, "tz", None) is not None:
+                closes.index = closes.index.tz_localize(None)
+            closes = closes.sort_index()
+            closes["Close"] = pd.to_numeric(closes["Close"], errors="coerce")
+            closes = closes.dropna(subset=["Close"])
+
+            if current_date is None:
+                # With an explicitly supplied history, treat its final row as a
+                # completed close.  Live recommendation passes an order date.
+                latest = closes.index[-1]
+                cutoff = latest.normalize() + pd.Timedelta(days=1)
+            else:
+                cutoff = pd.Timestamp(self._market_date(current_date))
+
+            completed = closes[closes.index.normalize() < cutoff.normalize()]
+            if len(completed) < 60:
+                return status
+
+            close_series = completed["Close"]
+            sma5 = float(close_series.tail(5).mean())
+            sma20 = float(close_series.tail(20).mean())
+            sma60 = float(close_series.tail(60).mean())
+            condition_met = bool(sma5 > sma20 > sma60)
+            active = bool(self.ma_alignment_switch_enabled and condition_met)
+            mode = self.current_mode if self.current_mode in ("SF", "AG") else "SF"
+            active_config = (
+                self._ma_alignment_config_for_mode(mode)
+                if active
+                else self._copy_strategy_config(self.sf_config if mode == "SF" else self.ag_config)
+            )
+            status.update({
+                "available": True,
+                "condition_met": condition_met,
+                "active": active,
+                "basis_date": completed.index[-1].strftime("%Y-%m-%d"),
+                "sma5": sma5,
+                "sma20": sma20,
+                "sma60": sma60,
+                "split_count": int(active_config["split_count"]),
+            })
+            return status
+        except Exception as exc:
+            status["error"] = str(exc)
+            return status
+
+    def get_mode_config(self, mode: str, current_date: Optional[datetime] = None, soxl_history: Optional[pd.DataFrame] = None) -> Dict:
+        """Return base or opted-in V1.1-R config for a prospective order date."""
+        base_config = self.sf_config if mode == "SF" else self.ag_config
+        if not self.ma_alignment_switch_enabled:
+            return base_config
+        status = self.get_ma_alignment_status(current_date, soxl_history)
+        if status.get("condition_met"):
+            return self._ma_alignment_config_for_mode(mode)
+        return base_config
 
     def get_position_config(self, position: Dict) -> Dict:
         """Return the sell/hold config stored at buy time, falling back to mode config."""
         base_config = self.sf_config if position.get("mode") == "SF" else self.ag_config
+        if position.get("strategy_name") == self.MA_ALIGNMENT_STRATEGY_NAME:
+            base_config = self._ma_alignment_config_for_mode(position.get("mode") or "SF")
         position_config = base_config.copy()
+        if "buy_threshold" in position:
+            position_config["buy_threshold"] = float(position["buy_threshold"])
         if "sell_threshold" in position:
             position_config["sell_threshold"] = float(position["sell_threshold"])
         if "max_hold_days" in position:
@@ -2475,7 +2635,7 @@ class SOXLQuantTrader:
             position_config["strategy_name"] = position["strategy_name"]
         return position_config
     
-    def calculate_buy_sell_prices(self, current_price: float) -> Tuple[float, float]:
+    def calculate_buy_sell_prices(self, current_price: float, config: Optional[Dict] = None) -> Tuple[float, float]:
         """
         매수/매도 가격 계산
         Args:
@@ -2483,7 +2643,7 @@ class SOXLQuantTrader:
         Returns:
             Tuple[float, float]: (매수가격, 매도가격)
         """
-        config = self.get_current_config()
+        config = config or getattr(self, "_active_buy_config", None) or self.get_current_config()
         
 
         # 매수가: 전일 종가 대비 상승한 가격 (매수가 > 종가)
@@ -2494,7 +2654,7 @@ class SOXLQuantTrader:
         
         return buy_price, sell_price
     
-    def calculate_position_size(self, round_num: int) -> float:
+    def calculate_position_size(self, round_num: int, config: Optional[Dict] = None) -> float:
         """
         회차별 매수 금액 계산
         Args:
@@ -2502,7 +2662,7 @@ class SOXLQuantTrader:
         Returns:
             float: 해당 회차 매수 금액
         """
-        config = getattr(self, "_active_buy_config", None) or self.get_current_config()
+        config = config or getattr(self, "_active_buy_config", None) or self.get_current_config()
         
         if round_num <= len(config["split_ratios"]):
             ratio = config["split_ratios"][round_num - 1]
@@ -2603,9 +2763,9 @@ class SOXLQuantTrader:
         """
         return is_us_equity_trading_day(date, self.us_holidays)
     
-    def can_buy_next_round(self) -> bool:
+    def can_buy_next_round(self, config: Optional[Dict] = None) -> bool:
         """다음 회차 매수 가능 여부 확인"""
-        config = self.get_current_config()
+        config = config or getattr(self, "_active_buy_config", None) or self.get_current_config()
         
         # 최대 분할매수 횟수 확인
         if self.current_round > config["split_count"]:
@@ -2679,6 +2839,7 @@ class SOXLQuantTrader:
         }
         active_buy_config = getattr(self, "_active_buy_config", None)
         if active_buy_config:
+            position["buy_threshold"] = float(active_buy_config.get("buy_threshold", 0))
             position["sell_threshold"] = float(active_buy_config.get("sell_threshold", 0))
             position["max_hold_days"] = int(active_buy_config.get("max_hold_days", 0))
             if active_buy_config.get("strategy_name"):
@@ -3074,8 +3235,7 @@ class SOXLQuantTrader:
                     continue
                 prev_close = float(df.iloc[j - 1]["Close"])
                 daily_close = float(df.iloc[j]["Close"])
-                mode = pos.get("mode") or "SF"
-                cfg = self.sf_config if mode == "SF" else self.ag_config
+                cfg = self.get_position_config(pos)
                 thr = float(cfg.get("buy_threshold", 3.5)) / 100.0
                 buy_limit = prev_close * (1.0 + thr)
                 if buy_limit > daily_close:
@@ -3123,7 +3283,9 @@ class SOXLQuantTrader:
                 print(f"📅 휴장일입니다. 최신 거래일({latest_trading_day.strftime('%Y-%m-%d')}) 데이터를 사용합니다.")
         
         # 1. SOXL 데이터 가져오기
-        soxl_data = self.get_stock_data("SOXL", "1mo")
+        # SMA60 needs at least 60 completed sessions.  Six months also gives a
+        # buffer for holidays/missing Yahoo rows while remaining lightweight.
+        soxl_data = self.get_stock_data("SOXL", "6mo")
         if soxl_data is None:
             return {"error": "SOXL 데이터를 가져올 수 없습니다."}
         
@@ -3664,9 +3826,17 @@ class SOXLQuantTrader:
             check_sell_date = soxl_data.index[-2]
             check_sell_row = soxl_data.iloc[-2]
         
-        # 6. 매수/매도 가격 계산
-
-        buy_price, sell_price = self.calculate_buy_sell_prices(prev_close)
+        # 6. 매수/매도 가격 계산.  The next order uses only closes
+        # completed before its trading date, so the latest confirmed close may
+        # participate in the SMA signal without order-day lookahead.
+        proposed_buy_order_date = self._get_next_trading_day(prev_close_basis_date)
+        proposed_buy_order_dt = datetime.strptime(proposed_buy_order_date, "%Y-%m-%d")
+        ma_alignment = self.get_ma_alignment_status(proposed_buy_order_dt, soxl_data)
+        active_config = self.get_mode_config(
+            self.current_mode, proposed_buy_order_dt, soxl_data
+        )
+        active_strategy_name = active_config.get("strategy_name", "기본")
+        buy_price, sell_price = self.calculate_buy_sell_prices(prev_close, active_config)
         
         # 7. 매도 조건 확인
         # 오늘 기준으로 매도 조건 확인 (어제 종가 기준)
@@ -3678,11 +3848,11 @@ class SOXLQuantTrader:
         sell_recommendations = [s for s in all_sell_recommendations if s.get('show_in_recommendation_list', True)]
         
         # 8. 매수 조건 확인
-        can_buy = self.can_buy_next_round()
-        next_buy_amount = self.calculate_position_size(self.current_round) if can_buy else 0
+        can_buy = self.can_buy_next_round(active_config)
+        next_buy_amount = self.calculate_position_size(self.current_round, active_config) if can_buy else 0
         # 추천 계산의 기준 종가일과 실제 주문일을 분리한다. 장 마감 후에는
         # display_date가 기준 종가일과 같아도 주문은 다음 거래일 주문이다.
-        buy_order_date = self._get_next_trading_day(prev_close_basis_date) if can_buy else None
+        buy_order_date = proposed_buy_order_date if can_buy else None
         
         # 9. 포트폴리오 현황
         total_position_value = sum([pos["shares"] * current_price for pos in self.positions])
@@ -3696,6 +3866,9 @@ class SOXLQuantTrader:
             "data_last_date": latest_data_date.strftime("%Y-%m-%d"),  # 확정종가 마지막 날짜
             "market_closed": market_closed,  # 미국 정규장 마감 여부
             "mode": self.current_mode,
+            "strategy_name": active_strategy_name,
+            "active_config": self._copy_strategy_config(active_config),
+            "ma_alignment": ma_alignment,
             "qqq_one_week_ago_rsi": one_week_ago_rsi,  # 1주전 RSI (모드 판단에 사용)
             "qqq_two_weeks_ago_rsi": two_weeks_ago_rsi,  # 2주전 RSI (모드 판단에 사용)
             "soxl_current_price": current_price,
@@ -3754,7 +3927,8 @@ class SOXLQuantTrader:
             shares = int(rec['next_buy_amount'] / rec['buy_price'])
             print(f"   매수주식수: {shares}주")
         else:
-            if self.current_round > self.get_current_config()["split_count"]:
+            active_config = rec.get("active_config") or self.get_current_config()
+            if self.current_round > active_config["split_count"]:
                 print("🔴 매수 불가: 모든 분할매수 완료")
             else:
                 print("🔴 매수 불가: 시드 부족")
@@ -3773,7 +3947,7 @@ class SOXLQuantTrader:
             if self.positions:
                 print("📋 보유 포지션 LOC 매도 목표가 안내:")
                 for pos in self.positions:
-                    config = self.sf_config if pos['mode'] == "SF" else self.ag_config
+                    config = self.get_position_config(pos)
                     target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
                     current_price = rec['soxl_current_price']
                     price_diff = target_sell_price - current_price
@@ -4624,7 +4798,7 @@ class SOXLQuantTrader:
 
                 current_round_before_buy = self.current_round  # 매수 전 회차 저장
                 
-                if self.can_buy_next_round():
+                if self.can_buy_next_round(config):
                     # LOC 매수 조건: 매수가 > 종가 일 때 매수 체결 (종가가 매수가보다 낮을 때)
                     daily_close = row['Close']
                     
@@ -4752,7 +4926,7 @@ class SOXLQuantTrader:
                     "rsi": current_week_rsi if current_week_rsi is not None else 50.0,  # None일 때만 기본값 사용
                     "mode": current_mode,
                     "strategy_name": config.get("strategy_name", "기본"),
-                    "current_round": min(current_round_before_buy, 7 if current_mode == "SF" else 8),  # 매수 전 회차 사용 (최대값 제한)
+                    "current_round": min(current_round_before_buy, int(config["split_count"])),  # active 전략 cap
                     "seed_amount": (
                         (
                             self.compound_reference_seed

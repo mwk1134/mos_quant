@@ -58,6 +58,25 @@ class RecommendationOrderDateTests(unittest.TestCase):
         self.assertEqual(result["basis_date"], "2026-08-20")
         self.assertEqual(result["buy_order_date"], "2026-08-21")
 
+    def test_opted_in_alignment_changes_the_next_order_recommendation(self):
+        self.trader.set_ma_alignment_switch(True)
+
+        result = self.recommendation(market_closed=True)
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["buy_order_date"], "2026-08-21")
+        self.assertTrue(result["ma_alignment"]["condition_met"])
+        self.assertTrue(result["ma_alignment"]["active"])
+        self.assertEqual(result["strategy_name"], "dongpa_ma_v1_1_r")
+        self.assertEqual(result["active_config"]["buy_threshold"], 16.0)
+        self.assertEqual(result["active_config"]["split_count"], 4)
+        self.assertEqual(result["next_buy_round"], 4)
+        self.assertAlmostEqual(result["next_buy_amount"], 21_199 * 0.30)
+        self.assertAlmostEqual(
+            result["buy_price"],
+            float(self.market_data.iloc[-1]["Close"]) * 1.16,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

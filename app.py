@@ -32,9 +32,13 @@ APP_PROFIT_COMPOUNDING_RATE = 0.70
 APP_LOSS_COMPOUNDING_RATE = 0.20
 APP_COMPOUNDING_SETTLEMENT_DAYS = 7
 APP_COMPOUNDING_RENEWAL_DAYS = 10
+MA_ALIGNMENT_SWITCH_KEY = "ma_alignment_switch_enabled"
 
 
-def configure_app_trader(trader: SOXLQuantTrader) -> SOXLQuantTrader:
+def configure_app_trader(
+    trader: SOXLQuantTrader,
+    ma_alignment_enabled: Optional[bool] = None,
+) -> SOXLQuantTrader:
     if hasattr(trader, "set_profit_loss_compounding"):
         trader.set_profit_loss_compounding(
             enabled=APP_COMPOUNDING_ENABLED,
@@ -43,6 +47,12 @@ def configure_app_trader(trader: SOXLQuantTrader) -> SOXLQuantTrader:
             settlement_delay_days=APP_COMPOUNDING_SETTLEMENT_DAYS,
             renewal_days=APP_COMPOUNDING_RENEWAL_DAYS,
         )
+    if ma_alignment_enabled is None:
+        ma_alignment_enabled = bool(
+            st.session_state.get(MA_ALIGNMENT_SWITCH_KEY, False)
+        )
+    if hasattr(trader, "set_ma_alignment_switch"):
+        trader.set_ma_alignment_switch(bool(ma_alignment_enabled))
     return trader
 
 # 페이지 설정
@@ -404,6 +414,14 @@ def load_preset_snapshot(preset_name: str) -> dict:
         if result:
             all_data[preset_name] = result
             st.session_state._gh_snapshot_all = all_data
+    # 사용자별 opt-in은 프리셋 설정이 원천값이다. 오래된 포지션 스냅샷의
+    # 메타데이터가 방금 저장한 선택을 되돌리지 않도록 현재 프리셋 값을 덮어쓴다.
+    preset_config = st.session_state.get(f"{str(preset_name).lower()}_preset")
+    if isinstance(result, dict) and result and isinstance(preset_config, dict):
+        result = dict(result or {})
+        result[MA_ALIGNMENT_SWITCH_KEY] = bool(
+            preset_config.get(MA_ALIGNMENT_SWITCH_KEY, False)
+        )
     return result
 
 def _is_market_trading_day() -> bool:
@@ -596,7 +614,12 @@ def _calculate_preset_full_history_mdd(preset: dict) -> dict:
             ag_config=st.session_state.get('ag_config'),
             auto_update_rsi=False,
         )
-        configure_app_trader(trader)
+        configure_app_trader(
+            trader,
+            ma_alignment_enabled=bool(
+                preset.get(MA_ALIGNMENT_SWITCH_KEY, False)
+            ),
+        )
         trader.session_start_date = preset.get('session_start_date')
         trader.set_seed_increases(preset.get('seed_increases') or [])
         if st.session_state.get('test_today_override'):
@@ -656,6 +679,31 @@ def get_preset_configs() -> dict:
         "KHW": st.session_state.khw_preset,
     }
 
+def _preserve_position_strategy_fields(
+    payload: dict,
+    position: dict,
+    saved_position: Optional[dict] = None,
+) -> dict:
+    """Keep the entry-time strategy rules attached to a persisted position."""
+    saved_position = saved_position if isinstance(saved_position, dict) else {}
+    for field in ("buy_threshold", "sell_threshold"):
+        value = position.get(field)
+        if value is None:
+            value = saved_position.get(field)
+        if value is not None:
+            payload[field] = float(value)
+    value = position.get("max_hold_days")
+    if value is None:
+        value = saved_position.get("max_hold_days")
+    if value is not None:
+        payload["max_hold_days"] = int(value)
+    value = position.get("strategy_name")
+    if value is None:
+        value = saved_position.get("strategy_name")
+    if value:
+        payload["strategy_name"] = str(value)
+    return payload
+
 def _build_snapshot_from_positions(
     trader: SOXLQuantTrader,
     previous_snapshot: dict,
@@ -675,21 +723,27 @@ def _build_snapshot_from_positions(
                     saved = sv
                     break
         if saved:
-            current_snapshot[snap_key] = {
+            position_payload = {
                 'shares': int(saved['shares']),
                 'buy_price': float(pos['buy_price']),
                 'amount': float(saved['shares']) * float(pos['buy_price']),
                 'round': int(pos['round']),
                 'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
             }
+            current_snapshot[snap_key] = _preserve_position_strategy_fields(
+                position_payload, pos, saved
+            )
         else:
-            current_snapshot[snap_key] = {
+            position_payload = {
                 'shares': int(pos['shares']),
                 'buy_price': float(pos['buy_price']),
                 'amount': float(pos['amount']),
                 'round': int(pos['round']),
                 'mode': str(pos.get('mode') or 'SF'),
             }
+            current_snapshot[snap_key] = _preserve_position_strategy_fields(
+                position_payload, pos
+            )
 
     # 아직 체결되지 않은 전날 표시 주문은 자동 프리셋 순회 중에도 보존한다.
     # 같은 회차·주문일 포지션이 생겼다면 체결된 것이므로 pending 메타데이터를 제거한다.
@@ -728,6 +782,13 @@ def _build_snapshot_from_positions(
         current_snapshot['compound_reference_seed'] = float(getattr(trader, 'compound_reference_seed', 0.0) or 0.0)
         current_snapshot['compound_profit_rate'] = float(getattr(trader, 'profit_compounding_rate', 0.0) or 0.0)
         current_snapshot['compound_loss_rate'] = float(getattr(trader, 'loss_compounding_rate', 0.0) or 0.0)
+    current_snapshot[MA_ALIGNMENT_SWITCH_KEY] = bool(
+        getattr(
+            trader,
+            MA_ALIGNMENT_SWITCH_KEY,
+            (previous_snapshot or {}).get(MA_ALIGNMENT_SWITCH_KEY, False),
+        )
+    )
     _merge_snapshot_max_mdd(current_snapshot, previous_snapshot or {})
     return current_snapshot
 
@@ -772,7 +833,16 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
         ag_config=st.session_state.get('ag_config'),
         auto_update_rsi=False,
     )
-    configure_app_trader(temp_trader)
+    ma_alignment_enabled = bool(
+        preset.get(
+            MA_ALIGNMENT_SWITCH_KEY,
+            (previous_snapshot or {}).get(MA_ALIGNMENT_SWITCH_KEY, False),
+        )
+    )
+    configure_app_trader(
+        temp_trader,
+        ma_alignment_enabled=ma_alignment_enabled,
+    )
     temp_trader.session_start_date = preset.get('session_start_date')
     temp_trader.set_seed_increases(preset.get('seed_increases') or [])
     if st.session_state.get('test_today_override'):
@@ -780,11 +850,13 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
     temp_trader.clear_cache()
 
     start_date = preset.get('session_start_date')
-    sim_result = temp_trader.simulate_from_snapshot_to_today(previous_snapshot, start_date, quiet=True)
+    effective_snapshot = dict(previous_snapshot or {})
+    effective_snapshot[MA_ALIGNMENT_SWITCH_KEY] = ma_alignment_enabled
+    sim_result = temp_trader.simulate_from_snapshot_to_today(effective_snapshot, start_date, quiet=True)
     if sim_result and "error" in sim_result:
         return None, sim_result["error"]
 
-    current_snapshot = _build_snapshot_from_positions(temp_trader, previous_snapshot or {})
+    current_snapshot = _build_snapshot_from_positions(temp_trader, effective_snapshot)
     _, current_price = _calculate_trader_live_mdd_info(
         temp_trader,
         sim_result,
@@ -1002,6 +1074,7 @@ def _normalize_preset_config(config: dict) -> dict:
         "session_start_date": str(config.get("session_start_date", "")),
         "seed_increases": _copy_seed_increases(config.get("seed_increases") or []),
         "position_edits": dict(config.get("position_edits") or {}),
+        MA_ALIGNMENT_SWITCH_KEY: bool(config.get(MA_ALIGNMENT_SWITCH_KEY, False)),
     }
 
 def _preset_state_key(preset_name: str) -> str:
@@ -1032,7 +1105,13 @@ def apply_persisted_preset_configs() -> None:
         if key not in st.session_state or not isinstance(persisted_config, dict):
             continue
         merged = dict(st.session_state[key])
-        for field in ("initial_capital", "session_start_date", "seed_increases", "position_edits"):
+        for field in (
+            "initial_capital",
+            "session_start_date",
+            "seed_increases",
+            "position_edits",
+            MA_ALIGNMENT_SWITCH_KEY,
+        ):
             if field in persisted_config:
                 merged[field] = persisted_config[field]
         st.session_state[key] = _normalize_preset_config(merged)
@@ -1077,6 +1156,9 @@ def sync_active_preset_config_from_session() -> None:
     preset["seed_increases"] = _copy_seed_increases(st.session_state.get("seed_increases") or [])
     if "position_edits" in st.session_state:
         preset["position_edits"] = dict(st.session_state.position_edits or {})
+    preset[MA_ALIGNMENT_SWITCH_KEY] = bool(
+        st.session_state.get(MA_ALIGNMENT_SWITCH_KEY, False)
+    )
     st.session_state[key] = _normalize_preset_config(preset)
 
 def save_active_preset_config() -> tuple:
@@ -1113,6 +1195,74 @@ def save_active_preset_config() -> tuple:
     except Exception:
         pass
     st.session_state._preset_config_save_result = (ok, err)
+    return ok, err
+
+def save_preset_ma_alignment_setting(preset_name: str, enabled: bool) -> tuple:
+    """Persist one preset's opt-in without clearing or rebuilding its positions."""
+    key = _preset_state_key(preset_name)
+    if key not in st.session_state:
+        return False, f"알 수 없는 프리셋입니다: {preset_name}"
+
+    enabled = bool(enabled)
+    preset = dict(st.session_state[key])
+    preset[MA_ALIGNMENT_SWITCH_KEY] = enabled
+    st.session_state[key] = _normalize_preset_config(preset)
+    if st.session_state.get("active_preset") == preset_name:
+        st.session_state[MA_ALIGNMENT_SWITCH_KEY] = enabled
+
+    all_data, sha = _gh_load_all_snapshots()
+    if not all_data:
+        all_data = (
+            getattr(st.session_state, "_gh_snapshot_all", None)
+            or _load_all_snapshots_fallback(prefer_local=not bool(_gh_headers()))
+            or {}
+        )
+        sha = getattr(st.session_state, "_gh_snapshot_sha", None)
+
+    def apply_setting(data: dict) -> dict:
+        updated = dict(data or {})
+        configs = updated.get(_PRESET_CONFIGS_KEY, {})
+        configs = dict(configs) if isinstance(configs, dict) else {}
+        configs[preset_name] = _normalize_preset_config(st.session_state[key])
+        updated[_PRESET_CONFIGS_KEY] = configs
+
+        snapshot = updated.get(preset_name, {})
+        snapshot = dict(snapshot) if isinstance(snapshot, dict) else {}
+        if st.session_state.get("active_preset") == preset_name:
+            active_snapshot = st.session_state.get("positions_snapshot", {})
+            if (
+                isinstance(active_snapshot, dict)
+                and any(key != MA_ALIGNMENT_SWITCH_KEY for key in active_snapshot)
+            ):
+                snapshot = dict(active_snapshot)
+        # The setting belongs to _preset_configs.  Mirror it into an existing
+        # runtime snapshot, but never create a metadata-only snapshot: callers
+        # deliberately treat an empty snapshot as a safety stop.
+        if any(key != MA_ALIGNMENT_SWITCH_KEY for key in snapshot):
+            snapshot[MA_ALIGNMENT_SWITCH_KEY] = enabled
+            updated[preset_name] = snapshot
+        return updated
+
+    all_data = apply_setting(all_data)
+    ok, err = _gh_save_all_snapshots(all_data, sha)
+    if not ok and "GitHub API" in str(err) and "(409)" in str(err):
+        latest_data, latest_sha = _gh_load_all_snapshots()
+        all_data = apply_setting(latest_data)
+        ok, err = _gh_save_all_snapshots(all_data, latest_sha)
+
+    if ok:
+        _, new_sha = _gh_load_all_snapshots()
+        st.session_state._gh_snapshot_sha = new_sha
+    st.session_state._gh_snapshot_all = all_data
+    if st.session_state.get("active_preset") == preset_name:
+        active_snapshot = dict(st.session_state.get("positions_snapshot", {}) or {})
+        if any(key != MA_ALIGNMENT_SWITCH_KEY for key in active_snapshot):
+            active_snapshot[MA_ALIGNMENT_SWITCH_KEY] = enabled
+        st.session_state.positions_snapshot = active_snapshot
+    try:
+        _write_local_all_snapshots(all_data)
+    except Exception:
+        pass
     return ok, err
 
 def _snapshot_position_keys(snapshot: dict) -> list:
@@ -1432,6 +1582,8 @@ if 'ag_config' not in st.session_state:
     }
 if 'active_preset' not in st.session_state:
     st.session_state.active_preset = None
+if MA_ALIGNMENT_SWITCH_KEY not in st.session_state:
+    st.session_state[MA_ALIGNMENT_SWITCH_KEY] = False
 if 'kmw_preset' not in st.session_state:
     st.session_state.kmw_preset = {
         'initial_capital': 9000.0,
@@ -1440,7 +1592,8 @@ if 'kmw_preset' not in st.session_state:
             {"date": "2025-10-21", "amount": 31000.0},
             {"date": "2026-06-21", "amount": 11293.0},
         ],
-        'position_edits': {}  # 포지션 수정 정보 저장
+        'position_edits': {},  # 포지션 수정 정보 저장
+        MA_ALIGNMENT_SWITCH_KEY: False,
     }
 if 'jeh_preset' not in st.session_state:
     st.session_state.jeh_preset = {
@@ -1450,7 +1603,8 @@ if 'jeh_preset' not in st.session_state:
             {"date": "2025-12-22", "amount": 13499.0},
             {"date": "2026-01-15", "amount": 2035.0}
         ],
-        'position_edits': {}  # 포지션 수정 정보 저장
+        'position_edits': {},  # 포지션 수정 정보 저장
+        MA_ALIGNMENT_SWITCH_KEY: False,
     }
 if 'jeh2_preset' not in st.session_state:
     st.session_state.jeh2_preset = {
@@ -1460,21 +1614,24 @@ if 'jeh2_preset' not in st.session_state:
             {"date": "2026-01-15", "amount": 678.0},
             {"date": "2026-06-16", "amount": 600.0}
         ],
-        'position_edits': {}  # 포지션 수정 정보 저장
+        'position_edits': {},  # 포지션 수정 정보 저장
+        MA_ALIGNMENT_SWITCH_KEY: False,
     }
 if 'kmw2_preset' not in st.session_state:
     st.session_state.kmw2_preset = {
         'initial_capital': 67612.0,
         'session_start_date': "2026-04-29",
         'seed_increases': [],
-        'position_edits': {}
+        'position_edits': {},
+        MA_ALIGNMENT_SWITCH_KEY: False,
     }
 if 'khw_preset' not in st.session_state:
     st.session_state.khw_preset = {
         'initial_capital': 21199.0,
         'session_start_date': "2026-08-17",
         'seed_increases': [],
-        'position_edits': {}
+        'position_edits': {},
+        MA_ALIGNMENT_SWITCH_KEY: False,
     }
 
 apply_persisted_preset_configs()
@@ -1519,7 +1676,12 @@ def initialize_trader():
                     ag_config=ag_config,
                     auto_update_rsi=False,
                 )
-                configure_app_trader(st.session_state.trader)
+                configure_app_trader(
+                    st.session_state.trader,
+                    ma_alignment_enabled=bool(
+                        st.session_state.get(MA_ALIGNMENT_SWITCH_KEY, False)
+                    ),
+                )
                 if st.session_state.test_today_override:
                     st.session_state.trader.set_test_today(st.session_state.test_today_override)
                 
@@ -1556,6 +1718,76 @@ def initialize_trader():
             st.session_state.trader.set_seed_increases(st.session_state.get("seed_increases") or [])
         except Exception:
             pass
+
+def show_ma_alignment_preference_control() -> None:
+    """Render and persist the per-preset MA-alignment opt-in."""
+    preset_name = st.session_state.get("active_preset")
+    if not preset_name:
+        st.info("💡 프리셋을 선택하면 해당 사용자만 정배열 스위칭을 켤 수 있습니다.")
+        return
+
+    preset_key = _preset_state_key(preset_name)
+    preset = st.session_state.get(preset_key, {})
+    enabled = bool(
+        preset.get(
+            MA_ALIGNMENT_SWITCH_KEY,
+            st.session_state.get(MA_ALIGNMENT_SWITCH_KEY, False),
+        )
+    )
+    st.session_state[MA_ALIGNMENT_SWITCH_KEY] = enabled
+
+    feedback = st.session_state.pop("_ma_alignment_save_feedback", None)
+    if feedback:
+        saved, message = feedback
+        if saved:
+            st.success(message)
+        else:
+            st.warning(message)
+
+    st.subheader(f"📈 정배열 스위칭 · {preset_name}")
+    toggle_key = f"ma_alignment_opt_in_{preset_name.lower()}"
+    pending_widget_sync = st.session_state.pop(
+        "_ma_alignment_widget_sync", None
+    )
+    if (
+        isinstance(pending_widget_sync, tuple)
+        and len(pending_widget_sync) == 2
+        and pending_widget_sync[0] == preset_name
+    ):
+        st.session_state[toggle_key] = bool(pending_widget_sync[1])
+    if toggle_key not in st.session_state:
+        st.session_state[toggle_key] = enabled
+    selected = st.toggle(
+        "이 프리셋에 정배열 전략 적용",
+        key=toggle_key,
+        help=(
+            "SOXL 전일 종가 기준 SMA5 > SMA20 > SMA60일 때만 신규 매수에 "
+            "정배열 전략을 적용합니다. 기존 포지션의 매도 조건은 유지됩니다."
+        ),
+    )
+    st.caption(
+        "기본값은 꺼짐입니다. 설정은 현재 선택한 프리셋에만 저장되며 "
+        "다른 프리셋에는 영향을 주지 않습니다."
+    )
+
+    if bool(selected) != enabled:
+        ok, err = save_preset_ma_alignment_setting(preset_name, bool(selected))
+        if st.session_state.get("trader") is not None and hasattr(
+            st.session_state.trader, "set_ma_alignment_switch"
+        ):
+            st.session_state.trader.set_ma_alignment_switch(bool(selected))
+        if ok:
+            state_text = "활성화" if selected else "해제"
+            feedback_message = f"✅ {preset_name} 정배열 스위칭을 {state_text}했습니다."
+        else:
+            feedback_message = (
+                f"⚠️ {preset_name} 설정을 로컬에는 반영했지만 GitHub 저장에 실패했습니다: {err}"
+            )
+        st.session_state._ma_alignment_save_feedback = (ok, feedback_message)
+        # The strategy selection affects simulation and recommendations, so rebuild
+        # the trader while preserving the existing position snapshot.
+        st.session_state.trader = None
+        st.rerun()
 
 
 def show_mobile_settings():
@@ -1608,6 +1840,9 @@ def show_mobile_settings():
             else:
                 st.session_state.position_edits = {}
             st.session_state.active_preset = "KMW"
+            st.session_state[MA_ALIGNMENT_SWITCH_KEY] = bool(
+                kmw.get(MA_ALIGNMENT_SWITCH_KEY, False)
+            )
             st.session_state.positions_snapshot = load_preset_snapshot("KMW")
             st.session_state.trader = None
             st.rerun()
@@ -1622,6 +1857,9 @@ def show_mobile_settings():
             else:
                 st.session_state.position_edits = {}
             st.session_state.active_preset = "JEH"
+            st.session_state[MA_ALIGNMENT_SWITCH_KEY] = bool(
+                jeh.get(MA_ALIGNMENT_SWITCH_KEY, False)
+            )
             st.session_state.positions_snapshot = load_preset_snapshot("JEH")
             st.session_state.trader = None
             st.rerun()
@@ -1636,6 +1874,9 @@ def show_mobile_settings():
             else:
                 st.session_state.position_edits = {}
             st.session_state.active_preset = "KMW2"
+            st.session_state[MA_ALIGNMENT_SWITCH_KEY] = bool(
+                kmw2.get(MA_ALIGNMENT_SWITCH_KEY, False)
+            )
             st.session_state.positions_snapshot = load_preset_snapshot("KMW2")
             st.session_state.trader = None
             st.rerun()
@@ -1650,6 +1891,9 @@ def show_mobile_settings():
             else:
                 st.session_state.position_edits = {}
             st.session_state.active_preset = "JEH2"
+            st.session_state[MA_ALIGNMENT_SWITCH_KEY] = bool(
+                jeh2.get(MA_ALIGNMENT_SWITCH_KEY, False)
+            )
             st.session_state.positions_snapshot = load_preset_snapshot("JEH2")
             st.session_state.trader = None
             st.rerun()
@@ -1664,10 +1908,14 @@ def show_mobile_settings():
             else:
                 st.session_state.position_edits = {}
             st.session_state.active_preset = "KHW"
+            st.session_state[MA_ALIGNMENT_SWITCH_KEY] = bool(
+                khw.get(MA_ALIGNMENT_SWITCH_KEY, False)
+            )
             st.session_state.positions_snapshot = load_preset_snapshot("KHW")
             st.session_state.trader = None
             st.rerun()
 
+    show_ma_alignment_preference_control()
     show_preset_max_mdd_summary()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
@@ -1979,7 +2227,75 @@ def show_dashboard():
                 st.warning("⚠️ 10/9일(전일) 데이터를 찾을 수 없습니다.")
             elif daily_close is None:
                 st.warning("⚠️ 10/10일(당일) 데이터를 찾을 수 없습니다.")
-    
+
+def show_ma_alignment_alert(recommendation: dict) -> None:
+    """Notify on a detected alignment and offer a preset-scoped opt-in."""
+    status = recommendation.get("ma_alignment")
+    if not isinstance(status, dict):
+        return
+
+    condition_met = bool(status.get("condition_met", False))
+    enabled = bool(status.get("enabled", False))
+    active = bool(status.get("active", False))
+    basis_date = str(status.get("basis_date") or recommendation.get("basis_date") or "")
+    strategy_name = str(
+        status.get("strategy_name")
+        or recommendation.get("strategy_name")
+        or "정배열 전략"
+    )
+
+    sma_values = []
+    for label, key in (("SMA5", "sma5"), ("SMA20", "sma20"), ("SMA60", "sma60")):
+        try:
+            sma_values.append(f"{label} ${float(status[key]):.2f}")
+        except (KeyError, TypeError, ValueError):
+            pass
+    detail = " · ".join(sma_values)
+    if basis_date:
+        detail = f"기준일 {basis_date}" + (f" · {detail}" if detail else "")
+
+    if condition_met and active:
+        st.success(
+            f"📈 정배열 조건 충족 · {strategy_name} 적용 중"
+            + (f" ({detail})" if detail else "")
+        )
+        return
+
+    if condition_met:
+        st.warning(
+            "📈 SOXL 정배열 조건(SMA5 > SMA20 > SMA60)이 발생했습니다. "
+            "현재 프리셋은 기존 전략을 유지하고 있습니다."
+            + (f" ({detail})" if detail else "")
+        )
+        preset_name = st.session_state.get("active_preset")
+        if not enabled and preset_name:
+            if st.button(
+                f"{preset_name}만 정배열 전략으로 전환",
+                key=f"activate_ma_alignment_{preset_name.lower()}",
+                type="primary",
+                use_container_width=True,
+            ):
+                ok, err = save_preset_ma_alignment_setting(preset_name, True)
+                if ok:
+                    message = f"✅ {preset_name} 정배열 스위칭을 활성화했습니다."
+                else:
+                    message = (
+                        f"⚠️ {preset_name} 설정을 로컬에는 반영했지만 "
+                        f"GitHub 저장에 실패했습니다: {err}"
+                    )
+                st.session_state._ma_alignment_save_feedback = (ok, message)
+                st.session_state._ma_alignment_widget_sync = (preset_name, True)
+                st.session_state.trader = None
+                st.rerun()
+        elif not preset_name:
+            st.caption("프리셋을 먼저 선택하면 해당 사용자에게만 적용할 수 있습니다.")
+    elif enabled:
+        st.info(
+            "📉 정배열 스위칭은 켜져 있지만 현재 조건은 미충족입니다. "
+            "신규 매수는 기존 전략을 사용합니다."
+            + (f" ({detail})" if detail else "")
+        )
+
 
 def show_daily_recommendation():
     """일일 매매 추천 페이지"""
@@ -2120,21 +2436,27 @@ def show_daily_recommendation():
                         saved = sv
                         break
             if saved:
-                current_snapshot[snap_key] = {
+                position_payload = {
                     'shares': int(saved['shares']),
                     'buy_price': float(pos['buy_price']),
                     'amount': float(saved['shares']) * float(pos['buy_price']),
                     'round': int(pos['round']),
                     'mode': str(pos.get('mode') or saved.get('mode') or 'SF'),
                 }
+                current_snapshot[snap_key] = _preserve_position_strategy_fields(
+                    position_payload, pos, saved
+                )
             else:
-                current_snapshot[snap_key] = {
+                position_payload = {
                     'shares': int(pos['shares']),
                     'buy_price': float(pos['buy_price']),
                     'amount': float(pos['amount']),
                     'round': int(pos['round']),
                     'mode': str(pos.get('mode') or 'SF'),
                 }
+                current_snapshot[snap_key] = _preserve_position_strategy_fields(
+                    position_payload, pos
+                )
         current_snapshot['available_cash'] = float(getattr(st.session_state.trader, 'available_cash', 0.0) or 0.0)
         current_snapshot['processed_seed_dates'] = sorted(list(getattr(st.session_state.trader, 'processed_seed_dates', set()) or []))
         pending_buy = _pending_buy_from_recommendation(
@@ -2250,6 +2572,7 @@ def show_daily_recommendation():
     if buy_order_date:
         status_text += f" · 매수 주문일: **{buy_order_date}**"
     st.info(status_text)
+    show_ma_alignment_alert(recommendation)
     
     # GitHub 스냅샷 저장 결과 표시
     save_result = st.session_state.get('_gh_save_result')
@@ -2269,6 +2592,9 @@ def show_daily_recommendation():
         mode_name = "안전모드" if recommendation['mode'] == "SF" else "공세모드"
         mode_class = "mode-sf" if recommendation['mode'] == "SF" else "mode-ag"
         st.markdown(f"<div class='{mode_class}'>🎯 모드: {recommendation['mode']} ({mode_name})</div>", unsafe_allow_html=True)
+        strategy_name = recommendation.get("strategy_name")
+        if strategy_name:
+            st.caption(f"적용 매수 전략: {strategy_name}")
         
     with col2:
         one_week_rsi = recommendation.get('qqq_one_week_ago_rsi')
@@ -2296,7 +2622,9 @@ def show_daily_recommendation():
         if recommendation['can_buy']:
             buy_round = recommendation['next_buy_round']
             # 현재 모드의 split_ratios에서 해당 회차 비중(%) 가져오기
-            current_config = st.session_state.trader.get_current_config()
+            current_config = recommendation.get("active_config")
+            if not isinstance(current_config, dict):
+                current_config = st.session_state.trader.get_current_config()
             split_ratios = current_config.get("split_ratios", [])
             buy_ratio_pct = split_ratios[buy_round - 1] * 100 if buy_round <= len(split_ratios) else 0
             st.success(f"✅ {buy_order_date} 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
@@ -2343,7 +2671,10 @@ def show_daily_recommendation():
                 else:
                     st.caption("현재가가 매수가 미만입니다. 당일 유효(DAY) 지정가로 매수가를 걸어두면 터치 시 체결")
         else:
-            if st.session_state.trader.current_round > st.session_state.trader.get_current_config()["split_count"]:
+            current_config = recommendation.get("active_config")
+            if not isinstance(current_config, dict):
+                current_config = st.session_state.trader.get_current_config()
+            if st.session_state.trader.current_round > current_config["split_count"]:
                 st.warning("🔴 매수 불가: 모든 분할매수 완료")
             else:
                 st.warning("🔴 매수 불가: 시드 부족")
@@ -2411,13 +2742,24 @@ def show_daily_recommendation():
                         f"보유 ${st.session_state.trader.available_cash:,.2f}"
                     )
                 else:
+                    active_config = recommendation.get("active_config")
+                    if not isinstance(active_config, dict):
+                        active_config = st.session_state.trader.get_current_config()
                     new_pos = {
                         "round": int(confirm_round),
                         "buy_date": buy_date_dt,
                         "buy_price": float(confirm_price),
                         "shares": int(confirm_shares),
                         "amount": float(confirm_amount),
-                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF')
+                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF'),
+                        "buy_threshold": float(active_config.get("buy_threshold", 0.0)),
+                        "sell_threshold": float(active_config.get("sell_threshold", 0.0)),
+                        "max_hold_days": int(active_config.get("max_hold_days", 0)),
+                        "strategy_name": str(
+                            recommendation.get("strategy_name")
+                            or active_config.get("strategy_name")
+                            or "기본"
+                        ),
                     }
                     st.session_state.trader.positions.append(new_pos)
                     st.session_state.trader.available_cash -= float(confirm_amount)
