@@ -93,6 +93,13 @@
       "round": 3,
       "mode": "AG"
     },
+    "pending_buy": {
+      "round": 2,
+      "order_date": "2026-09-28",
+      "quantity": 71,
+      "target_price": 156.9021968383789,
+      "basis_date": "2026-09-25"
+    },
     "available_cash": 84069.39810638428,
     "processed_seed_dates": [],
     "as_of_date": "2026-09-25",
@@ -100,18 +107,6 @@
     "compound_reference_seed": 84176.30196594239,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
-    "compound_settlements": [
-      {
-        "trade_date": "2026-09-25",
-        "settlement_date": "2026-10-02",
-        "pnl": 171.59999999999945
-      },
-      {
-        "trade_date": "2026-09-25",
-        "settlement_date": "2026-10-02",
-        "pnl": 378.8798645019524
-      }
-    ],
     "maxMdd": {
       "percent": 30.5094,
       "date": "2026-07-29",
@@ -122,13 +117,6 @@
       "peakDate": "2026-07-22",
       "peakValue": 92313.31341552734,
       "soxlPrice": 140.25
-    },
-    "pending_buy": {
-      "round": 2,
-      "order_date": "2026-09-28",
-      "quantity": 71,
-      "target_price": 156.9021968383789,
-      "basis_date": "2026-09-25"
     }
   },
   "JEH2": {
