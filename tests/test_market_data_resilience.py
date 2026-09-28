@@ -59,7 +59,12 @@ class MarketDataResilienceTests(unittest.TestCase):
             _FakeResponse(200, _chart_payload()),
         ]
 
-        result = self.trader.get_stock_data("QQQ", "6mo")
+        with patch.object(
+            SOXLQuantTrader,
+            "_required_cached_market_date",
+            return_value=date(2026, 9, 2),
+        ):
+            result = self.trader.get_stock_data("QQQ", "6mo")
 
         self.assertIsNotNone(result)
         self.assertEqual(len(result), 2)
@@ -72,9 +77,14 @@ class MarketDataResilienceTests(unittest.TestCase):
     @patch("soxl_quant_system.requests.get")
     def test_fresh_market_data_cache_is_shared_between_traders(self, mock_get):
         mock_get.return_value = _FakeResponse(200, _chart_payload())
-        first = self.trader.get_stock_data("QQQ", "6mo")
-        second_trader = SOXLQuantTrader(initial_capital=10_000, auto_update_rsi=False)
-        second = second_trader.get_stock_data("QQQ", "6mo")
+        with patch.object(
+            SOXLQuantTrader,
+            "_required_cached_market_date",
+            return_value=date(2026, 9, 2),
+        ):
+            first = self.trader.get_stock_data("QQQ", "6mo")
+            second_trader = SOXLQuantTrader(initial_capital=10_000, auto_update_rsi=False)
+            second = second_trader.get_stock_data("QQQ", "6mo")
 
         self.assertEqual(mock_get.call_count, 1)
         pd.testing.assert_frame_equal(first, second)

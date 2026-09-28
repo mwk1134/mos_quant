@@ -71,6 +71,30 @@ class PresetSnapshotIntegrityTests(unittest.TestCase):
             seeds,
         )
 
+    def test_filled_september_24_lot_is_removed_from_every_preset(self):
+        for preset_name in ("KMW", "JEH", "JEH2", "KMW2", "KHW"):
+            with self.subTest(preset=preset_name):
+                self.assertNotIn("2_2026-09-24", self.data[preset_name])
+
+    def test_september_25_sales_keep_pending_compounding_settlements(self):
+        expected_pnl = {
+            "KMW": 197.59999999999945 + 440.3198425292958,
+            "JEH": 57.19999999999982 + 133.11995239257794,
+            "KMW2": 171.59999999999945 + 378.8798645019524,
+            "JEH2": 10.399999999999977 + 20.479992675781205,
+            "KHW": 41.59999999999991 + 97.27996520996066,
+        }
+        for preset_name, pnl in expected_pnl.items():
+            with self.subTest(preset=preset_name):
+                settlements = self.data[preset_name]["compound_settlements"]
+                self.assertEqual(len(settlements), 2)
+                self.assertTrue(all(
+                    item["trade_date"] == "2026-09-25"
+                    and item["settlement_date"] == "2026-10-02"
+                    for item in settlements
+                ))
+                self.assertAlmostEqual(sum(item["pnl"] for item in settlements), pnl)
+
 
 if __name__ == "__main__":
     unittest.main()

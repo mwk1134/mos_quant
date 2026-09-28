@@ -1,6 +1,7 @@
 import requests
 import json
 import time
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from threading import RLock
 from datetime import datetime, timedelta, timezone
 import pandas as pd
@@ -29,6 +30,25 @@ _SHARED_STOCK_DATA_CACHE_LOCK = RLock()
 _STOCK_DATA_CACHE_TTL_SECONDS = 300
 _STOCK_DATA_RETRY_COOLDOWN_SECONDS = 60
 _STOCK_DATA_STALE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+_ORDER_PRICE_QUANTUM = Decimal("0.01")
+
+
+def normalize_order_price(price: float) -> float:
+    """Return a US-listed security price rounded to an orderable cent.
+
+    Market-data providers commonly expose a quoted close such as ``151.45`` as
+    ``151.449996...``. Comparing that raw float with a percentage target that
+    is displayed/entered to two decimals can leave an already-filled LOC order
+    in the portfolio. Decimal + ROUND_HALF_UP keeps the trading decision equal
+    to the price shown to the user and accepted by the broker.
+    """
+    try:
+        value = Decimal(str(price))
+        if not value.is_finite():
+            raise ValueError
+        return float(value.quantize(_ORDER_PRICE_QUANTUM, rounding=ROUND_HALF_UP))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError(f"invalid order price: {price!r}") from exc
 
 
 def calculate_cash_limited_order(
@@ -661,7 +681,34 @@ class SOXLQuantTrader:
             return
         self.compound_seed = seed_value
         self.compound_reference_seed = reference_value
-        self.compound_settlements = []
+        restored_settlements = []
+        for settlement in snapshot.get("compound_settlements", []) or []:
+            if not isinstance(settlement, dict):
+                continue
+            try:
+                trade_ts = pd.Timestamp(settlement.get("trade_date"))
+                settlement_ts = pd.Timestamp(settlement.get("settlement_date"))
+                pnl = float(settlement.get("pnl"))
+                if pd.isna(trade_ts) or pd.isna(settlement_ts) or not np.isfinite(pnl):
+                    continue
+                if trade_ts.tzinfo is not None:
+                    trade_ts = trade_ts.tz_localize(None)
+                if settlement_ts.tzinfo is not None:
+                    settlement_ts = settlement_ts.tz_localize(None)
+                trade_dt = trade_ts.to_pydatetime().replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                settlement_dt = settlement_ts.to_pydatetime().replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+            except Exception:
+                continue
+            restored_settlements.append({
+                "trade_date": trade_dt,
+                "settlement_date": settlement_dt,
+                "pnl": pnl,
+            })
+        self.compound_settlements = restored_settlements
         self._compound_processed_dates = set()
 
     def _add_compounding_seed(self, amount: float) -> None:
@@ -1214,6 +1261,15 @@ class SOXLQuantTrader:
             f"{getattr(self, 'compounding_settlement_delay_days', 0)}_"
             f"{getattr(self, 'compounding_reference_renewal_days', 0)}"
         )
+        compounding_snapshot_key = json.dumps(
+            {
+                "seed": snapshot.get("compound_seed"),
+                "reference_seed": snapshot.get("compound_reference_seed"),
+                "settlements": snapshot.get("compound_settlements", []),
+            },
+            sort_keys=True,
+            default=str,
+        )
         ma_alignment_cache_key = f"ma_{int(bool(self.ma_alignment_switch_enabled))}"
         pending_buy = self._pending_buy_from_snapshot(snapshot)
         pending_cache_key = (
@@ -1224,7 +1280,8 @@ class SOXLQuantTrader:
         cache_key = (
             f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_"
             f"{self.test_today_override or 'real'}_{seed_increases_str}_"
-            f"{compounding_cache_key}_{ma_alignment_cache_key}_{pending_cache_key}"
+            f"{compounding_cache_key}_{compounding_snapshot_key}_"
+            f"{ma_alignment_cache_key}_{pending_cache_key}"
         )
         if cache_key in self._simulation_cache:
             cached, cache_time = self._simulation_cache[cache_key]
@@ -1302,6 +1359,7 @@ class SOXLQuantTrader:
             "current_round": self.current_round,
             "compound_seed": getattr(self, "compound_seed", None),
             "compound_reference_seed": getattr(self, "compound_reference_seed", None),
+            "compound_settlements": list(getattr(self, "compound_settlements", []) or []),
             "result": result,
         }
         self._simulation_cache[cache_key] = (cached, datetime.now())
@@ -2634,6 +2692,15 @@ class SOXLQuantTrader:
         if "strategy_name" in position:
             position_config["strategy_name"] = position["strategy_name"]
         return position_config
+
+    def calculate_position_sell_price(self, position: Dict) -> float:
+        """Return the position's broker-orderable LOC target price."""
+        position_config = self.get_position_config(position)
+        buy_price = Decimal(str(normalize_order_price(position["buy_price"])))
+        sell_multiplier = Decimal("1") + (
+            Decimal(str(position_config["sell_threshold"])) / Decimal("100")
+        )
+        return normalize_order_price(buy_price * sell_multiplier)
     
     def calculate_buy_sell_prices(self, current_price: float, config: Optional[Dict] = None) -> Tuple[float, float]:
         """
@@ -2911,14 +2978,15 @@ class SOXLQuantTrader:
                 continue
 
             position_config = self.get_position_config(position)
-            target_price = position["buy_price"] * (1 + position_config["sell_threshold"] / 100)
+            target_price = self.calculate_position_sell_price(position)
 
             # 1. 목표가 도달한 경우 매도
-            hit_rows = future_data[future_data["Close"] >= target_price]
+            normalized_closes = future_data["Close"].map(normalize_order_price)
+            hit_rows = future_data[normalized_closes >= target_price]
             if not hit_rows.empty:
                 sell_row = hit_rows.iloc[0]
                 sell_date = sell_row.name
-                sell_close = sell_row["Close"]
+                sell_close = normalize_order_price(sell_row["Close"])
 
                 proceeds = position["shares"] * sell_close
                 profit = proceeds - position["amount"]
@@ -2957,7 +3025,7 @@ class SOXLQuantTrader:
                 # 손절예정일의 종가로 매도 (손절예정일이 거래일이 아닐 수 있으므로 가장 가까운 거래일 사용)
                 sell_row = stop_loss_rows.iloc[0]
                 sell_date = sell_row.name
-                sell_close = sell_row["Close"]
+                sell_close = normalize_order_price(sell_row["Close"])
 
                 proceeds = position["shares"] * sell_close
                 profit = proceeds - position["amount"]
@@ -3025,10 +3093,10 @@ class SOXLQuantTrader:
 
             # 해당 포지션의 매수체결가 기준으로 매도가 계산
             position_buy_price = position["buy_price"]
-            sell_price = position_buy_price * (1 + position_config["sell_threshold"] / 100)
+            sell_price = self.calculate_position_sell_price(position)
             
             # 디버깅: 매도 조건 상세 정보
-            daily_close = row['Close']
+            daily_close = normalize_order_price(row['Close'])
             buy_date_str = buy_date.strftime('%Y-%m-%d') if isinstance(buy_date, (datetime, pd.Timestamp)) else str(buy_date)
             print(f"   📦 {position['round']}회차 (매수일: {buy_date_str}): 매수가 ${position_buy_price:.2f} → 매도목표가 ${sell_price:.2f} (현재가 ${daily_close:.2f})")
             print(f"      보유기간: {hold_days}일 (최대: {position_config['max_hold_days']}일, 손절예정일: {stop_loss_date.strftime('%Y-%m-%d')})")
@@ -3074,7 +3142,7 @@ class SOXLQuantTrader:
                 sell_positions.append({
                     "position": position,
                     "reason": f"손절예정일 경과 (보유기간: {hold_days}일)",
-                    "sell_price": row['Close'],  # 종가에 LOC 매도
+                    "sell_price": daily_close,  # 종가에 LOC 매도
                     "will_sell": True,  # 매도 조건 충족
                     "show_in_recommendation_list": show_in_list
                 })
@@ -3948,7 +4016,7 @@ class SOXLQuantTrader:
                 print("📋 보유 포지션 LOC 매도 목표가 안내:")
                 for pos in self.positions:
                     config = self.get_position_config(pos)
-                    target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
+                    target_sell_price = self.calculate_position_sell_price(pos)
                     current_price = rec['soxl_current_price']
                     price_diff = target_sell_price - current_price
                     price_diff_pct = (price_diff / current_price) * 100
@@ -4022,8 +4090,7 @@ class SOXLQuantTrader:
                 mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
                 
                 # 매도 목표가 계산
-                config = self.sf_config if mode == "SF" else self.ag_config
-                target_sell_price = pos['buy_price'] * (1 + config['sell_threshold'] / 100)
+                target_sell_price = self.calculate_position_sell_price(pos)
                 
                 print(f"{pos['round']}회차: {pos['shares']}주 @ ${pos['buy_price']:.2f} ({hold_days}일 보유)")
                 print(f"        매수체결일: {buy_date_str}")
@@ -4720,10 +4787,10 @@ class SOXLQuantTrader:
                         print(f"   - 보유 포지션 목록:")
                         for pos in self.positions:
                             buy_date_str = pos['buy_date'].strftime('%Y-%m-%d') if isinstance(pos['buy_date'], (datetime, pd.Timestamp)) else str(pos['buy_date'])
-                            pos_config = self.get_position_config(pos)
-                            target_price = pos["buy_price"] * (1 + pos_config["sell_threshold"] / 100)
+                            target_price = self.calculate_position_sell_price(pos)
+                            normalized_close = normalize_order_price(row['Close'])
                             print(f"      {pos['round']}회차: 매수일 {buy_date_str}, 모드 {pos.get('mode', 'N/A')}, 매수가 ${pos.get('buy_price', 0):.2f}, 목표가 ${target_price:.2f}")
-                            print(f"         당일 종가: ${row['Close']:.2f}, 매도 조건: {row['Close']:.2f} >= {target_price:.2f} = {row['Close'] >= target_price}")
+                            print(f"         당일 종가: ${normalized_close:.2f}, 매도 조건: {normalized_close:.2f} >= {target_price:.2f} = {normalized_close >= target_price}")
                 
                 # ── 매수 회차를 매도 처리 전에 미리 결정 (보유 포지션 수 + 1) ──
                 # LOC 주문 특성상 매수/매도가 동시에 장 마감 시 체결되므로,

@@ -661,6 +661,23 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
     curr_has_positions = _snapshot_has_positions(current_snapshot)
     if _is_manual_cash_locked_snapshot(previous_snapshot) and not curr_has_positions:
         return False
+    if current_snapshot.get("compound_settlements") != (previous_snapshot or {}).get(
+        "compound_settlements"
+    ):
+        return True
+    prev_position_keys = {
+        key for key, value in (previous_snapshot or {}).items()
+        if _is_snapshot_position(key, value)
+    }
+    curr_position_keys = {
+        key for key, value in (current_snapshot or {}).items()
+        if _is_snapshot_position(key, value)
+    }
+    # A confirmed fill can remove one stale lot while other lots remain. Persist
+    # that state transition even on weekends, when max(position buy dates) may
+    # stay unchanged and the normal trading-day gate is false.
+    if prev_position_keys != curr_position_keys:
+        return True
     if prev_has_positions and not curr_has_positions:
         return True
     if current_snapshot.get("available_cash") is not None and not curr_has_positions:
@@ -703,6 +720,28 @@ def _preserve_position_strategy_fields(
     if value:
         payload["strategy_name"] = str(value)
     return payload
+
+
+def _serialize_compound_settlements(settlements: list) -> list:
+    """Convert pending compounding settlements into JSON-safe snapshot rows."""
+    serialized = []
+    for settlement in settlements or []:
+        if not isinstance(settlement, dict):
+            continue
+        try:
+            trade_date = pd.Timestamp(settlement.get("trade_date"))
+            settlement_date = pd.Timestamp(settlement.get("settlement_date"))
+            pnl = float(settlement.get("pnl"))
+            if pd.isna(trade_date) or pd.isna(settlement_date) or not np.isfinite(pnl):
+                continue
+        except Exception:
+            continue
+        serialized.append({
+            "trade_date": trade_date.strftime("%Y-%m-%d"),
+            "settlement_date": settlement_date.strftime("%Y-%m-%d"),
+            "pnl": pnl,
+        })
+    return serialized
 
 def _build_snapshot_from_positions(
     trader: SOXLQuantTrader,
@@ -782,6 +821,11 @@ def _build_snapshot_from_positions(
         current_snapshot['compound_reference_seed'] = float(getattr(trader, 'compound_reference_seed', 0.0) or 0.0)
         current_snapshot['compound_profit_rate'] = float(getattr(trader, 'profit_compounding_rate', 0.0) or 0.0)
         current_snapshot['compound_loss_rate'] = float(getattr(trader, 'loss_compounding_rate', 0.0) or 0.0)
+        compound_settlements = _serialize_compound_settlements(
+            list(getattr(trader, 'compound_settlements', []) or [])
+        )
+        if compound_settlements:
+            current_snapshot['compound_settlements'] = compound_settlements
     current_snapshot[MA_ALIGNMENT_SWITCH_KEY] = bool(
         getattr(
             trader,
@@ -1320,6 +1364,7 @@ def _adjust_snapshot_for_seed_change(snapshot: dict, seed: dict, action: str) ->
         "compound_reference_seed",
         "compound_profit_rate",
         "compound_loss_rate",
+        "compound_settlements",
     ):
         adjusted.pop(key, None)
 
@@ -2860,7 +2905,7 @@ def show_daily_recommendation():
                     stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
                 
                 # 매도 목표가 계산
-                target_sell_price = buy_price * (1 + config['sell_threshold'] / 100)
+                target_sell_price = st.session_state.trader.calculate_position_sell_price(pos)
                 current_price = recommendation['soxl_current_price']
                 price_diff = target_sell_price - current_price
                 price_diff_pct = (price_diff / current_price) * 100
@@ -2980,8 +3025,7 @@ def show_daily_recommendation():
             mode_name = "안전모드(SF)" if mode == "SF" else "공세모드(AG)"
             
             # 매도 목표가 계산
-            position_config = st.session_state.trader.get_position_config(pos)
-            target_sell_price = pos['buy_price'] * (1 + position_config['sell_threshold'] / 100)
+            target_sell_price = st.session_state.trader.calculate_position_sell_price(pos)
             
             positions_data.append({
                 "회차": pos['round'],
