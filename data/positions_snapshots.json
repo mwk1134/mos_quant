@@ -7,16 +7,6 @@
       "round": 3,
       "mode": "AG"
     },
-    "2_2026-09-28": {
-      "shares": 83,
-      "buy_price": 142.2899932861328,
-      "amount": 11810.069442749023,
-      "round": 2,
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7
-    },
     "3_2026-09-29": {
       "shares": 78,
       "buy_price": 147.0,
@@ -27,16 +17,33 @@
       "sell_threshold": 3.5,
       "max_hold_days": 7
     },
-    "available_cash": 69165.08834381103,
+    "4_2026-09-30": {
+      "shares": 95,
+      "buy_price": 147.86000061035156,
+      "amount": 14046.700057983398,
+      "round": 4,
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7
+    },
+    "available_cash": 67390.76828582764,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21"
     ],
-    "as_of_date": "2026-09-29",
+    "as_of_date": "2026-09-30",
     "compound_seed": 98015.5,
     "compound_reference_seed": 98015.5,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
+    "compound_settlements": [
+      {
+        "trade_date": "2026-09-30",
+        "settlement_date": "2026-10-07",
+        "pnl": 462.3105572509776
+      }
+    ],
     "ma_alignment_switch_enabled": false,
     "maxMdd": {
       "percent": 29.1806,
@@ -51,10 +58,10 @@
     },
     "pending_buy": {
       "round": 4,
-      "order_date": "2026-09-30",
-      "quantity": 95,
-      "target_price": 152.292,
-      "basis_date": "2026-09-29"
+      "order_date": "2026-10-01",
+      "quantity": 94,
+      "target_price": 153.1829606323242,
+      "basis_date": "2026-09-30"
     }
   },
   "JEH": {
