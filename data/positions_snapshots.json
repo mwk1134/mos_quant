@@ -97,7 +97,7 @@
         "pnl": 796.9001983642574
       }
     ],
-    "ma_alignment_switch_enabled": false,
+    "ma_alignment_switch_enabled": true,
     "maxMdd": {
       "percent": 30.5094,
       "date": "2026-07-29",
@@ -242,7 +242,8 @@
       "initial_capital": 67612.0,
       "session_start_date": "2026-04-29",
       "seed_increases": [],
-      "position_edits": {}
+      "position_edits": {},
+      "ma_alignment_switch_enabled": true
     },
     "KHW": {
       "initial_capital": 21199.0,
