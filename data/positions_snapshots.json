@@ -7,39 +7,14 @@
       "target_price": 169.6035669555664,
       "basis_date": "2026-10-02"
     },
-    "available_cash": 106421.09828582764,
+    "available_cash": 113489.09828582764,
     "processed_seed_dates": [
       "2025-10-21",
-      "2026-06-21"
+      "2026-06-21",
+      "2026-10-04"
     ],
     "as_of_date": "2026-10-02",
     "cash_snapshot_date": "2026-10-01",
-    "compound_seed": 98015.5,
-    "compound_reference_seed": 98015.5,
-    "compound_profit_rate": 0.7,
-    "compound_loss_rate": 0.2,
-    "compound_settlements": [
-      {
-        "trade_date": "2026-09-30",
-        "settlement_date": "2026-10-07",
-        "pnl": 462.3105572509776
-      },
-      {
-        "trade_date": "2026-10-01",
-        "settlement_date": "2026-10-08",
-        "pnl": 521.8199999999997
-      },
-      {
-        "trade_date": "2026-10-01",
-        "settlement_date": "2026-10-08",
-        "pnl": 553.8499420166008
-      },
-      {
-        "trade_date": "2026-10-02",
-        "settlement_date": "2026-10-09",
-        "pnl": 931.7602319335947
-      }
-    ],
     "ma_alignment_switch_enabled": false,
     "maxMdd": {
       "percent": 29.1806,
@@ -51,7 +26,8 @@
       "peakDate": "2026-07-22",
       "peakValue": 97923.902661438,
       "soxlPrice": 140.25
-    }
+    },
+    "manual_cash_lock": true
   },
   "JEH": {
     "3_2026-09-25": {
