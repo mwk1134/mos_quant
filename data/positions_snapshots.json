@@ -166,25 +166,19 @@
     }
   },
   "KHW": {
-    "3_2026-09-25": {
-      "shares": 17,
-      "buy_price": 151.4499969482422,
-      "amount": 2574.649948120117,
-      "round": 3,
-      "mode": "AG"
-    },
     "pending_buy": {
-      "round": 2,
-      "order_date": "2026-10-02",
-      "quantity": 18,
-      "target_price": 159.22284252929688,
-      "basis_date": "2026-10-01"
+      "round": 1,
+      "order_date": "2026-10-05",
+      "quantity": 8,
+      "target_price": 169.6035669555664,
+      "basis_date": "2026-10-02"
     },
-    "available_cash": 21592.8198739624,
+    "available_cash": 24375.8898739624,
     "processed_seed_dates": [
       "2026-09-15"
     ],
-    "as_of_date": "2026-10-01",
+    "as_of_date": "2026-10-02",
+    "cash_snapshot_date": "2026-10-01",
     "compound_seed": 22410.16979675293,
     "compound_reference_seed": 22410.16979675293,
     "compound_profit_rate": 0.7,
@@ -204,6 +198,11 @@
         "trade_date": "2026-10-01",
         "settlement_date": "2026-10-08",
         "pnl": 122.42998718261697
+      },
+      {
+        "trade_date": "2026-10-02",
+        "settlement_date": "2026-10-09",
+        "pnl": 208.42005187988298
       }
     ],
     "ma_alignment_switch_enabled": false,
