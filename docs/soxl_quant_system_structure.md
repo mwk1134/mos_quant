@@ -101,7 +101,7 @@ class SOXLQuantTrader:
 | `load_rsi_reference_data()` | RSI 참조 데이터 로드 (JSON) | dict |
 | `get_rsi_from_reference()` | 특정 날짜의 RSI 값 조회 | float |
 | `get_stock_data()` | Yahoo Finance에서 주가 데이터 가져오기 | DataFrame |
-| `calculate_weekly_rsi()` | 주간 RSI 계산 (14주 Wilder's RSI) | float |
+| `calculate_weekly_rsi()` | 주간 RSI 계산 (14주 단순평균 RSI (Cutler)) | float |
 | `check_and_update_rsi_data()` | RSI 데이터 최신 여부 확인 | bool |
 | `update_rsi_reference_file()` | RSI 참조 파일 업데이트 | bool |
 
@@ -559,7 +559,7 @@ trader.print_recommendation(recommendation)
 
 ## 참고사항
 
-- **RSI 계산**: 14주 Wilder's RSI 사용
+- **RSI 계산**: 14주 단순평균 RSI (Cutler) 사용
 - **데이터 소스**: Yahoo Finance API
 - **캐싱**: 주가 데이터 1분 캐시, 시뮬레이션 30초 캐시
 - **시장 시간**: 미국 동부시간(ET) 기준

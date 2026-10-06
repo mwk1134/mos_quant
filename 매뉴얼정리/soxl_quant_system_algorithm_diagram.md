@@ -137,7 +137,7 @@ update_mode(qqq_data)
 │
 ├─ 📊 주간 RSI 계산
 │   ├─ QQQ 데이터 → 주간 데이터 변환 (W-FRI)
-│   ├─ RSI 계산 (14주 Wilder's RSI)
+│   ├─ RSI 계산 (14주 단순평균 RSI (Cutler))
 │   └─ weekly_df, rsi 배열 생성
 │
 ├─ 📅 기준 날짜 계산

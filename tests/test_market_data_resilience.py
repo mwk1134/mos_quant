@@ -1,7 +1,8 @@
 import inspect
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -18,16 +19,18 @@ class _FakeResponse:
         return self._payload
 
 
-def _chart_payload():
-    timestamps = [
-        int(datetime(2026, 9, 1, 12, 0).timestamp()),
-        int(datetime(2026, 9, 2, 12, 0).timestamp()),
-    ]
+def _chart_payload(granularity="1d", timestamps=None):
+    if timestamps is None:
+        eastern = ZoneInfo("America/New_York")
+        timestamps = [
+            int(datetime(2026, 9, 1, 9, 30, tzinfo=eastern).timestamp()),
+            int(datetime(2026, 9, 2, 9, 30, tzinfo=eastern).timestamp()),
+        ]
     return {
         "chart": {
             "result": [{
                 "timestamp": timestamps,
-                "meta": {},
+                "meta": {"dataGranularity": granularity},
                 "indicators": {
                     "quote": [{
                         "open": [100.0, 101.0],
@@ -73,6 +76,69 @@ class MarketDataResilienceTests(unittest.TestCase):
         self.assertIn("query1.finance.yahoo.com", urls[0])
         self.assertIn("query2.finance.yahoo.com", urls[1])
         self.assertIn("query1.finance.yahoo.com", urls[2])
+
+    @patch("soxl_quant_system.time.sleep", return_value=None)
+    @patch("soxl_quant_system.requests.get")
+    def test_long_history_rejects_monthly_max_fallback_before_accepting_daily_data(
+        self, mock_get, _mock_sleep
+    ):
+        monthly = _chart_payload(granularity="1mo")
+        monthly["chart"]["result"][0]["indicators"]["quote"][0]["close"] = [901, 902]
+        mock_get.side_effect = [
+            _FakeResponse(500),
+            _FakeResponse(200, monthly),
+            _FakeResponse(200, _chart_payload(granularity="1d")),
+        ]
+
+        with patch.object(
+            self.trader, "_required_cached_market_date", return_value=date(2026, 9, 2)
+        ):
+            result = self.trader.get_stock_data("QQQ", "15y")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["Close"].tolist(), [101.0, 102.0])
+        self.assertEqual(mock_get.call_count, 3)
+        params = [call.kwargs["params"] for call in mock_get.call_args_list]
+        self.assertEqual(params[0]["period1"], 0)
+        self.assertEqual(params[1]["range"], "max")
+        self.assertEqual(params[2]["range"], "15y")
+        self.assertTrue(all(param["interval"] == "1d" for param in params))
+        pd.testing.assert_frame_equal(self.trader._stock_data_cache["QQQ_15y"][0], result)
+
+    @patch("soxl_quant_system.time.sleep", return_value=None)
+    @patch("soxl_quant_system.requests.get")
+    def test_ordinary_daily_request_rejects_all_monthly_responses(self, mock_get, _mock_sleep):
+        mock_get.return_value = _FakeResponse(200, _chart_payload(granularity="1mo"))
+
+        with patch.object(
+            self.trader, "_required_cached_market_date", return_value=date(2026, 9, 2)
+        ):
+            result = self.trader.get_stock_data("QQQ", "6mo")
+
+        self.assertIsNone(result)
+        self.assertEqual(mock_get.call_count, 3)
+        self.assertNotIn("QQQ_6mo", self.trader._stock_data_cache)
+
+    @patch("soxl_quant_system.requests.get")
+    def test_utc_close_timestamp_keeps_eastern_trading_date_in_korea(self, mock_get):
+        utc_closes = [
+            datetime(2026, 9, 1, 20, tzinfo=timezone.utc),
+            datetime(2026, 9, 2, 20, tzinfo=timezone.utc),
+        ]
+        mock_get.return_value = _FakeResponse(
+            200, _chart_payload(timestamps=[int(value.timestamp()) for value in utc_closes])
+        )
+
+        with (
+            patch.object(self.trader, "get_us_eastern_now", return_value=datetime(2026, 9, 2, 16, 1)),
+            patch.object(self.trader, "_required_cached_market_date", return_value=date(2026, 9, 2)),
+        ):
+            result = self.trader.get_stock_data("QQQ", "6mo")
+
+        self.assertIsNotNone(result)
+        self.assertEqual(utc_closes[-1].astimezone(ZoneInfo("Asia/Seoul")).date(), date(2026, 9, 3))
+        self.assertEqual(result.index.tolist(), [pd.Timestamp("2026-09-01"), pd.Timestamp("2026-09-02")])
+        self.assertEqual(mock_get.call_count, 1)
 
     @patch("soxl_quant_system.requests.get")
     def test_fresh_market_data_cache_is_shared_between_traders(self, mock_get):

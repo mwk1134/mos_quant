@@ -18,6 +18,12 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from us_market_calendar import is_us_equity_trading_day
+from weekly_rsi import (
+    RSI_CALCULATION_VERSION,
+    calculate_completed_weekly_rsi,
+    latest_completed_week_end,
+    merge_rsi_reference,
+)
 
 
 # Market data is identical for every preset.  Keep one process-wide cache so a
@@ -226,252 +232,72 @@ class SOXLQuantTrader:
             return None
     
     def check_and_update_rsi_data(self, filename: str = "weekly_rsi_reference.json") -> bool:
-        """
-        RSI 참조 데이터가 최신인지 확인하고 필요시 업데이트 (JSON 형식)
-        최신 주간 RSI 값이 비어있는지도 확인하여 자동 업데이트
-        Args:
-            filename: RSI 참조 파일명
-        Returns:
-            bool: 업데이트 성공 여부 (True: 최신 상태, False: 업데이트 필요)
-        """
+        """Validate confirmed weekly rows, rather than the file's update date."""
         try:
-            today = datetime.now()
-            current_year = today.strftime('%Y')
-            
-            # PyInstaller 실행파일에서 파일 경로 처리
             if getattr(sys, 'frozen', False):
-                # 실행파일로 실행된 경우
-                application_path = os.path.dirname(sys.executable)
-                file_path = os.path.join(application_path, filename)
+                file_path = Path(os.path.dirname(sys.executable)) / filename
             else:
-                # 스크립트로 실행된 경우
-                file_path = str(self._resolve_data_path(filename))
-            
-            # data 폴더가 없으면 생성
-            data_dir = os.path.dirname(file_path)
-            if data_dir and not os.path.exists(data_dir):
-                os.makedirs(data_dir, exist_ok=True)
-                print(f"📁 {data_dir} 폴더 생성 완료")
-            
-            # 기존 RSI 데이터 로드
-            if os.path.exists(file_path):
-                #print(f"🔍 JSON 파일 로드 시도: {file_path}")
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    existing_data = json.load(f)
-                
-                # 디버깅: 로드된 데이터 구조 확인
-                print(f"[SUCCESS] JSON 파일 로드 성공!")
-                #print(f"   - 파일 크기: {os.path.getsize(file_path)} bytes")
-                #print(f"   - 로드된 키들: {list(existing_data.keys())}")
-                #print(f"   - 총 연도 수: {len([k for k in existing_data.keys() if k != 'metadata'])}")
-                
-                # 2024년, 2025년 데이터 확인
-                if '2024' in existing_data:
-                    print(f"   - 2024년 데이터: {len(existing_data['2024']['weeks'])}주차")
-                if '2025' in existing_data:
-                    print(f"   - 2025년 데이터: {len(existing_data['2025']['weeks'])}주차")
-                
-                metadata = existing_data.get('metadata', {})
-                last_updated = metadata.get('last_updated', '')
-                
-                # 최신 주간 RSI 값 확인 (현재 연도의 가장 최근 주차)
-                latest_rsi_missing = False
-                if current_year in existing_data and existing_data[current_year].get('weeks'):
-                    # 현재 연도의 가장 최근 주차 찾기
-                    current_year_weeks = existing_data[current_year]['weeks']
-                    if current_year_weeks:
-                        # 가장 최근 주차의 종료일 확인
-                        latest_week = max(current_year_weeks, key=lambda x: x.get('end', ''))
-                        latest_week_end = datetime.strptime(latest_week['end'], '%Y-%m-%d')
-                        
-                        # 오늘 날짜가 가장 최근 주차 종료일보다 7일 이상 지났으면 업데이트 필요
-                        days_since_latest = (today - latest_week_end).days
-                        if days_since_latest > 7:
-                            print(f"⚠️ 최신 주간 RSI가 {days_since_latest}일 전 데이터입니다. 업데이트가 필요합니다.")
-                            latest_rsi_missing = True
-                        else:
-                            print(f"✅ 최신 주간 RSI 확인: {latest_week['end']} ({days_since_latest}일 전)")
-                    else:
-                        print("⚠️ 현재 연도 데이터가 비어있습니다. 업데이트가 필요합니다.")
-                        latest_rsi_missing = True
-                else:
-                    print("⚠️ 현재 연도 데이터가 없습니다. 업데이트가 필요합니다.")
-                    latest_rsi_missing = True
-                
-                if last_updated:
-                    last_update_date = datetime.strptime(last_updated, '%Y-%m-%d')
-                    print(f"📅 RSI 참조 데이터 마지막 업데이트: {last_updated}")
-                    
-                    # 마지막 업데이트 이후 새로운 금요일(완료된 주차)이 지났는지 확인
-                    # 새로운 금요일이 지났으면 해당 주차의 RSI를 계산해야 하므로 업데이트 필요
-                    days_since_friday = (today.weekday() - 4) % 7
-                    if days_since_friday == 0 and today.weekday() != 4:
-                        days_since_friday = 7
-                    latest_passed_friday = today - timedelta(days=days_since_friday)
-                    
-                    if last_update_date >= latest_passed_friday and not latest_rsi_missing:
-                        print(f"[SUCCESS] RSI 참조 데이터가 최신 상태입니다. (마지막 완료 금요일: {latest_passed_friday.strftime('%Y-%m-%d')})")
-                        return True
-                    
-                    if latest_rsi_missing:
-                        print(f"⚠️ 최신 주간 RSI 값이 비어있어 업데이트가 필요합니다.")
-                    else:
-                        print(f"⚠️ 마지막 업데이트({last_updated}) 이후 새로운 완료 주차({latest_passed_friday.strftime('%Y-%m-%d')})가 있어 업데이트가 필요합니다.")
-                else:
-                    print("⚠️ RSI 참조 데이터 메타데이터가 없습니다.")
-                    latest_rsi_missing = True
-            else:
-                print("⚠️ RSI 참조 파일이 없습니다. 전체 데이터 생성이 필요합니다.")
-                latest_rsi_missing = True
-            
-            # 최신 RSI가 비어있거나 업데이트가 필요한 경우 False 반환 (자동 업데이트 트리거)
-            if latest_rsi_missing:
-                print("\n[INFO] 최신 주간 RSI 값이 비어있어 자동 업데이트를 진행합니다.")
-            else:
-                print("\n[INFO] RSI 참조 데이터 업데이트가 필요합니다.")
-            
-            return False
-            
+                file_path = self._resolve_data_path(filename)
+            if not file_path.exists():
+                return False
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            metadata = data.get('metadata', {})
+            if metadata.get('calculation_version') != RSI_CALCULATION_VERSION:
+                print("[INFO] 완료 주차 기준으로 RSI 참조 데이터를 다시 확인합니다.")
+                return False
+
+            latest_friday = latest_completed_week_end(self.get_us_eastern_now())
+            required_ends = {
+                latest_friday.strftime('%Y-%m-%d'),
+                (latest_friday - timedelta(days=7)).strftime('%Y-%m-%d'),
+            }
+            found = set()
+            for year, year_data in data.items():
+                if year == 'metadata':
+                    continue
+                for row in year_data.get('weeks', []):
+                    end = row.get('end', '')
+                    # Misfiled years and future partial candles are not valid references.
+                    if end[:4] != year or end > latest_friday.strftime('%Y-%m-%d'):
+                        return False
+                    if end in required_ends and np.isfinite(float(row.get('rsi', float('nan')))):
+                        found.add(end)
+            up_to_date = found == required_ends
+            print(f"[INFO] RSI 완료 주차 {latest_friday:%Y-%m-%d}: {'최신' if up_to_date else '업데이트 필요'}")
+            return up_to_date
         except Exception as e:
             print(f"[ERROR] RSI 데이터 확인 오류: {e}")
             return False
-    
+
     def update_rsi_reference_file(self, filename: str = "weekly_rsi_reference.json") -> bool:
-        """
-        RSI 참조 파일을 최신 데이터로 업데이트 (JSON 형식)
-        오늘 날짜까지의 주간 RSI를 자동으로 계산하여 업데이트
-        Args:
-            filename: RSI 참조 파일명
-        Returns:
-            bool: 업데이트 성공 여부
-        """
+        """Store complete SMA RSI weeks under their actual calendar year."""
         try:
-            print("[INFO] RSI 참조 데이터 업데이트 중...")
-            print("[INFO] 오늘 날짜까지의 주간 RSI를 자동 계산하여 업데이트합니다.")
-            
-            # PyInstaller 실행파일에서 파일 경로 처리
             if getattr(sys, 'frozen', False):
-                # 실행파일로 실행된 경우
-                application_path = os.path.dirname(sys.executable)
-                file_path = os.path.join(application_path, filename)
+                file_path = Path(os.path.dirname(sys.executable)) / filename
             else:
-                # 스크립트로 실행된 경우
-                file_path = str(self._resolve_data_path(filename))
-            
-            # data 폴더가 없으면 생성
-            data_dir = os.path.dirname(file_path)
-            if data_dir and not os.path.exists(data_dir):
-                os.makedirs(data_dir, exist_ok=True)
-                print(f"📁 {data_dir} 폴더 생성 완료")
-            
-            # 기존 JSON 데이터 로드
+                file_path = self._resolve_data_path(filename)
             existing_data = {}
-            if os.path.exists(file_path):
+            if file_path.exists():
                 with open(file_path, 'r', encoding='utf-8') as f:
                     existing_data = json.load(f)
-            
-            # 현재 연도와 주차 계산
-            today = datetime.now()
-            current_year = today.strftime('%Y')
-            
-            # QQQ 데이터 가져오기 (15년 - update_rsi_data.py와 동일한 기간으로 정확한 RSI 계산)
-            print("[INFO] QQQ 데이터 가져오는 중 (15y)...")
+
+            now = self.get_us_eastern_now()
             qqq_data = self.get_stock_data("QQQ", "15y")
-            if qqq_data is None:
-                print("[ERROR] QQQ 데이터를 가져올 수 없습니다.")
+            weekly_rsi = calculate_completed_weekly_rsi(qqq_data, as_of=now).dropna()
+            required_end = latest_completed_week_end(now)
+            if weekly_rsi.empty or weekly_rsi.index.max() != required_end:
+                print(f"[ERROR] QQQ의 최신 완료 주차({required_end:%Y-%m-%d}) 종가가 없습니다.")
                 return False
-            
-            # 주간 데이터로 변환
-            weekly_data = qqq_data.resample('W-FRI').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
-            
-            print(f"[INFO] 주간 데이터 {len(weekly_data)}주 계산 완료")
-            
-            # 현재 연도 데이터 초기화
-            if current_year not in existing_data:
-                existing_data[current_year] = {
-                    "description": f"{current_year}년 주간 RSI 데이터",
-                    "weeks": []
-                }
-            
-            # 최근 12주 RSI 계산 및 업데이트
-            recent_weeks = weekly_data.tail(12)  # 최근 12주
-            
-            # 완료된 주차만 필터링: 금요일(주 마감일)이 오늘 이전인 주차만 계산
-            # 불완전한 주(금요일이 아직 지나지 않은 주)는 제외하여 모든 거래일 데이터 기반의 정확한 RSI만 저장
-            today_ts = pd.Timestamp(today.date())
-            recent_weeks = recent_weeks[recent_weeks.index <= today_ts]
-            print(f"[INFO] 완료된 주차 필터링: {len(recent_weeks)}주 (오늘 {today.strftime('%Y-%m-%d')} 이전 금요일까지)")
-            
-            for i, (week_end, week_row) in enumerate(recent_weeks.iterrows()):
-                # 해당 주의 시작일 계산 (월요일)
-                week_start = week_end - timedelta(days=4)  # 금요일에서 4일 전 = 월요일
-                
-                # 주차 번호 계산 (해당 연도의 몇 번째 주인지)
-                week_num = week_start.isocalendar()[1]
-                
-                # RSI 계산
-                data_until_week = qqq_data[qqq_data.index <= week_end]
-                if len(data_until_week) >= 20:  # 충분한 데이터가 있을 때
-                    rsi_value = self.calculate_weekly_rsi(data_until_week)
-                    if rsi_value is not None:
-                        # 기존 데이터에서 해당 주차 찾기
-                        week_exists = False
-                        for j, existing_week in enumerate(existing_data[current_year]['weeks']):
-                            if existing_week['week'] == week_num:
-                                # 기존 데이터 업데이트 (항상 최신 계산값으로 덮어씀 - 정확한 RSI 유지)
-                                existing_data[current_year]['weeks'][j] = {
-                                    "start": week_start.strftime('%Y-%m-%d'),
-                                    "end": week_end.strftime('%Y-%m-%d'),
-                                    "week": week_num,
-                                    "rsi": round(rsi_value, 2)
-                                }
-                                week_exists = True
-                                break
-                        
-                        if not week_exists:
-                            # 새로운 주차 데이터 추가
-                            existing_data[current_year]['weeks'].append({
-                                "start": week_start.strftime('%Y-%m-%d'),
-                                "end": week_end.strftime('%Y-%m-%d'),
-                                "week": week_num,
-                                "rsi": round(rsi_value, 2)
-                            })
-                        
-                        print(f"   주차 {week_num}: {week_start.strftime('%m-%d')} ~ {week_end.strftime('%m-%d')} | RSI: {rsi_value:.2f}")
-            
-            # 주차별로 정렬
-            existing_data[current_year]['weeks'].sort(key=lambda x: x['week'])
-            
-            # 메타데이터 업데이트
-            total_weeks = sum(len(year_data['weeks']) for year, year_data in existing_data.items() if year != 'metadata')
-            existing_data['metadata'] = {
-                "last_updated": today.strftime('%Y-%m-%d'),
-                "total_years": len([k for k in existing_data.keys() if k != 'metadata']),
-                "total_weeks": total_weeks,
-                "description": "QQQ 주간 RSI 참조 데이터 (14주 Wilder's RSI)"
-            }
-            
-            # JSON 파일로 저장
+            updated = merge_rsi_reference(existing_data, weekly_rsi, as_of=now)
             with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(existing_data, f, ensure_ascii=False, indent=2)
-            
-            print("[SUCCESS] RSI 참조 데이터 업데이트 완료!")
-            print(f"   - {current_year}년 데이터 업데이트")
-            print(f"   - 총 {total_weeks}개 주차 데이터")
-            print(f"   - 마지막 업데이트: {today.strftime('%Y-%m-%d')}")
-            
+                json.dump(updated, f, ensure_ascii=False, indent=2)
+            print(f"[SUCCESS] RSI 참조 데이터 업데이트: {required_end:%Y-%m-%d}까지 완료 주차만 저장")
             return True
-            
         except Exception as e:
             print(f"[ERROR] RSI 참조 파일 업데이트 오류: {e}")
             return False
-    
+
     def __init__(
         self,
         initial_capital: float = 40000,
@@ -1691,6 +1517,12 @@ class SOXLQuantTrader:
                         
                         if 'chart' in data and 'result' in data['chart'] and data['chart']['result']:
                             result = data['chart']['result'][0]
+                            granularity = (result.get('meta') or {}).get('dataGranularity')
+                            # Yahoo can silently turn range=max into monthly bars,
+                            # even with interval=1d. Never resample those as weeks.
+                            if granularity and granularity != '1d':
+                                print(f"   ❌ 일봉 대신 {granularity} 데이터가 반환되어 다음 조회를 시도합니다.")
+                                continue
                             
                             if 'timestamp' in result and 'indicators' in result:
                                 timestamps = result['timestamp']
@@ -1726,7 +1558,7 @@ class SOXLQuantTrader:
                                 
                                 # DataFrame 생성
                                 df_data = {
-                                    'Date': [datetime.fromtimestamp(ts) for ts in timestamps],
+                                    'Date': [datetime.fromtimestamp(ts, timezone.utc).astimezone(US_EASTERN_TZ).replace(tzinfo=None) for ts in timestamps],
                                     'Open': quote_data.get('open', [None] * len(timestamps)),
                                     'High': quote_data.get('high', [None] * len(timestamps)),
                                     'Low': quote_data.get('low', [None] * len(timestamps)),
@@ -1982,131 +1814,34 @@ class SOXLQuantTrader:
 
 
     def calculate_weekly_rsi_for_dates(self, target_fridays: list, window: int = 14) -> dict:
-        """
-        특정 금요일 날짜들에 대한 정확한 주간 RSI를 실시간 계산 (15년 데이터 기반)
-        참조 데이터에 없을 때 폴백으로 사용
-        Args:
-            target_fridays: RSI를 계산할 금요일 날짜 리스트 (datetime)
-            window: RSI 계산 기간 (기본값: 14)
-        Returns:
-            dict: {날짜문자열: RSI값} 딕셔너리
-        """
+        """Calculate exact completed Friday labels with the spreadsheet's SMA RSI."""
         try:
-            print(f"📊 RSI 실시간 계산 시작 (15y 데이터 기반, 대상: {len(target_fridays)}개 주차)")
-            
-            # 15년치 QQQ 데이터 가져오기 (update_rsi_data.py와 동일 - 정확한 RSI 계산)
             qqq_long = self.get_stock_data("QQQ", "15y")
-            if qqq_long is None:
-                print("❌ QQQ 15년 데이터를 가져올 수 없습니다.")
-                return {}
-            
-            # 주간 데이터로 변환 (금요일 기준)
-            weekly_df = qqq_long.resample('W-FRI').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
-            
-            if len(weekly_df) < window + 1:
-                print(f"❌ 주간 데이터 부족 (필요: {window+1}주, 현재: {len(weekly_df)}주)")
-                return {}
-            
-            # RSI 계산
-            delta = weekly_df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            
-            # 대상 금요일 날짜들의 RSI 추출
+            rsi = calculate_completed_weekly_rsi(
+                qqq_long, window=window, as_of=self.get_us_eastern_now()
+            )
             result = {}
             for friday in target_fridays:
-                friday_dt = pd.Timestamp(friday.date()) if isinstance(friday, datetime) else pd.Timestamp(friday)
-                # 해당 금요일 이전 또는 같은 날짜의 가장 가까운 주간 데이터 찾기
-                earlier_dates = weekly_df.index[weekly_df.index <= friday_dt]
-                if len(earlier_dates) > 0:
-                    matched_date = earlier_dates[-1]
-                    matched_idx = weekly_df.index.get_loc(matched_date)
-                    if matched_idx < len(rsi) and not pd.isna(rsi.iloc[matched_idx]):
-                        rsi_value = round(rsi.iloc[matched_idx], 2)
-                        result[friday_dt.strftime('%Y-%m-%d')] = rsi_value
-                        print(f"   ✅ {friday_dt.strftime('%Y-%m-%d')} → RSI: {rsi_value}")
-            
+                friday_dt = pd.Timestamp(friday).normalize()
+                if friday_dt in rsi.index and pd.notna(rsi.loc[friday_dt]):
+                    result[friday_dt.strftime('%Y-%m-%d')] = round(float(rsi.loc[friday_dt]), 2)
             return result
-            
         except Exception as e:
             print(f"❌ RSI 실시간 계산 오류: {e}")
             return {}
 
     def calculate_weekly_rsi(self, df: pd.DataFrame, window: int = 14) -> float:
-        """
-
-        주간 RSI 계산 (제공된 함수 방식 적용)
-        Args:
-            df: 일일 주가 데이터
-
-            window: RSI 계산 기간 (기본값: 14)
-        Returns:
-            float: 최신 주간 RSI 값
-        """
+        """Return the latest completed week's 14-week simple-average RSI."""
         try:
-            # 주간 데이터로 변환 (금요일 기준)
-            weekly_df = df.resample('W-FRI').agg({
-                'Open': 'first',
-                'High': 'max',
-                'Low': 'min',
-                'Close': 'last',
-                'Volume': 'sum'
-            }).dropna()
-            
-
-            # 디버깅: 주간 데이터 확인
-            print(f"   주간 데이터 변환 결과:")
-            print(f"   - 기간: {weekly_df.index[0].strftime('%Y-%m-%d')} ~ {weekly_df.index[-1].strftime('%Y-%m-%d')}")
-            print(f"   - 주간 데이터 수: {len(weekly_df)}주")
-            print(f"   - 최근 5주 종가: {weekly_df['Close'].tail(5).values}")
-            
-            if len(weekly_df) < window + 1:
-                print(f"❌ 주간 RSI 계산을 위한 데이터 부족 (필요: {window+1}주, 현재: {len(weekly_df)}주)")
+            rsi = calculate_completed_weekly_rsi(
+                df, window=window, as_of=self.get_us_eastern_now()
+            )
+            if rsi.empty or pd.isna(rsi.iloc[-1]):
                 return None
-            
-
-            # RSI 계산
-            delta = weekly_df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
-            rs = gain / loss
-            rsi = 100 - (100 / (1 + rs))
-            
-
-            # 디버깅 정보 출력
-            latest_rsi = rsi.iloc[-1]
-            print(f"📈 QQQ 주간 RSI: {latest_rsi:.2f}")
-
-            print(f"   데이터 기간: {weekly_df.index[0].strftime('%Y-%m-%d')} ~ {weekly_df.index[-1].strftime('%Y-%m-%d')}")
-            print(f"   주간 데이터 수: {len(weekly_df)}주")
-            print(f"   최근 3개 RSI: {[f'{x:.2f}' if not np.isnan(x) else 'NaN' for x in rsi.tail(3).values]}")
-            
-            # 상세 계산 과정 출력
-            print(f"   최근 3개 계산 과정:")
-            for i in range(-3, 0):
-                if i + len(weekly_df) >= 0:
-                    date_str = weekly_df.index[i].strftime('%Y-%m-%d')
-                    delta_val = delta.iloc[i]
-                    gain_val = gain.iloc[i]
-                    loss_val = loss.iloc[i]
-                    rs_val = rs.iloc[i]
-                    rsi_val = rsi.iloc[i]
-                    print(f"   {date_str}: delta={delta_val:+.4f}, gain={gain_val:.4f}, loss={loss_val:.4f}, RS={rs_val:.4f}, RSI={rsi_val:.2f}")
-            
-            return latest_rsi
-            
+            return float(rsi.iloc[-1])
         except Exception as e:
             print(f"❌ 주간 RSI 계산 오류: {e}")
             return None
-    
 
     def _is_mode_case_matched(self, current_rsi: float, prev_rsi: float) -> tuple[bool, str]:
         """
