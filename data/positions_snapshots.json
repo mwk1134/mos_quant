@@ -85,8 +85,8 @@
     "pending_buy": {
       "round": 2,
       "order_date": "2026-10-06",
-      "quantity": 86,
-      "target_price": 190.55320495605469,
+      "quantity": 41,
+      "target_price": 174.94755455017088,
       "basis_date": "2026-10-05"
     },
     "available_cash": 91098.37840545653,
