@@ -3885,7 +3885,14 @@ class SOXLQuantTrader:
             start_week_friday = start_dt + timedelta(days=days_until_friday)
             
             # 시작 주차의 RSI와 모드 확인
-            start_week_rsi = self.get_rsi_from_reference(start_week_friday, rsi_ref_data)
+            start_week_completed = (
+                pd.Timestamp(start_week_friday.date())
+                <= latest_completed_week_end(self.get_us_eastern_now())
+            )
+            start_week_rsi = (
+                self.get_rsi_from_reference(start_week_friday, rsi_ref_data)
+                if start_week_completed else None
+            )
             
             # 1주전, 2주전 RSI 확인
             prev_week_friday = start_week_friday - timedelta(days=7)
@@ -3896,7 +3903,7 @@ class SOXLQuantTrader:
             
             # RSI 데이터가 없는 경우 실시간 계산 폴백
             missing_fridays = []
-            if start_week_rsi is None:
+            if start_week_rsi is None and start_week_completed:
                 missing_fridays.append(start_week_friday)
             if prev_week_rsi is None:
                 missing_fridays.append(prev_week_friday)
@@ -3966,7 +3973,8 @@ class SOXLQuantTrader:
             
             print(f"[INFO] 백테스팅 시작 상태:")
             print(f"   - 시작일: {start_date}")
-            print(f"   - 시작 주차 RSI: {start_week_rsi:.2f}")
+            start_rsi_display = f"{start_week_rsi:.2f}" if start_week_rsi is not None else "미완성"
+            print(f"   - 시작 주차 RSI: {start_rsi_display}")
             print(f"   - 1주전 RSI: {prev_week_rsi:.2f}")
             print(f"   - 2주전 RSI: {two_weeks_ago_rsi:.2f}")
             print(f"   - 시작 모드: {start_mode}")
@@ -4197,6 +4205,7 @@ class SOXLQuantTrader:
                 print("⚠️ 백테스팅 시작 전일 데이터를 찾을 수 없습니다.")
         
         current_week_friday = None  # 현재 주차의 금요일 (로컬 변수)
+        completed_week_end = latest_completed_week_end(market_now)
         previous_day_sold_rounds = 0  # 전날 매도된 회차 수 추적
         
         # 주차별 모드 저장 (금요일 날짜를 키로 사용)
@@ -4288,7 +4297,11 @@ class SOXLQuantTrader:
                 self.current_week_friday = this_week_friday
                 
                 # 새로운 주차의 RSI 값 가져오기 (해당 주차의 금요일 기준)
-                current_week_rsi = self.get_rsi_from_reference(this_week_friday, rsi_ref_data)
+                current_week_completed = pd.Timestamp(this_week_friday.date()) <= completed_week_end
+                current_week_rsi = (
+                    self.get_rsi_from_reference(this_week_friday, rsi_ref_data)
+                    if current_week_completed else None
+                )
                 
                 # 모드 업데이트 (2주전 RSI와 1주전 RSI 비교)
                 # 2주전과 1주전 RSI 계산
@@ -4300,7 +4313,7 @@ class SOXLQuantTrader:
                 
                 # RSI 데이터가 없는 경우 실시간 계산 폴백
                 missing_fridays = []
-                if current_week_rsi is None:
+                if current_week_rsi is None and current_week_completed:
                     missing_fridays.append(this_week_friday)
                 if prev_week_rsi is None:
                     missing_fridays.append(prev_week_friday)
@@ -4319,7 +4332,7 @@ class SOXLQuantTrader:
                     except Exception as e:
                         print(f"⚠️ RSI 실시간 계산 폴백 실패: {e}")
                 
-                if current_week_rsi is None:
+                if current_week_rsi is None and current_week_completed:
                     return {"error": f"RSI 데이터가 없습니다. 주차: {this_week_friday.strftime('%Y-%m-%d')}"}
                 if prev_week_rsi is None or two_weeks_ago_rsi is None:
                     return {"error": f"RSI 데이터가 없습니다. 1주전 RSI: {prev_week_rsi}, 2주전 RSI: {two_weeks_ago_rsi}"}
@@ -4725,7 +4738,7 @@ class SOXLQuantTrader:
                 daily_record = {
                     "date": current_date.strftime("%Y-%m-%d"),  # 표준 ISO 형식으로 변경
                     "week": current_week,
-                    "rsi": current_week_rsi if current_week_rsi is not None else 50.0,  # None일 때만 기본값 사용
+                    "rsi": current_week_rsi,  # 미완성 주는 빈 값; 모드는 지난 두 완료 주로 결정
                     "mode": current_mode,
                     "strategy_name": config.get("strategy_name", "기본"),
                     "current_round": min(current_round_before_buy, int(config["split_count"])),  # active 전략 cap
@@ -5110,8 +5123,8 @@ class SOXLQuantTrader:
             cell.alignment = center_alignment
             
             # RSI
-            rsi_value = record.get('rsi', 0.0) or 0.0
-            cell = ws_detail.cell(row=row_idx, column=3, value=f"{rsi_value:.2f}")
+            rsi_value = record.get('rsi')
+            cell = ws_detail.cell(row=row_idx, column=3, value=f"{rsi_value:.2f}" if rsi_value is not None else "")
             cell.alignment = center_alignment
             
             # 모드 (SF: 초록색 글자, AG: 주황색 글자)

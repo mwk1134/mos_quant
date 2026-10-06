@@ -377,6 +377,92 @@ class TraderWeeklyRSITests(unittest.TestCase):
         self.assertEqual(result["qqq_two_weeks_ago_rsi"], 50.98)
         self.assertEqual(self.trader.current_mode, "AG")
 
+    def test_backtest_current_week_uses_completed_photo_rsi_without_future_candle(self):
+        reference = self.current_reference()
+        reference["2026"]["weeks"].insert(0, reference_row("2026-09-18", 50.03))
+        self.write_reference(reference)
+
+        with (
+            patch.object(self.trader, "get_us_eastern_now", return_value=datetime(2026, 10, 6, 12)),
+            patch.object(self.trader, "get_stock_data", return_value=market_data("2026-10-05")),
+            patch.object(self.trader, "calculate_weekly_rsi_for_dates", return_value={}) as fallback,
+            redirect_stdout(StringIO()),
+        ):
+            result = self.trader.run_backtest("2026-10-05", "2026-10-05")
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["trading_days"], 1)
+        self.assertEqual(result["daily_records"][0]["mode"], "AG")
+        self.assertIsNone(result["daily_records"][0]["rsi"])
+        self.assertEqual(self.trader.current_mode, "AG")
+        fallback.assert_not_called()
+        self.assertEqual(self.read_reference(), reference)
+
+    def test_backtest_unfinished_week_across_year_boundary_uses_previous_year_rsi(self):
+        reference = {
+            "2026": {"weeks": [
+                reference_row("2026-12-18", 50.03),
+                reference_row("2026-12-25", 50.98),
+            ]},
+            "2027": {"weeks": [reference_row("2027-01-01", 62.74)]},
+            "metadata": {
+                "last_completed_week_end": "2027-01-01",
+                "calculation_version": RSI_CALCULATION_VERSION,
+            },
+        }
+        self.write_reference(reference)
+
+        with (
+            patch.object(self.trader, "get_us_eastern_now", return_value=datetime(2027, 1, 5, 12)),
+            patch.object(self.trader, "get_stock_data", return_value=market_data("2027-01-04")),
+            patch.object(self.trader, "calculate_weekly_rsi_for_dates", return_value={}) as fallback,
+            redirect_stdout(StringIO()),
+        ):
+            result = self.trader.run_backtest("2027-01-04", "2027-01-04")
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["daily_records"][0]["mode"], "AG")
+        self.assertIsNone(result["daily_records"][0]["rsi"])
+        fallback.assert_not_called()
+
+    def test_backtest_still_rejects_missing_completed_rsi_used_for_mode(self):
+        for missing_end in ("2026-09-25", "2026-10-02"):
+            with self.subTest(missing_end=missing_end):
+                reference = self.current_reference()
+                reference["2026"]["weeks"].insert(0, reference_row("2026-09-18", 50.03))
+                reference["2026"]["weeks"] = [
+                    row for row in reference["2026"]["weeks"] if row["end"] != missing_end
+                ]
+                self.write_reference(reference)
+
+                with (
+                    patch.object(self.trader, "get_us_eastern_now", return_value=datetime(2026, 10, 6, 12)),
+                    patch.object(self.trader, "get_stock_data", return_value=market_data("2026-10-05")),
+                    patch.object(self.trader, "calculate_weekly_rsi_for_dates", return_value={}),
+                    redirect_stdout(StringIO()),
+                ):
+                    result = self.trader.run_backtest("2026-10-05", "2026-10-05")
+
+                self.assertIn("error", result)
+                self.assertIn("RSI", result["error"])
+                self.assertNotIn("daily_records", result)
+
+    def test_backtest_still_rejects_missing_rsi_for_completed_recorded_week(self):
+        reference = self.current_reference()
+        reference["2026"]["weeks"].insert(0, reference_row("2026-09-18", 50.03))
+        self.write_reference(reference)
+
+        with (
+            patch.object(self.trader, "get_us_eastern_now", return_value=datetime(2026, 10, 13, 12)),
+            patch.object(self.trader, "get_stock_data", return_value=market_data("2026-10-12")),
+            patch.object(self.trader, "calculate_weekly_rsi_for_dates", return_value={}),
+            redirect_stdout(StringIO()),
+        ):
+            result = self.trader.run_backtest("2026-10-05", "2026-10-05")
+
+        self.assertIn("error", result)
+        self.assertIn("2026-10-09", result["error"])
+
 
 class StandaloneRSIUpdaterTests(unittest.TestCase):
     def setUp(self):
