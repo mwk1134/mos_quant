@@ -1,9 +1,9 @@
 {
   "KMW": {
     "1_2026-10-05": {
-      "shares": 35,
+      "shares": 41,
       "buy_price": 164.27000427246094,
-      "amount": 5749.450149536133,
+      "amount": 6735.070175170898,
       "round": 1,
       "mode": "AG",
       "buy_threshold": 3.5,
@@ -17,7 +17,7 @@
       "target_price": 170.18372442626955,
       "basis_date": "2026-10-05"
     },
-    "available_cash": 107739.64813629151,
+    "available_cash": 106754.02811065674,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21",
