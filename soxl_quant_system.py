@@ -880,6 +880,8 @@ class SOXLQuantTrader:
                 position["max_hold_days"] = int(val.get("max_hold_days"))
             if val.get("strategy_name"):
                 position["strategy_name"] = str(val.get("strategy_name"))
+            if stored_mode in ("SF", "AG"):
+                self._correct_position_mode(position, position["mode"])
             positions.append(position)
         if not positions:
             return [], max_snap_date, snapshot_cash if snapshot_cash is not None else self.initial_capital
@@ -919,99 +921,54 @@ class SOXLQuantTrader:
         except Exception:
             return None
 
-    def _recompute_missing_position_modes(self, positions: List[dict]) -> None:
-        """
-        스냅샷에 mode 필드가 누락된 포지션들을 매수일 기준으로 주간 RSI를 계산해 올바른 모드를 채워 넣는다.
-        in-place 수정. `_mode_needs_recalc` 플래그가 True인 포지션만 대상으로 한다.
-        과거 버전은 스냅샷에 mode를 저장하지 않아 재로드 시 SF로 간주되어,
-        공세모드 포지션이 재시뮬에서 SF 매도조건(1.1%)으로 잘못 매도되는 버그를 방지한다.
-        """
-        targets = [p for p in positions if p.get("_mode_needs_recalc")]
-        if not targets:
+    def _revalidate_position_modes(
+        self,
+        positions: List[dict],
+        qqq_data: Optional[pd.DataFrame] = None,
+        rsi_ref_data: Optional[dict] = None,
+    ) -> None:
+        """Recheck each lot's entry week before evaluating any sell conditions."""
+        if not positions:
             return
-
-        rsi_ref_data = {}
-        try:
-            rsi_file_path = str(self._resolve_data_path("weekly_rsi_reference.json"))
-            if os.path.exists(rsi_file_path):
-                with open(rsi_file_path, "r", encoding="utf-8") as f:
-                    rsi_ref_data = json.load(f)
-        except Exception as e:
-            print(f"⚠️ RSI 참조 데이터 로드 실패: {e}")
-
-        qqq_data = self.get_stock_data("QQQ", "6mo")
-        weekly_df = None
-        rsi_series = None
-        if qqq_data is not None and len(qqq_data) > 0:
-            weekly_df = qqq_data.resample('W-FRI').agg({
-                'Open': 'first', 'High': 'max', 'Low': 'min',
-                'Close': 'last', 'Volume': 'sum'
-            }).dropna()
-            if len(weekly_df) >= 15:
-                delta = weekly_df['Close'].diff()
-                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                rs = gain / loss
-                rsi_series = 100 - (100 / (1 + rs))
-
-        for pos in targets:
-            buy_date = pos.get("buy_date")
-            if isinstance(buy_date, pd.Timestamp):
-                buy_date_dt = buy_date.to_pydatetime()
-            elif isinstance(buy_date, datetime):
-                buy_date_dt = buy_date
-            else:
-                pos.pop("_mode_needs_recalc", None)
+        if rsi_ref_data is None:
+            rsi_ref_data = self.load_rsi_reference_data()
+        week_modes = {}
+        for position in positions:
+            try:
+                buy_date = self._market_date(position["buy_date"])
+            except (KeyError, TypeError, ValueError):
                 continue
-
-            buy_date_weekday = buy_date_dt.weekday()
-            days_until_friday = (4 - buy_date_weekday) % 7
-            if days_until_friday == 0 and buy_date_weekday != 4:
-                days_until_friday = 7
-            buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
-            one_week_ago_friday = buy_week_friday - timedelta(days=7)
-            two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
-
-            one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
-            two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
-
-            if (one_week_ago_rsi is None or two_weeks_ago_rsi is None) and weekly_df is not None and rsi_series is not None:
-                if one_week_ago_rsi is None:
-                    one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                    earlier_1w = weekly_df.index[weekly_df.index <= one_week_ago_friday_dt]
-                    if len(earlier_1w) > 0:
-                        idx = weekly_df.index.get_loc(earlier_1w[-1])
-                        if idx < len(rsi_series) and not pd.isna(rsi_series.iloc[idx]):
-                            one_week_ago_rsi = float(rsi_series.iloc[idx])
-                if two_weeks_ago_rsi is None:
-                    two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
-                    earlier_2w = weekly_df.index[weekly_df.index <= two_weeks_ago_friday_dt]
-                    if len(earlier_2w) > 0:
-                        idx = weekly_df.index.get_loc(earlier_2w[-1])
-                        if idx < len(rsi_series) and not pd.isna(rsi_series.iloc[idx]):
-                            two_weeks_ago_rsi = float(rsi_series.iloc[idx])
-
-            correct_mode = None
-            if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
-                prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(
-                    one_week_ago_friday, rsi_ref_data
+            buy_week_friday = buy_date + timedelta(days=(4 - buy_date.weekday()) % 7)
+            week_key = buy_week_friday.strftime("%Y-%m-%d")
+            if week_key not in week_modes:
+                mode, success = self._calculate_week_mode_recursive_with_reference(
+                    buy_week_friday, rsi_ref_data
                 )
-                if not success and weekly_df is not None and rsi_series is not None:
-                    prev_week_mode, success = self._calculate_week_mode_recursive(
-                        one_week_ago_friday, weekly_df, rsi_series
-                    )
-                if success:
-                    is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
-                    correct_mode = matched_mode if is_matched else prev_week_mode
-
-            pos_key = f"{pos.get('round')}_{buy_date_dt.strftime('%Y-%m-%d')}"
+                if not success:
+                    if qqq_data is None:
+                        qqq_data = self.get_stock_data("QQQ", "6mo")
+                    if qqq_data is not None and len(qqq_data) > 0:
+                        mode, success = self._calculate_week_mode_from_completed_rsi(
+                            buy_week_friday, qqq_data, rsi_ref_data
+                        )
+                week_modes[week_key] = mode if success else None
+            correct_mode = week_modes[week_key]
             if correct_mode:
-                if correct_mode != pos.get("mode"):
-                    print(f"🔧 스냅샷 mode 누락 → 매수일 기준 재계산: {pos_key} = {pos.get('mode')} → {correct_mode}")
-                pos["mode"] = correct_mode
-            else:
-                print(f"⚠️ {pos_key}: mode 재계산 실패 (RSI 데이터 부족) → 기본값 {pos.get('mode')} 유지")
-            pos.pop("_mode_needs_recalc", None)
+                stored_mode = position.get("mode")
+                if self._correct_position_mode(position, correct_mode):
+                    position_config = self.get_position_config(position)
+                    print(
+                        f"🔧 포지션 매수일 모드/조건 보정: {position.get('round')}_{buy_date:%Y-%m-%d} "
+                        f"= {stored_mode} → {correct_mode} "
+                        f"(매도 {position_config['sell_threshold']}%, 보유 {position_config['max_hold_days']}거래일)"
+                    )
+                position.pop("_mode_needs_recalc", None)
+
+    def _recompute_missing_position_modes(self, positions: List[dict]) -> None:
+        """Restore legacy lots without a saved mode using their entry-week RSI."""
+        self._revalidate_position_modes(
+            [position for position in positions if position.get("_mode_needs_recalc")]
+        )
 
     def simulate_from_snapshot_to_today(self, snapshot: dict, original_start_date: str, quiet: bool = True) -> Dict:
         """
@@ -1042,11 +999,12 @@ class SOXLQuantTrader:
             else:
                 return {"error": "체결 포지션과 예수금이 없는 스냅샷은 자동 복원할 수 없습니다."}
 
-        # [버그픽스] 스냅샷에 mode가 저장돼있지 않은 과거 포지션은 매수일 주간 RSI로 재계산.
-        # 이 작업을 run_backtest 호출 전에 수행해, 재시뮬 매도조건 체크가 올바른 모드(SF/AG)로
-        # 동작하도록 한다. (이전엔 모두 SF로 기본값 처리되어 공세 포지션이 잘못 매도됐음)
+        # Correct the entry mode and its frozen rules before replaying sales.
+        # Corrected RSI references can invalidate a stored mode as well as a
+        # missing one; recommendation-time repair would be too late for a lot
+        # already sold by the snapshot simulation under stale SF rules.
         if positions:
-            self._recompute_missing_position_modes(positions)
+            self._revalidate_position_modes(positions)
 
         # 매도 수익 반영: 시작일~스냅최신일 시뮬레이션으로 잔여예수금 계산
         if self._snapshot_available_cash(snapshot) is None:
@@ -1103,11 +1061,13 @@ class SOXLQuantTrader:
             if pending_buy
             else "pending_none"
         )
+        position_cache_key = json.dumps(positions, sort_keys=True, default=str)
         cache_key = (
             f"snap_{self.ticker}_{max_snap_date}_{self.initial_capital}_"
             f"{self.test_today_override or 'real'}_{seed_increases_str}_"
             f"{compounding_cache_key}_{compounding_snapshot_key}_"
-            f"{ma_alignment_cache_key}_{pending_cache_key}"
+            f"{ma_alignment_cache_key}_{pending_cache_key}_"
+            f"{available_cash}_{position_cache_key}"
         )
         if cache_key in self._simulation_cache:
             cached, cache_time = self._simulation_cache[cache_key]
@@ -2412,6 +2372,51 @@ class SOXLQuantTrader:
             return self._ma_alignment_config_for_mode(mode)
         return base_config
 
+    def _correct_position_mode(self, position: Dict, correct_mode: str) -> bool:
+        """Correct an entry mode and its rules without changing confirmed fills."""
+        if correct_mode not in ("SF", "AG"):
+            return False
+        strategy_name = position.get("strategy_name")
+        if strategy_name == self.MA_ALIGNMENT_STRATEGY_NAME:
+            config = self._ma_alignment_config_for_mode(correct_mode)
+            opposite_config = self._ma_alignment_config_for_mode(
+                "AG" if correct_mode == "SF" else "SF"
+            )
+        else:
+            config = self.sf_config if correct_mode == "SF" else self.ag_config
+            opposite_config = self.ag_config if correct_mode == "SF" else self.sf_config
+
+        fields = ("buy_threshold", "sell_threshold", "max_hold_days")
+        stored_mode = position.get("mode")
+        known_strategy = strategy_name in (None, "기본", self.MA_ALIGNMENT_STRATEGY_NAME)
+        if stored_mode == correct_mode:
+            # Older corrections changed only mode, leaving the complete frozen
+            # tuple from the opposite mode. Repair that recognizable state;
+            # otherwise keep valid/custom entry rules frozen across switches.
+            if not known_strategy:
+                return False
+            if not all(
+                position.get(field) is not None
+                and float(position[field]) == float(opposite_config[field])
+                for field in fields
+            ) or all(float(config[field]) == float(opposite_config[field]) for field in fields):
+                return False
+        elif not known_strategy or any(
+            position.get(field) is not None
+            and float(position[field]) != float(opposite_config[field])
+            for field in fields
+        ):
+            # Explicit custom entry rules have no mode-specific replacement.
+            # Preserve them while correcting the historical mode label.
+            position["mode"] = correct_mode
+            return True
+
+        position["mode"] = correct_mode
+        position["buy_threshold"] = float(config["buy_threshold"])
+        position["sell_threshold"] = float(config["sell_threshold"])
+        position["max_hold_days"] = int(config["max_hold_days"])
+        return True
+
     def get_position_config(self, position: Dict) -> Dict:
         """Return the sell/hold config stored at buy time, falling back to mode config."""
         base_config = self.sf_config if position.get("mode") == "SF" else self.ag_config
@@ -3121,8 +3126,6 @@ class SOXLQuantTrader:
             if soxl_data.index.max().date() == today_date:
                 soxl_data = soxl_data[soxl_data.index.date < today_date]
         
-        self._prune_positions_failing_loc_verification(soxl_data)
-        
         # 2. QQQ 데이터 가져오기 (주간 RSI 계산용)
         qqq_data = self.get_stock_data("QQQ", "6mo")  # 충분한 데이터 확보
         if qqq_data is None:
@@ -3139,118 +3142,9 @@ class SOXLQuantTrader:
         except Exception as e:
             print(f"⚠️ RSI 참조 데이터 로드 실패: {e}")
 
-        # 시뮬레이션 후 포지션 모드를 백업하여 이후 모드 재계산 시 보존
-        position_mode_backup = {}
-        for pos in self.positions:
-            buy_date = pos.get('buy_date')
-            if isinstance(buy_date, pd.Timestamp):
-                buy_date_dt = buy_date.to_pydatetime()
-            elif isinstance(buy_date, datetime):
-                buy_date_dt = buy_date
-            else:
-                continue
-            
-            # 포지션 키 생성 (회차_매수일)
-            pos_key = f"{pos['round']}_{buy_date_dt.strftime('%Y-%m-%d')}"
-            stored_mode = pos.get('mode')
-            if stored_mode:
-                position_mode_backup[pos_key] = stored_mode
-                print(f"🔍 포지션 모드 백업: {pos_key} = {stored_mode}")
-        
-        # 3-0. 포지션 모드 재검증 및 수정 (매수일 기준으로 재계산, 수량/금액도 재계산)
-        # QQQ 데이터로 주간 RSI 계산
-        weekly_df_for_positions = qqq_data.resample('W-FRI').agg({
-            'Open': 'first',
-            'High': 'max',
-            'Low': 'min',
-            'Close': 'last',
-            'Volume': 'sum'
-        }).dropna()
-        
-        if len(weekly_df_for_positions) >= 15:
-            # RSI 계산
-            delta = weekly_df_for_positions['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi_for_positions = 100 - (100 / (1 + rs))
-            
-            for pos in self.positions:
-                buy_date = pos.get('buy_date')
-                if isinstance(buy_date, pd.Timestamp):
-                    buy_date_dt = buy_date.to_pydatetime()
-                elif isinstance(buy_date, datetime):
-                    buy_date_dt = buy_date
-                else:
-                    continue
-                
-                # 포지션 키 생성 (회차_매수일)
-                pos_key = f"{pos['round']}_{buy_date_dt.strftime('%Y-%m-%d')}"
-                current_stored_mode = pos.get('mode')
-                
-                # 매수일이 속한 주의 금요일 계산
-                buy_date_weekday = buy_date_dt.weekday()
-                days_until_friday = (4 - buy_date_weekday) % 7
-                if days_until_friday == 0 and buy_date_weekday != 4:
-                    days_until_friday = 7
-                buy_week_friday = buy_date_dt + timedelta(days=days_until_friday)
-                
-                # 매수일의 1주전, 2주전 금요일 계산
-                one_week_ago_friday = buy_week_friday - timedelta(days=7)
-                two_weeks_ago_friday = buy_week_friday - timedelta(days=14)
-                
-                # RSI 값 추출 (참조 데이터 우선 사용)
-                one_week_ago_rsi = self.get_rsi_from_reference(one_week_ago_friday, rsi_ref_data)
-                two_weeks_ago_rsi = self.get_rsi_from_reference(two_weeks_ago_friday, rsi_ref_data)
-                
-                # 참조 데이터에 없으면 실시간 계산 데이터 사용
-                if one_week_ago_rsi is None:
-                    one_week_ago_friday_dt = pd.Timestamp(one_week_ago_friday.date())
-                    earlier_dates_1w = weekly_df_for_positions.index[weekly_df_for_positions.index <= one_week_ago_friday_dt]
-                    if len(earlier_dates_1w) > 0:
-                        one_week_rsi_date = earlier_dates_1w[-1]
-                        one_week_rsi_idx = weekly_df_for_positions.index.get_loc(one_week_rsi_date)
-                        if one_week_rsi_idx < len(rsi_for_positions):
-                            one_week_ago_rsi = rsi_for_positions.iloc[one_week_rsi_idx]
+        self._revalidate_position_modes(self.positions, qqq_data, rsi_ref_data)
+        self._prune_positions_failing_loc_verification(soxl_data)
 
-                if two_weeks_ago_rsi is None:
-                    two_weeks_ago_friday_dt = pd.Timestamp(two_weeks_ago_friday.date())
-                    earlier_dates_2w = weekly_df_for_positions.index[weekly_df_for_positions.index <= two_weeks_ago_friday_dt]
-                    if len(earlier_dates_2w) > 0:
-                        two_weeks_rsi_date = earlier_dates_2w[-1]
-                        two_weeks_rsi_idx = weekly_df_for_positions.index.get_loc(two_weeks_rsi_date)
-                        if two_weeks_rsi_idx < len(rsi_for_positions):
-                            two_weeks_ago_rsi = rsi_for_positions.iloc[two_weeks_rsi_idx]
-                
-                # RSI 값으로 매수일의 모드 재계산
-                if one_week_ago_rsi is not None and two_weeks_ago_rsi is not None:
-                    # 전주 모드를 재귀적으로 계산 (참조 데이터 사용 버전 우선)
-                    prev_week_mode, success = self._calculate_week_mode_recursive_with_reference(one_week_ago_friday, rsi_ref_data)
-                    
-                    if not success:
-                        # 참조 데이터 실패 시 실시간 계산 버전으로 시도
-                        prev_week_mode, success = self._calculate_week_mode_recursive(one_week_ago_friday, weekly_df_for_positions, rsi_for_positions)
-                    
-                    if success:
-                        # 매수일의 모드 결정
-                        is_matched, matched_mode = self._is_mode_case_matched(one_week_ago_rsi, two_weeks_ago_rsi)
-                        if is_matched:
-                            correct_mode = matched_mode
-                        else:
-                            correct_mode = prev_week_mode
-                        
-                        # 저장된 모드와 비교
-                        if current_stored_mode != correct_mode:
-                            print(f"⚠️ 포지션 모드 불일치 감지: {pos_key}")
-                            print(f"   매수일: {buy_date_dt.strftime('%Y-%m-%d')}, 저장된 모드: {current_stored_mode}, 올바른 모드: {correct_mode}")
-                            print(f"   RSI 값: 1주전={one_week_ago_rsi:.2f}, 2주전={two_weeks_ago_rsi:.2f}")
-                            print(f"🔧 포지션 모드 수정: {pos_key} = {current_stored_mode} → {correct_mode}")
-                            
-                            # 모드는 매도 조건 계산에 필요하지만, 실제 체결 수량/금액은
-                            # 스냅샷이나 체결 확인값을 원천값으로 유지한다.
-                            pos['mode'] = correct_mode
-                            print(f"   (체결 수량/금액 유지: {pos['shares']}주 @ ${pos['amount']:,.0f})")
-        
         # 3-1. 12/29일 매수 포지션 보정 (안전모드/회차만 보정, 체결 수량은 유지)
         target_date = datetime(2025, 12, 29)
         for pos in self.positions:
@@ -3265,7 +3159,7 @@ class SOXLQuantTrader:
             # 12/29일 매수 포지션인지 확인
             if buy_date_dt.date() == target_date.date():
                 # 모드를 안전모드로 강제 변경
-                pos['mode'] = 'SF'
+                self._correct_position_mode(pos, 'SF')
                 
                 # 12/29일 이전 보유중인 안전모드 포지션 확인
                 prev_positions = []

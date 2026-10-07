@@ -678,6 +678,15 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
     # stay unchanged and the normal trading-day gate is false.
     if prev_position_keys != curr_position_keys:
         return True
+    # Entry-mode corrections must persist even when no new fill/date exists.
+    # Otherwise the next refresh restores the stale target and holding period.
+    strategy_fields = ("mode", "buy_threshold", "sell_threshold", "max_hold_days", "strategy_name")
+    for key in curr_position_keys:
+        if any(
+            current_snapshot[key].get(field) != previous_snapshot[key].get(field)
+            for field in strategy_fields
+        ):
+            return True
     if prev_has_positions and not curr_has_positions:
         return True
     if current_snapshot.get("available_cash") is not None and not curr_has_positions:

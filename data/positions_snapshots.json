@@ -6,9 +6,9 @@
       "amount": 6735.070175170898,
       "round": 1,
       "mode": "AG",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7
     },
     "2_2026-10-06": {
       "shares": 89,

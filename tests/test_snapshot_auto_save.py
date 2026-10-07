@@ -7,6 +7,33 @@ from soxl_quant_system import SOXLQuantTrader
 
 
 class SnapshotAutoSaveTests(unittest.TestCase):
+    def test_corrected_entry_rules_are_saved_on_non_trading_day(self):
+        position = {
+            "round": 1,
+            "shares": 35,
+            "buy_price": 164.27000427246094,
+            "mode": "AG",
+            "buy_threshold": 3.5,
+            "sell_threshold": 1.1,
+            "max_hold_days": 35,
+        }
+        previous = {
+            "1_2026-10-05": position,
+            "available_cash": 107_739.64813629151,
+            "as_of_date": "2026-10-05",
+        }
+        current = dict(previous)
+        current["1_2026-10-05"] = {
+            **position,
+            "buy_threshold": 3.6,
+            "sell_threshold": 3.5,
+            "max_hold_days": 7,
+        }
+
+        with patch("app._is_market_trading_day", return_value=False):
+            self.assertTrue(_should_auto_save_snapshot(previous, current))
+            self.assertFalse(_should_auto_save_snapshot(current, dict(current)))
+
     def test_removed_lot_is_saved_on_non_trading_day(self):
         retained_position = {
             "round": 3,
