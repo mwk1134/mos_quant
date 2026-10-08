@@ -135,24 +135,25 @@
       "max_hold_days": 7,
       "strategy_name": "dongpa_ma_v1_1_r"
     },
-    "available_cash": 76972.01887786864,
+    "3_2026-10-07": {
+      "shares": 132,
+      "buy_price": 158.91000366210938,
+      "amount": 20976.120483398438,
+      "round": 3,
+      "mode": "AG",
+      "buy_threshold": 16.0,
+      "sell_threshold": 6.8,
+      "max_hold_days": 7,
+      "strategy_name": "dongpa_ma_v1_1_r"
+    },
+    "available_cash": 55995.898394470205,
     "processed_seed_dates": [],
-    "as_of_date": "2026-10-06",
-    "compound_seed": 84453.13129962159,
-    "compound_reference_seed": 84453.13129962159,
+    "as_of_date": "2026-10-07",
+    "compound_seed": 85097.45326501466,
+    "compound_reference_seed": 85097.45326501466,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "compound_settlements": [
-      {
-        "trade_date": "2026-10-01",
-        "settlement_date": "2026-10-08",
-        "pnl": 448.22999999999956
-      },
-      {
-        "trade_date": "2026-10-01",
-        "settlement_date": "2026-10-08",
-        "pnl": 472.22995056152286
-      },
       {
         "trade_date": "2026-10-02",
         "settlement_date": "2026-10-09",
@@ -172,11 +173,11 @@
       "soxlPrice": 140.25
     },
     "pending_buy": {
-      "round": 3,
-      "order_date": "2026-10-07",
-      "quantity": 132,
-      "target_price": 190.54159362792967,
-      "basis_date": "2026-10-06"
+      "round": 4,
+      "order_date": "2026-10-08",
+      "quantity": 138,
+      "target_price": 184.33560424804685,
+      "basis_date": "2026-10-07"
     }
   },
   "JEH2": {
