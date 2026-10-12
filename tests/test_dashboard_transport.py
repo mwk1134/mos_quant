@@ -42,7 +42,7 @@ const context={console,URL,Date,Set,Error,JSON,Number,String,Array,Object,
 vm.createContext(context);
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
-  queue.push({json:input.initial});
+  queue.push(input.initialResponse||{json:input.initial});
   vm.runInContext(input.script,context);
   await tick();calls.length=0;reads=0;queue.push(...input.responses);
   const result=await vm.runInContext('(async()=>{'+input.code+'})()',context);
@@ -52,10 +52,10 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 """
 
 
-def frontend(code, responses=(), *, url=None):
+def frontend(code, responses=(), *, url=None, initial_response=None):
     script = re.search(r"<script>(.*?)</script>", _HTML, flags=re.S).group(1)
     payload = {"script": script, "initial": STATUS, "responses": list(responses),
-               "code": code, "url": url}
+               "code": code, "url": url, "initialResponse": initial_response}
     result = subprocess.run([NODE, "-e", HARNESS], input=json.dumps(payload),
                             text=True, capture_output=True, timeout=5)
     assert result.returncode == 0, result.stderr
@@ -63,7 +63,7 @@ def frontend(code, responses=(), *, url=None):
 
 
 def output():
-    return "return {error:$('block').textContent,hidden:$('block').hidden,info:$('message').textContent,enabled:current.enabled,at:current.at,busy};"
+    return "return {error:$('block').textContent,hidden:$('block').hidden,info:$('message').textContent,enabled:current.enabled,at:current.at,busy,connectionReady,banner:$('connection').textContent,bannerHidden:$('connection').hidden,disabled:Object.fromEntries(['at','save-time','enable','preview','run','disable'].map(id=>[id,$(id).disabled]))};"
 
 
 @pytest.mark.parametrize("status,text", [(200, ""), (403, ""), (502, "<!doctype html><p>proxy failure secret</p>")])
@@ -82,6 +82,9 @@ def test_empty_or_html_mutation_never_claims_success_or_retries(status, text):
     assert ui["enabled"] is False
     assert ui["at"] == "17:01"
     assert ui["busy"] is False
+    assert ui["connectionReady"] is False
+    assert ui["bannerHidden"] is False
+    assert "PC 엔진" in ui["banner"]
 
 
 @pytest.mark.parametrize("value", [None, [], "wrong", 42, {}, {"ok": True}, {"ok": True, "status": {}}])
@@ -151,10 +154,12 @@ def test_command_error_survives_successful_status_poll():
 
 
 def test_new_successful_action_clears_old_command_error():
-    result = frontend("await action('/api/configure',{at:'18:25'},'저장 완료');await action('/api/preview',{},'추천 확인');" + output(),
-                      [{"status": 403, "text": ""}, {"json": {"ok": True, "status": STATUS}}])
+    result = frontend("await action('/api/configure',{at:'18:25'},'저장 완료');await pollStatus();await action('/api/preview',{},'추천 확인');" + output(),
+                      [{"status": 403, "text": ""}, {"json": STATUS},
+                       {"json": {"ok": True, "status": STATUS}}])
     assert result["result"]["error"] == ""
     assert result["result"]["info"] == "추천 확인"
+    assert [call["method"] for call in result["calls"]] == ["POST", "GET", "POST"]
 
 
 def test_read_poll_error_is_cleared_by_a_valid_status_without_hiding_engine_error():
@@ -181,3 +186,71 @@ def test_urgent_stop_can_run_during_busy_action_without_repeating_other_mutation
     assert "kmw_api=preview" in result["calls"][0]["url"]
     assert "kmw_api=disable" in result["calls"][1]["url"]
     assert result["result"]["busy"] is False
+
+
+@pytest.mark.parametrize("failure", [
+    {"text": ""}, {"status": 404, "json": {"ok": False, "error": "페이지를 찾을 수 없습니다."}},
+    {"networkError": True}, {"json": {}},
+])
+def test_initial_status_failure_disables_commands_and_sends_no_posts(failure):
+    code = "$('live-ack').checked=true;updateButtons();await action('/api/configure',{at:'18:25'});await action('/api/enable',{confirm_live:true});await action('/api/preview');await action('/api/run',{confirm_live:true,review_id:'fake'});" + output()
+    result = frontend(code, initial_response=failure)
+    assert result["calls"] == []
+    ui = result["result"]
+    assert ui["connectionReady"] is False
+    assert ui["bannerHidden"] is False
+    assert "PC 엔진" in ui["banner"]
+    assert "상태 응답" in ui["banner"]
+    assert all(ui["disabled"][name] for name in ("at", "save-time", "enable", "preview", "run"))
+    assert ui["enabled"] is False
+
+
+def test_valid_status_reconnect_enables_controls_without_replaying_blocked_commands():
+    code = "$('live-ack').checked=true;await action('/api/configure',{at:'18:25'});await pollStatus();" + output()
+    result = frontend(code, [{"json": STATUS}], initial_response={"text": ""})
+    assert [call["method"] for call in result["calls"]] == ["GET"]
+    ui = result["result"]
+    assert ui["connectionReady"] is True
+    assert ui["bannerHidden"] is True
+    assert all(not ui["disabled"][name] for name in ("at", "save-time", "enable", "preview"))
+    assert ui["disabled"]["run"] is True  # Reconnection never enables the engine.
+    assert ui["enabled"] is False
+    assert ui["at"] == "17:01"
+
+
+def test_failed_status_poll_locks_commands_until_fresh_status_confirms_connection():
+    code = "await pollStatus();await action('/api/configure',{at:'18:25'});await action('/api/preview');" + output()
+    result = frontend(code, [{"text": ""}])
+    assert [call["method"] for call in result["calls"]] == ["GET"]
+    assert result["result"]["connectionReady"] is False
+    assert result["result"]["disabled"]["save-time"] is True
+
+
+def test_uncertain_command_result_blocks_further_posts_until_status_is_confirmed():
+    code = "await action('/api/configure',{at:'18:25'});await action('/api/preview');await action('/api/enable',{confirm_live:true});" + output()
+    result = frontend(code, [{"text": ""}])
+    assert [call["method"] for call in result["calls"]] == ["POST"]
+    assert result["result"]["connectionReady"] is False
+    assert result["result"]["bannerHidden"] is False
+
+
+def test_last_known_enabled_engine_keeps_urgent_stop_available_after_connection_failure():
+    enabled = dict(STATUS, enabled=True)
+    code = "await pollStatus();const stopAvailable=!$('disable').disabled;await action('/api/preview');await action('/api/disable',{},'중지 완료',true);return {stopAvailable,connectionReady,enabled:current.enabled,info:$('message').textContent};"
+    result = frontend(code, [{"text": ""}, {"json": {"ok": True, "status": STATUS}}],
+                      initial_response={"json": enabled})
+    assert result["result"]["stopAvailable"] is True
+    assert [call["method"] for call in result["calls"]] == ["GET", "POST"]
+    assert "kmw_api=disable" in result["calls"][-1]["url"]
+    assert result["result"]["enabled"] is False
+    assert result["result"]["connectionReady"] is True
+    assert result["result"]["info"] == "중지 완료"
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 500, 502, 503])
+def test_auth_route_or_gateway_failure_blocks_followup_control_requests(status):
+    code = "await action('/api/configure',{at:'18:25'});await action('/api/enable',{confirm_live:true});" + output()
+    result = frontend(code, [{"status": status, "json": {"ok": False, "error": "연결 확인 필요"}}])
+    assert [call["method"] for call in result["calls"]] == ["POST"]
+    assert result["result"]["connectionReady"] is False
+    assert result["result"]["disabled"]["enable"] is True

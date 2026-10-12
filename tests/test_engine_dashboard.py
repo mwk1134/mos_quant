@@ -192,34 +192,63 @@ def test_preview_and_configure_never_enable(dashboard):
     assert not engine.enabled
 
 
-def test_page_relative_api_queries_keep_post_json_contract(dashboard):
+@pytest.mark.parametrize("path", ["/", "/private/8701/", "/relay/app/dashboard"])
+def test_page_relative_api_queries_keep_post_json_contract(dashboard, path):
     server, engine = dashboard
-    code, headers, body = request(server, "/?kmw_api=status&ticket=test-only")
+    code, headers, body = request(server, path + "?kmw_api=status&ticket=test-only")
     assert code == 200 and json.loads(body)["enabled"] is False
     assert headers["X-KMW-Engine"] == "1"
-    code, _, body = post(server, "/?ticket=test-only&kmw_api=configure", {"at": "18:25"})
+    code, _, body = post(server, path + "?ticket=test-only&kmw_api=configure", {"at": "18:25"})
     assert code == 200 and json.loads(body)["status"]["at"] == "18:25"
     assert engine.calls == [("configure", "18:25")]
     assert not engine.enabled
 
 
 @pytest.mark.parametrize("action", ["enable", "disable", "run", "configure", "preview"])
-def test_page_query_get_cannot_mutate_engine(dashboard, action):
+@pytest.mark.parametrize("path", ["/", "/private/8701/"])
+def test_page_query_get_cannot_mutate_engine(dashboard, action, path):
     server, engine = dashboard
-    code, _, body = request(server, "/?kmw_api=" + action)
+    code, _, body = request(server, path + "?kmw_api=" + action)
     assert code == 404 and json.loads(body)["ok"] is False
     assert engine.calls == []
 
 
-def test_page_query_live_request_still_needs_origin_csrf_and_ack(dashboard):
+@pytest.mark.parametrize("path", ["/", "/private/8701/"])
+def test_page_query_live_request_still_needs_origin_csrf_and_ack(dashboard, path):
     server, engine = dashboard
-    code, _, _ = request(server, "/?kmw_api=enable", method="POST", body={"confirm_live": True})
+    route = path + "?kmw_api=enable"
+    code, _, _ = request(server, route, method="POST", body={"confirm_live": True})
     assert code == 403 and engine.calls == []
-    code, _, _ = post(server, "/?kmw_api=enable", {})
+    code, _, _ = post(server, route, {})
     assert code == 400 and engine.calls == []
-    code, _, body = post(server, "/?kmw_api=enable", {"confirm_live": True})
+    code, _, body = post(server, route, {"confirm_live": True})
     assert code == 200 and json.loads(body)["status"]["enabled"] is True
     assert engine.calls == ["enable"]
+
+
+@pytest.mark.parametrize("header", [
+    {"X-CSRF-Token": "invalid"}, {"Origin": "https://attacker.example"},
+    {"Host": "attacker.example"},
+])
+def test_proxy_path_alias_does_not_relax_request_authentication(dashboard, header):
+    server, engine = dashboard
+    code, _, _ = post(server, "/private/8701/?kmw_api=enable",
+                      {"confirm_live": True}, headers=header)
+    assert code == 403
+    assert engine.calls == []
+    assert not engine.enabled
+
+
+@pytest.mark.parametrize("query", [
+    "kmw_api=unknown", "kmw_api=", "kmw_api=enable&kmw_api=enable",
+    "kmw_api=enable&kmw_api=", "kmw_api=status&kmw_api=configure",
+])
+def test_proxy_path_alias_requires_one_allowed_action(dashboard, query):
+    server, engine = dashboard
+    code, _, _ = post(server, "/private/8701/?" + query, {"confirm_live": True})
+    assert code == 404
+    assert engine.calls == []
+    assert not engine.enabled
 
 
 @pytest.mark.parametrize("value", [None, "24:00", "12:60", "7:01", "17:01:00", "18:00\n", 1701])
