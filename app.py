@@ -1773,12 +1773,17 @@ def initialize_trader():
         except Exception:
             pass
 
-def show_ma_alignment_preference_control() -> None:
+def show_ma_alignment_preference_control():
     """Render and persist the per-preset MA-alignment opt-in."""
     preset_name = st.session_state.get("active_preset")
+    st.subheader(
+        f"📈 정배열 스위칭 · {preset_name}" if preset_name else "📈 정배열 매매 상태"
+    )
+    status_placeholder = st.empty()
+    status_placeholder.info("🔎 확정 종가 기준으로 정배열 조건과 전략 적용 여부를 확인 중입니다.")
     if not preset_name:
         st.info("💡 프리셋을 선택하면 해당 사용자만 정배열 스위칭을 켤 수 있습니다.")
-        return
+        return status_placeholder
 
     preset_key = _preset_state_key(preset_name)
     preset = st.session_state.get(preset_key, {})
@@ -1798,7 +1803,6 @@ def show_ma_alignment_preference_control() -> None:
         else:
             st.warning(message)
 
-    st.subheader(f"📈 정배열 스위칭 · {preset_name}")
     toggle_key = f"ma_alignment_opt_in_{preset_name.lower()}"
     pending_widget_sync = st.session_state.pop(
         "_ma_alignment_widget_sync", None
@@ -1811,14 +1815,29 @@ def show_ma_alignment_preference_control() -> None:
         st.session_state[toggle_key] = bool(pending_widget_sync[1])
     if toggle_key not in st.session_state:
         st.session_state[toggle_key] = enabled
-    selected = st.toggle(
-        "이 프리셋에 정배열 전략 적용",
-        key=toggle_key,
-        help=(
-            "SOXL 전일 종가 기준 SMA5 > SMA20 > SMA60일 때만 신규 매수에 "
-            "정배열 전략을 적용합니다. 기존 포지션의 매도 조건은 유지됩니다."
-        ),
-    )
+    switch_col, ratios_col = st.columns([2, 3], gap="small")
+    with switch_col:
+        selected = st.toggle(
+            "이 프리셋에 정배열 전략 적용",
+            key=toggle_key,
+            help=(
+                "SOXL 전일 종가 기준 SMA5 > SMA20 > SMA60일 때만 신규 매수에 "
+                "정배열 전략을 적용합니다. 기존 포지션의 매도 조건은 유지됩니다."
+            ),
+        )
+    with ratios_col:
+        ratio_lines = []
+        for mode, config in (
+            ("SF", SOXLQuantTrader.MA_ALIGNMENT_SF_CONFIG),
+            ("AG", SOXLQuantTrader.MA_ALIGNMENT_AG_CONFIG),
+        ):
+            percentages = " · ".join(
+                f"{ratio * 100:.2f}%" for ratio in config["split_ratios"]
+            )
+            ratio_lines.append(
+                f"**{mode} (1→{config['split_count']}회)** {percentages}"
+            )
+        st.caption("  \n".join(ratio_lines))
     st.caption(
         "기본값은 꺼짐입니다. 설정은 현재 선택한 프리셋에만 저장되며 "
         "다른 프리셋에는 영향을 주지 않습니다."
@@ -1842,6 +1861,8 @@ def show_ma_alignment_preference_control() -> None:
         # the trader while preserving the existing position snapshot.
         st.session_state.trader = None
         st.rerun()
+
+    return status_placeholder
 
 
 def show_mobile_settings():
@@ -1969,7 +1990,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
 
-    show_ma_alignment_preference_control()
+    ma_alignment_placeholder = show_ma_alignment_preference_control()
     show_preset_max_mdd_summary()
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
@@ -2049,6 +2070,7 @@ def show_mobile_settings():
     st.markdown("""
     </div>
     """, unsafe_allow_html=True)
+    return ma_alignment_placeholder
 
 def main():
     try:
@@ -2075,7 +2097,7 @@ def main():
     
     
     # 설정 패널 (모든 화면)
-    show_mobile_settings()
+    ma_alignment_placeholder = show_mobile_settings()
     
     # 트레이더 초기화
     initialize_trader()
@@ -2120,7 +2142,7 @@ def main():
         st.session_state.active_tab = None
     
     with tab1:
-        show_daily_recommendation()
+        show_daily_recommendation(ma_alignment_placeholder)
     
     with tab2:
         show_backtest()
@@ -2283,21 +2305,25 @@ def show_dashboard():
                 st.warning("⚠️ 10/10일(당일) 데이터를 찾을 수 없습니다.")
 
 def show_ma_alignment_alert(recommendation: dict) -> None:
-    """Notify on a detected alignment and offer a preset-scoped opt-in."""
+    """Show signal readiness separately from the preset's strategy selection."""
+    if recommendation.get("error"):
+        st.warning(
+            "⚠️ 정배열 적용 여부 확인 불가 · " + str(recommendation["error"])
+        )
+        return
+
     status = recommendation.get("ma_alignment")
-    if not isinstance(status, dict):
+    if not isinstance(status, dict) or not status.get("available") or status.get("error"):
+        st.warning(
+            "⚠️ 정배열 판단 불가 · 확정 종가 데이터를 확인할 수 없습니다. "
+            "SMA5 > SMA20 > SMA60 판정에는 60거래일의 종가가 필요합니다."
+        )
         return
 
     condition_met = bool(status.get("condition_met", False))
     enabled = bool(status.get("enabled", False))
     active = bool(status.get("active", False))
     basis_date = str(status.get("basis_date") or recommendation.get("basis_date") or "")
-    strategy_name = str(
-        status.get("strategy_name")
-        or recommendation.get("strategy_name")
-        or "정배열 전략"
-    )
-
     sma_values = []
     for label, key in (("SMA5", "sma5"), ("SMA20", "sma20"), ("SMA60", "sma60")):
         try:
@@ -2310,52 +2336,55 @@ def show_ma_alignment_alert(recommendation: dict) -> None:
 
     if condition_met and active:
         st.success(
-            f"📈 정배열 조건 충족 · {strategy_name} 적용 중"
-            + (f" ({detail})" if detail else "")
+            "✅ 정배열 조건 충족 · 정배열 매매 적용 중\n\n"
+            "스위치가 켜져 있어 다음 신규 매수에 정배열 전략을 사용합니다."
         )
-        return
-
-    if condition_met:
+    elif condition_met:
         st.warning(
-            "📈 SOXL 정배열 조건(SMA5 > SMA20 > SMA60)이 발생했습니다. "
-            "현재 프리셋은 기존 전략을 유지하고 있습니다."
-            + (f" ({detail})" if detail else "")
+            "📈 정배열 매매 조건 충족 · 스위치 꺼짐\n\n"
+            "SMA5 > SMA20 > SMA60을 충족했습니다. "
+            "스위치를 켜면 다음 신규 매수에 정배열 전략을 적용합니다. "
+            "현재는 기존 SF/AG 전략을 사용합니다."
         )
-        preset_name = st.session_state.get("active_preset")
-        if not enabled and preset_name:
-            if st.button(
-                f"{preset_name}만 정배열 전략으로 전환",
-                key=f"activate_ma_alignment_{preset_name.lower()}",
-                type="primary",
-                use_container_width=True,
-            ):
-                ok, err = save_preset_ma_alignment_setting(preset_name, True)
-                if ok:
-                    message = f"✅ {preset_name} 정배열 스위칭을 활성화했습니다."
-                else:
-                    message = (
-                        f"⚠️ {preset_name} 설정을 로컬에는 반영했지만 "
-                        f"GitHub 저장에 실패했습니다: {err}"
-                    )
-                st.session_state._ma_alignment_save_feedback = (ok, message)
-                st.session_state._ma_alignment_widget_sync = (preset_name, True)
-                st.session_state.trader = None
-                st.rerun()
-        elif not preset_name:
-            st.caption("프리셋을 먼저 선택하면 해당 사용자에게만 적용할 수 있습니다.")
     elif enabled:
         st.info(
-            "📉 정배열 스위칭은 켜져 있지만 현재 조건은 미충족입니다. "
-            "신규 매수는 기존 전략을 사용합니다."
-            + (f" ({detail})" if detail else "")
+            "⏸️ 정배열 조건 미충족 · 스위치 켜짐, 적용 대기 중\n\n"
+            "현재 SMA5 > SMA20 > SMA60을 충족하지 않아 "
+            "다음 신규 매수에는 기존 SF/AG 전략을 사용합니다."
+        )
+    else:
+        st.info(
+            "📉 정배열 조건 미충족 · 스위치 꺼짐\n\n"
+            "현재 SMA5 > SMA20 > SMA60을 충족하지 않습니다. "
+            "다음 신규 매수에는 기존 SF/AG 전략을 사용합니다."
         )
 
+    if detail:
+        st.caption(detail)
+    if active and recommendation.get("can_buy") is False:
+        st.info(
+            "정배열 전략은 선택되어 있지만 현재 신규 매수는 불가합니다. "
+            "매수 회차 한도와 예수금을 확인해주세요."
+        )
+    elif active:
+        st.caption("실제 매수 주문 가능 여부와 수량은 아래 매수 추천에서 확인하세요.")
 
-def show_daily_recommendation():
+
+def _update_ma_alignment_display(placeholder, recommendation: dict) -> None:
+    """Replace the pending status beside the toggle with the actual recommendation."""
+    if placeholder is not None:
+        with placeholder.container():
+            show_ma_alignment_alert(recommendation)
+
+
+def show_daily_recommendation(ma_alignment_placeholder=None):
     """일일 매매 추천 페이지"""
     st.header("📊 일일 매매 추천")
     
     if not st.session_state.trader:
+        _update_ma_alignment_display(
+            ma_alignment_placeholder, {"error": "매매 시스템이 초기화되지 않았습니다."}
+        )
         st.error("시스템이 초기화되지 않았습니다.")
         return
     
@@ -2374,6 +2403,9 @@ def show_daily_recommendation():
                 pass
 
         if not st.session_state.positions_snapshot:
+            _update_ma_alignment_display(
+                ma_alignment_placeholder, {"error": "프리셋의 체결 내역을 불러오지 못했습니다."}
+            )
             st.error(
                 "프리셋 스냅샷을 불러오지 못했습니다. 실제 체결 수량 보호를 위해 "
                 "전체 재시뮬레이션과 자동 저장을 중단합니다."
@@ -2404,6 +2436,9 @@ def show_daily_recommendation():
         else:
             sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
         if "error" in sim_result:
+            _update_ma_alignment_display(
+                ma_alignment_placeholder, {"error": "현재 계좌 상태 계산에 실패했습니다."}
+            )
             st.error(f"시뮬레이션 실패: {sim_result['error']}")
             return
         
@@ -2460,6 +2495,9 @@ def show_daily_recommendation():
             skip_simulate=True, preserve_snapshot_shares=bool(snapshot)
         )
         if "error" in recommendation:
+            _update_ma_alignment_display(
+                ma_alignment_placeholder, {"error": "매매 추천 계산에 실패했습니다."}
+            )
             # 데이터가 불완전한 실행 결과로 스냅샷/예수금을 저장하지 않는다.
             st.error(f"추천 생성 실패: {recommendation['error']}")
             st.info("잠시 후 다시 시도해주세요. 기존 체결 스냅샷은 변경되지 않았습니다.")
@@ -2626,7 +2664,10 @@ def show_daily_recommendation():
     if buy_order_date:
         status_text += f" · 매수 주문일: **{buy_order_date}**"
     st.info(status_text)
-    show_ma_alignment_alert(recommendation)
+    if ma_alignment_placeholder is not None:
+        _update_ma_alignment_display(ma_alignment_placeholder, recommendation)
+    else:
+        show_ma_alignment_alert(recommendation)
     
     # GitHub 스냅샷 저장 결과 표시
     save_result = st.session_state.get('_gh_save_result')
