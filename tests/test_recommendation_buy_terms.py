@@ -33,7 +33,7 @@ class RecommendationBuyTermsTests(unittest.TestCase):
             with self.subTest(price=price, budget=budget), self.assertRaises(ValueError):
                 recommendation_buy_order_terms(price, budget)
 
-    def test_pending_metadata_matches_the_displayed_order_terms(self):
+    def test_pending_metadata_preserves_original_price_and_displayed_quantity(self):
         # Load just the pure conversion function without starting Streamlit.
         path = Path(__file__).resolve().parents[1] / "app.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -43,7 +43,7 @@ class RecommendationBuyTermsTests(unittest.TestCase):
         function.returns = None
         for argument in function.args.args:
             argument.annotation = None
-        namespace = {"recommendation_buy_order_terms": recommendation_buy_order_terms}
+        namespace = {}
         exec(compile(ast.Module(body=[function], type_ignores=[]), str(path), "exec"), namespace)
         pending = namespace["_pending_buy_from_recommendation"](
             SimpleNamespace(),
@@ -52,7 +52,8 @@ class RecommendationBuyTermsTests(unittest.TestCase):
              "buy_order_date": "2026-10-12"},
         )
         self.assertEqual(pending["quantity"], 10)
-        self.assertEqual(pending["target_price"], 100.00)
+        self.assertEqual(pending["target_price"], 100.005)
+        self.assertEqual(f"{pending['target_price']:.2f}", "100.00")
         self.assertEqual(pending["order_date"], "2026-10-12")
 
 

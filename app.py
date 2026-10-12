@@ -25,11 +25,7 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 # 기존 SOXLQuantTrader 클래스 import
-from soxl_quant_system import (
-    SOXLQuantTrader,
-    calculate_cash_limited_order,
-    recommendation_buy_order_terms,
-)
+from soxl_quant_system import SOXLQuantTrader, calculate_cash_limited_order
 
 APP_COMPOUNDING_ENABLED = True
 APP_PROFIT_COMPOUNDING_RATE = 0.70
@@ -858,12 +854,10 @@ def _pending_buy_from_recommendation(
         return None
     try:
         round_num = int(recommendation["next_buy_round"])
-        terms = recommendation_buy_order_terms(
-            recommendation["buy_price"], recommendation["next_buy_amount"]
-        )
-        target_price = float(terms["price"])
+        target_price = float(recommendation["buy_price"])
+        target_amount = float(recommendation["next_buy_amount"])
         basis_date = str(recommendation["basis_date"])
-        quantity = terms["quantity"]
+        quantity = int(target_amount / target_price)
         # 화면에 표시한 주문일과 스냅샷에 저장하는 주문일은 반드시 같아야 한다.
         order_date = str(
             recommendation.get("buy_order_date")
@@ -2722,9 +2716,6 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
         
         if recommendation['can_buy']:
             buy_round = recommendation['next_buy_round']
-            buy_order_terms = recommendation_buy_order_terms(
-                recommendation['buy_price'], recommendation['next_buy_amount']
-            )
             # 현재 모드의 split_ratios에서 해당 회차 비중(%) 가져오기
             current_config = recommendation.get("active_config")
             if not isinstance(current_config, dict):
@@ -2733,7 +2724,7 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
             buy_ratio_pct = split_ratios[buy_round - 1] * 100 if buy_round <= len(split_ratios) else 0
             st.success(f"✅ {buy_order_date} 매수 추천: {buy_round}회차 (비중 {buy_ratio_pct:.1f}%)")
             st.info(f"📅 주문일: **{buy_order_date}** · 계산 기준: **{basis_date} 종가**")
-            st.info(f"💰 매수가: \\${buy_order_terms['price']} (LOC 주문)")
+            st.info(f"💰 매수가: \\${recommendation['buy_price']:.2f} (LOC 주문)")
             st.info(f"💵 매수금액: \\${recommendation['next_buy_amount']:,.0f}")
             inv_base = float(
                 getattr(st.session_state.trader, "compound_reference_seed", 0.0)
@@ -2746,7 +2737,7 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
                 f"📐 계산식: 기준시드 \\${inv_base:,.0f} × 비중 {buy_ratio_pct:.1f}% "
                 f"(×{ratio_dec:.4f}) = \\${calc_amt:,.0f}"
             )
-            shares = buy_order_terms['quantity']
+            shares = int(recommendation['next_buy_amount'] / recommendation['buy_price'])
             st.info(f"📦 매수주식수: {shares}주")
             
             # 예수금 부족 시 안내
