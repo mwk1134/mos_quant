@@ -192,6 +192,36 @@ def test_preview_and_configure_never_enable(dashboard):
     assert not engine.enabled
 
 
+def test_page_relative_api_queries_keep_post_json_contract(dashboard):
+    server, engine = dashboard
+    code, headers, body = request(server, "/?kmw_api=status&ticket=test-only")
+    assert code == 200 and json.loads(body)["enabled"] is False
+    assert headers["X-KMW-Engine"] == "1"
+    code, _, body = post(server, "/?ticket=test-only&kmw_api=configure", {"at": "18:25"})
+    assert code == 200 and json.loads(body)["status"]["at"] == "18:25"
+    assert engine.calls == [("configure", "18:25")]
+    assert not engine.enabled
+
+
+@pytest.mark.parametrize("action", ["enable", "disable", "run", "configure", "preview"])
+def test_page_query_get_cannot_mutate_engine(dashboard, action):
+    server, engine = dashboard
+    code, _, body = request(server, "/?kmw_api=" + action)
+    assert code == 404 and json.loads(body)["ok"] is False
+    assert engine.calls == []
+
+
+def test_page_query_live_request_still_needs_origin_csrf_and_ack(dashboard):
+    server, engine = dashboard
+    code, _, _ = request(server, "/?kmw_api=enable", method="POST", body={"confirm_live": True})
+    assert code == 403 and engine.calls == []
+    code, _, _ = post(server, "/?kmw_api=enable", {})
+    assert code == 400 and engine.calls == []
+    code, _, body = post(server, "/?kmw_api=enable", {"confirm_live": True})
+    assert code == 200 and json.loads(body)["status"]["enabled"] is True
+    assert engine.calls == ["enable"]
+
+
 @pytest.mark.parametrize("value", [None, "24:00", "12:60", "7:01", "17:01:00", "18:00\n", 1701])
 def test_invalid_schedule_never_reaches_engine(dashboard, value):
     server, engine = dashboard
