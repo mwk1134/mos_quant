@@ -52,3 +52,10 @@ data/backtest_exports/
 
 # Logs
 *.log
+
+# Broker credentials and local order receipts
+.env
+.env.*
+!.env.meritz.example
+.autotrade/
+.venv/
