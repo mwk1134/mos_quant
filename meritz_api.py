@@ -2,7 +2,7 @@
 
 Credentials belong to one account and are only loaded by ``from_env``. Read
 methods return the documented ``data`` object/list, preserving numeric strings.
-Reservation submission returns the complete accepted response. No request is
+Order submission returns the complete accepted response. No request is
 retried automatically, including token issuance and ambiguous order submissions.
 """
 
@@ -40,6 +40,10 @@ class MeritzWarning(MeritzAPIError):
 class AmbiguousSubmission(MeritzError):
     """An order may have been received; reconcile before submitting anything else."""
 
+    def __init__(self, message: str, *, response: Optional[dict] = None):
+        super().__init__(message)
+        self.response = response
+
 
 def _date(value: str) -> str:
     if not isinstance(value, str) or not re.fullmatch(r"[0-9]{8}", value):
@@ -75,6 +79,13 @@ def _decimal(value: Any, *, positive: bool, max_length: int, name: str) -> str:
     if len(result) > max_length:
         raise ValueError(name + " exceeds API field length")
     return result
+
+
+def _positive_integer(value: Any, *, max_length: int, name: str) -> int:
+    number = _decimal(value, positive=True, max_length=max_length, name=name)
+    if Decimal(number) != Decimal(number).to_integral_value():
+        raise ValueError(name + " must be a positive integer")
+    return int(Decimal(number))
 
 
 class MeritzClient:
@@ -117,11 +128,11 @@ class MeritzClient:
             body = response.json()
         except (ValueError, requests.RequestException):
             if submission:
-                raise AmbiguousSubmission("Unreadable order response; reconcile reserved orders before retrying") from None
+                raise AmbiguousSubmission("Unreadable order response; reconcile orders before retrying") from None
             raise MeritzAPIError("Meritz returned a non-JSON response") from None
         if not isinstance(body, dict):
             if submission:
-                raise AmbiguousSubmission("Invalid order response; reconcile reserved orders before retrying")
+                raise AmbiguousSubmission("Invalid order response; reconcile orders before retrying")
             raise MeritzAPIError("Meritz returned an invalid response body")
         return body
 
@@ -160,7 +171,11 @@ class MeritzClient:
         self._access_token = token
         self._token_expires_at = time.monotonic() + max(0, expires_in - 60)
 
-    def _request(self, method: str, path: str, *, params: Optional[dict] = None, payload: Optional[dict] = None, query_codes=QUERY_CODES) -> dict:
+    def _request(
+        self, method: str, path: str, *, params: Optional[dict] = None,
+        payload: Optional[dict] = None, query_codes=QUERY_CODES,
+        success_codes=frozenset({"5620"}),
+    ) -> dict:
         if not self._access_token or time.monotonic() >= self._token_expires_at:
             self.authenticate()
         submission = method == "POST"
@@ -181,20 +196,22 @@ class MeritzClient:
             )
         except requests.RequestException:
             if submission:
-                raise AmbiguousSubmission("Order request interrupted; reconcile reserved orders before retrying") from None
+                raise AmbiguousSubmission("Order request interrupted; reconcile orders before retrying") from None
             raise MeritzError("Meritz query request failed") from None
         body = self._json(response, submission=submission)
         code = body.get("rsp_cd")
         if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9]{1,32}", code):
             if submission:
-                raise AmbiguousSubmission("Order response has no result code; reconcile before retrying")
+                raise AmbiguousSubmission("Order response has no result code; reconcile before retrying", response=body)
             raise MeritzAPIError("Meritz query response has no result code", response=body)
-        success_codes = {"5620"} if submission else query_codes
-        if code not in success_codes:
+        accepted_codes = success_codes if submission else query_codes
+        if code not in accepted_codes:
+            if submission and code == "0000":
+                raise AmbiguousSubmission("Order response has an unexpected success code; reconcile before retrying", response=body)
             raise MeritzAPIError("Meritz rejected request (rsp_cd=" + code + ")", response=body)
         if response.status_code != 200:
             if submission:
-                raise AmbiguousSubmission("Order response HTTP status is inconsistent; reconcile before retrying")
+                raise AmbiguousSubmission("Order response HTTP status is inconsistent; reconcile before retrying", response=body)
             raise MeritzAPIError("Meritz query returned an inconsistent HTTP status", response=body)
         return body
 
@@ -296,6 +313,86 @@ class MeritzClient:
             "iqry_cls_code": "2", "iqry_idnt_clcd": "2" if active_only else "0",
         }, paginated=True)
 
+    @staticmethod
+    def _submission_receipt(
+        body: dict, number_field: str, *, warning_status: bool = True,
+        warning_codes: Optional[set] = None,
+    ) -> dict:
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise AmbiguousSubmission("Order response has no receipt; reconcile before retrying", response=body)
+        if warning_status:
+            if "warn_cls_code" not in data:
+                raise AmbiguousSubmission("Order receipt has no warning status; reconcile before retrying", response=body)
+            warning_code = str(data["warn_cls_code"])
+            if warning_codes is not None and warning_code not in warning_codes:
+                raise AmbiguousSubmission("Order receipt has an unknown warning status; reconcile before retrying", response=body)
+            if warning_code != "0":
+                raise MeritzWarning("Meritz order warning requires manual review; order was not acknowledged", response=body)
+        try:
+            number = Decimal(str(data.get(number_field, "")))
+            valid_receipt = number.is_finite() and number > 0 and number == number.to_integral_value()
+        except InvalidOperation:
+            valid_receipt = False
+        if not valid_receipt:
+            raise AmbiguousSubmission("Order receipt has no valid " + number_field + "; reconcile before retrying", response=body)
+        return body
+
+    def submit_order(
+        self, *, side: str, symbol: str, exchange_vendor_code: str,
+        quantity: Any, price: Any, order_type: str = "LOC",
+    ) -> Dict[str, Any]:
+        """Submit one direct LOC/MOC order; receipt is acceptance, not execution.
+
+        The broker determines when direct close orders can be received. This
+        method never falls back to a reservation or acknowledges a warning.
+        """
+        _choice(side, {"buy", "sell"}, "order side")
+        _choice(order_type, {"LOC", "MOC"}, "order type")
+        if order_type == "MOC" and side != "sell":
+            raise ValueError("This client supports MOC for expiry sells only")
+        if not isinstance(symbol, str) or not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,11}", symbol):
+            raise ValueError("Symbol must be an uppercase exchange symbol")
+        amount = _positive_integer(quantity, max_length=19, name="quantity")
+        limit = _decimal(price, positive=order_type == "LOC", max_length=20, name="price")
+        if order_type == "MOC" and Decimal(limit) != 0:
+            raise ValueError("MOC price must be zero")
+        body = self._request("POST", "/trading/v1/overseas/orders/" + side, payload={
+            "ovrs_stck_symb_iscd": symbol,
+            "ovrs_exch_vndr_idno": self._vendor(exchange_vendor_code),
+            "oder_cls_code": "32" if order_type == "LOC" else "34",
+            "oder_cond_cls_code": "7", "odqt": amount,
+            "ovrs_stck_oder_prc": limit, "warn_cnfr_yn": "N",
+        }, success_codes={"0001"})
+        return self._submission_receipt(body, "oder_no", warning_codes={"0", "1", "2", "3"})
+
+    def cancel_reserved_order(self, *, reservation_date: str, reservation_no: Any) -> Dict[str, Any]:
+        """Cancel once; callers must reconcile reservation status afterward."""
+        payload = {
+            "oder_rsev_mst_date": _date(reservation_date),
+            "oder_rsev_mst_no": str(_positive_integer(reservation_no, max_length=11, name="reservation number")),
+        }
+        body = self._request(
+            "POST", "/trading/v1/overseas/reserved-orders/cancel", payload=payload,
+            success_codes={"5620", "0000"},
+        )
+        return self._submission_receipt(body, "pros_srno", warning_status=False)
+
+    def cancel_order(
+        self, *, order_date: str, order_no: Any, quantity: Any, order_type: str = "LOC",
+    ) -> Dict[str, Any]:
+        """Request a direct LOC/MOC cancellation once, then reconcile status."""
+        _choice(order_type, {"LOC", "MOC"}, "order type")
+        payload = {
+            "oder_date": _date(order_date),
+            "orgl_oder_no": _positive_integer(order_no, max_length=11, name="order number"),
+            "oder_cls_code": "32" if order_type == "LOC" else "34",
+            "odqt": _positive_integer(quantity, max_length=19, name="quantity"),
+            "warn_cnfr_yn": "N",
+        }
+        body = self._request("POST", "/trading/v1/overseas/orders/cancel", payload=payload, success_codes={"0001"})
+        return self._submission_receipt(body, "oder_no", warning_codes={"0", "1", "2", "3"})
+
     def submit_reserved_order(
         self, *, side: str, symbol: str, exchange_vendor_code: str,
         quantity: Any, price: Any, order_type: str = "LOC",
@@ -333,16 +430,4 @@ class MeritzClient:
         elif order_date is not None:
             raise ValueError("order_date only applies to specific-day reservations")
         body = self._request("POST", "/trading/v1/overseas/reserved-orders/" + side, payload=payload)
-        data = body.get("data")
-        if not isinstance(data, dict) or "warn_cls_code" not in data:
-            raise AmbiguousSubmission("Order receipt has no warning status; reconcile before retrying")
-        if str(data["warn_cls_code"]) != "0":
-            raise MeritzWarning("Meritz order warning requires manual review; order was not acknowledged", response=body)
-        try:
-            number = Decimal(str(data.get("oder_rsev_mst_no", "")))
-            valid_receipt = number.is_finite() and number > 0 and number == number.to_integral_value()
-        except InvalidOperation:
-            valid_receipt = False
-        if not valid_receipt:
-            raise AmbiguousSubmission("Order receipt has no reservation number; reconcile before retrying")
-        return body
+        return self._submission_receipt(body, "oder_rsev_mst_no")

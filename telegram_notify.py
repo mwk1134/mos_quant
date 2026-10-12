@@ -1,8 +1,8 @@
-"""Telegram notifications for KMW order reservation results.
+"""Telegram notifications for KMW direct and reserved order results.
 
 Only a validated ``sendMessage`` response confirms notification delivery.  A
 network error may happen after Telegram accepted the message, so this module
-never retries automatically.  Broker reservation acceptance is not a fill.
+never retries automatically.  Broker order acceptance is not a fill.
 """
 from __future__ import annotations
 
@@ -152,6 +152,13 @@ def _reservation_number(response):
     return _integer(data.get("oder_rsev_mst_no"), maximum=10 ** 16 - 1)
 
 
+def _order_number(response):
+    data = response.get("data") if isinstance(response, Mapping) else None
+    if not isinstance(data, Mapping):
+        return None
+    return _integer(data.get("oder_no"), maximum=10 ** 16 - 1)
+
+
 def _order_day(plan):
     raw = plan.get("order_date")
     if not isinstance(raw, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
@@ -174,38 +181,51 @@ def _generated_time(plan):
 
 
 def format_order_notification(
-    plan, results, error=None, failed_order=None, failed_state=None, not_sent_count=0
+    plan, results, error=None, failed_order=None, failed_state=None, not_sent_count=0,
+    order_route=None,
 ) -> str:
     """Format only allowlisted order data; omit raw errors/account credentials."""
     plan = plan if isinstance(plan, Mapping) else {}
     results = [row for row in results if isinstance(row, Mapping)]
-    accepted = sum(row.get("state") == "RESERVED" for row in results)
+    accepted_states = {"RESERVED", "DIRECT_ACCEPTED"}
+    accepted = sum(row.get("state") in accepted_states for row in results)
+    direct = order_route == "direct" or plan.get("order_route") == "direct" or any(
+        row.get("state") == "DIRECT_ACCEPTED" for row in results
+    )
+    kinds = {row.get("order", {}).get("order_type") for row in results
+             if isinstance(row.get("order"), Mapping)}
+    if not kinds:
+        kinds = {order.get("order_type") for order in plan.get("orders", []) if isinstance(order, Mapping)}
+    order_label = ("LOC 주문" if kinds <= {"LOC"} else "종가 주문") if direct else "예약주문"
     unknown = failed_state in {"UNKNOWN", "SENDING"} or any(
         row.get("state") in {"UNKNOWN", "SENDING"} for row in results
     )
     failed = error is not None or failed_order is not None or failed_state is not None or any(
-        row.get("state") != "RESERVED" for row in results
+        row.get("state") not in accepted_states for row in results
     )
     if unknown:
-        state = "예약주문 접수 여부 불확실 · 전송 중단"
+        state = f"{order_label} 접수 여부 불확실 · 전송 중단"
     elif failed and accepted:
-        state = "일부 예약 접수 후 전송 중단"
+        state = "일부 주문 접수 후 전송 중단" if direct else "일부 예약 접수 후 전송 중단"
     elif failed:
-        state = "예약주문 실패 · 전송 중단"
+        state = f"{order_label} 실패 · 전송 중단"
     elif accepted:
-        state = "예약주문 접수 완료"
+        state = f"{order_label} 접수 완료"
     else:
         state = "주문 없음"
     lines = ["KMW 자동매매 · SOXL", state,
              f"미국 주문일: {_order_day(plan)}",
              f"계산 시각(KST): {_generated_time(plan)}"]
     for row in results:
-        label = {"RESERVED": "접수", "UNKNOWN": "불확실", "SENDING": "불확실",
+        label = {"RESERVED": "접수", "DIRECT_ACCEPTED": "접수", "UNKNOWN": "불확실", "SENDING": "불확실",
                  "REJECTED": "실패", "NOT_SENT": "미전송"}.get(row.get("state"), "확인 필요")
         line = f"{label}: {_order_description(row.get('order'))}"
         reservation = _reservation_number(row.get("response"))
         if reservation and row.get("state") == "RESERVED":
             line += f" · 예약번호 {reservation}"
+        number = _order_number(row.get("response"))
+        if number and row.get("state") == "DIRECT_ACCEPTED":
+            line += f" · 주문번호 {number}"
         if len("\n".join(lines)) + len(line) > MAX_TEXT_LENGTH - 250:
             lines.append("추가 주문 내역은 로컬 주문 원장을 확인하세요.")
             break
@@ -220,5 +240,6 @@ def format_order_notification(
         lines.append("브로커에서 접수 여부를 확인하세요. 주문을 다시 보내지 마세요.")
     elif error is not None and failed_order is None and not accepted:
         lines.append("주문 전 확인 과정이 중단되었습니다. 로컬 실행 로그를 확인하세요.")
-    lines.append("예약 접수 알림이며 체결 완료 알림이 아닙니다. 실제 체결은 별도 확인하세요.")
+    receipt = "주문 접수" if direct else "예약 접수"
+    lines.append(f"{receipt} 알림이며 체결 완료 알림이 아닙니다. 실제 체결은 별도 확인하세요.")
     return "\n".join(lines)

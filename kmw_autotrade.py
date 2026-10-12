@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KMW-only Meritz reservation runner. Default execution only prints a plan."""
+"""KMW-only Meritz order runner. Default execution only prints a plan."""
 from __future__ import annotations
 
 import argparse
@@ -24,6 +24,7 @@ import requests
 from kmw_order_plan import build_kmw_plan
 from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
 from telegram_notify import TelegramNotificationError, TelegramNotifier, format_order_notification
+from us_market_calendar import is_us_equity_trading_day
 
 KST = ZoneInfo("Asia/Seoul")
 ET = ZoneInfo("America/New_York")
@@ -102,6 +103,23 @@ def reservation_window(now: datetime, order_date: str):
         raise OrderBlocked("Reservation window is 09:00 KST to one hour before the US open")
 
 
+def direct_order_window(now: datetime, order_date: str):
+    """Use today's pre-open recommendation; broker decides direct acceptance hours."""
+    market_now = now.astimezone(ET)
+    if market_now.date().isoformat() != order_date or not is_us_equity_trading_day(market_now.date()):
+        raise OrderBlocked("Order date does not match today's US trading session")
+    # The planner currently supports pre-open recommendations only. Restrict
+    # submissions to the same window, which also avoids early-close cutoffs.
+    if market_now.time() >= clock_time(9, 30):
+        raise OrderBlocked("Direct automated orders currently require a pre-open recommendation")
+
+
+def validate_order_route(order_route):
+    if order_route not in {"direct", "reserved"}:
+        raise OrderBlocked("Order route must be direct or reserved")
+    return order_route
+
+
 def symbol(row):
     return str(row.get("ovrs_stck_symb_iscd") or row.get("iscd") or "").strip().split(".")[0].upper()
 
@@ -144,10 +162,14 @@ def active_reservation(row, order_day):
     return True
 
 
-def validate_plan(plan, now):
+def validate_plan(plan, now, order_route="reserved"):
     if plan.get("preset") != "KMW" or plan.get("status") != "ready":
         raise OrderBlocked("Only a ready KMW plan can be submitted")
-    reservation_window(now, plan["order_date"])
+    validate_order_route(order_route)
+    if order_route == "direct":
+        direct_order_window(now, plan["order_date"])
+    else:
+        reservation_window(now, plan["order_date"])
     if plan.get("basis_date") != plan.get("expected_basis_date"):
         raise OrderBlocked("Plan does not use the most recent completed trading session")
     if plan.get("snapshot_date") != plan.get("expected_basis_date") or plan.get("snapshot_fresh") is False:
@@ -178,8 +200,8 @@ def validate_plan(plan, now):
                 raise OrderBlocked("Opposing SOXL orders overlap; resolve the account's self-trade conflict first")
 
 
-def preflight(client, plan, now, fee_buffer):
-    validate_plan(plan, now)
+def preflight(client, plan, now, fee_buffer, order_route="reserved"):
+    validate_plan(plan, now, order_route=order_route)
     holdings = [r for r in client.holdings() if symbol(r) == "SOXL"]
     for row in holdings:
         if row.get("rmnd_clcd") != "1" or row.get("loan_dtl_type_code") != "0000":
@@ -340,20 +362,27 @@ class OrderLedger:
         return [{"event_key": key, "text": text} for key, text in rows]
 
 
-def submit_plan(client, plan, ledger, account, exchange_code, notification_context=None):
+def submit_plan(client, plan, ledger, account, exchange_code, notification_context=None, order_route="reserved"):
+    validate_order_route(order_route)
+    if notification_context is not None:
+        notification_context["order_route"] = order_route
     ledger.unresolved(account)
     identities = ledger.claim(account, plan)
     results = []
     for index, (identity, order) in enumerate(zip(identities, plan["orders"])):
         ledger.update(identity, "SENDING")
         try:
-            body = client.submit_reserved_order(
-                side=order["side"].lower(), symbol=order["ticker"],
+            parameters = dict(side=order["side"].lower(), symbol=order["ticker"],
                 exchange_vendor_code=exchange_code, quantity=order["quantity"],
-                price=order["price"], order_type=order["order_type"],
-                reservation_class="1", order_date=None)
-            ledger.update(identity, "RESERVED", body)
-            results.append({"order": order, "state": "RESERVED", "response": body})
+                price=order["price"], order_type=order["order_type"])
+            if order_route == "direct":
+                body = client.submit_order(**parameters)
+                accepted_state = "DIRECT_ACCEPTED"
+            else:
+                body = client.submit_reserved_order(**parameters, reservation_class="1", order_date=None)
+                accepted_state = "RESERVED"
+            ledger.update(identity, accepted_state, body)
+            results.append({"order": order, "state": accepted_state, "response": body})
         except Exception as exc:
             state = "UNKNOWN" if isinstance(exc, AmbiguousSubmission) else "REJECTED" if isinstance(exc, MeritzError) else "UNKNOWN"
             body = getattr(exc, "response", None)
@@ -433,10 +462,12 @@ def notify_order_result(ledger, notifier, context, error=None):
         text = format_order_notification(plan, results, error=error,
                                          failed_order=context.get("failed_order"),
                                          failed_state=context.get("failed_state"),
-                                         not_sent_count=context.get("not_sent_count", 0))
+                                         not_sent_count=context.get("not_sent_count", 0),
+                                         order_route=context.get("order_route"))
         account = hashlib.sha256(os.environ.get("MERITZ_APP_KEY", "unconfigured").encode()).hexdigest()
         identities = sorted(OrderLedger.identity(account, plan, o) for o in plan["orders"])
-        outcome = "RESERVED" if error is None else context.get("failed_state", "BLOCKED")
+        direct = context.get("order_route") == "direct" or any(r.get("state") == "DIRECT_ACCEPTED" for r in results)
+        outcome = ("DIRECT_ACCEPTED" if direct else "RESERVED") if error is None else context.get("failed_state", "BLOCKED")
         event = [account, plan["order_date"], identities, outcome]
         event_key = hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
         if ledger.queue_notification(event_key, text):
@@ -465,9 +496,12 @@ def _run_once(args, notification_context=None):
     with redirect_stdout(io.StringIO()):
         generated = build_kmw_plan(snapshots, now=now, allow_stale_snapshot=args.allow_stale_preview)
     plan = cap_quantities(select_side(generated, args.side), args.quantity_cap)
+    order_route = validate_order_route(getattr(args, "order_route", "direct"))
+    plan["order_route"] = order_route
     plan["snapshot_source"] = source
     if notification_context is not None:
         notification_context["plan"] = plan
+        notification_context["order_route"] = order_route
     print_plan(plan)
     if plan.get("status") == "skipped":
         return
@@ -481,15 +515,16 @@ def _run_once(args, notification_context=None):
     ledger = OrderLedger(args.ledger)
     try:
         ledger.unresolved(account)
-        checked = preflight(client, plan, datetime.now(KST), decimal(args.fee_buffer))
+        checked = preflight(client, plan, datetime.now(KST), decimal(args.fee_buffer), order_route=order_route)
         print_plan({"preflight": checked})
         if args.submit and plan["orders"]:
             result = submit_plan(client, plan, ledger, account, checked["exchange_code"],
-                                 notification_context=notification_context)
+                                 notification_context=notification_context, order_route=order_route)
             if notification_context is not None:
                 notification_context.update(results=result, completed=True)
-            print_plan({"preset": "KMW", "state": "RESERVED", "orders": result,
-                        "note": "Reservation accepted; fills must be checked separately with --status"})
+            state = "DIRECT_ACCEPTED" if order_route == "direct" else "RESERVED"
+            print_plan({"preset": "KMW", "state": state, "orders": result,
+                        "note": "Order accepted; fills must be checked separately with --status"})
     finally:
         ledger.db.close()
 
@@ -523,7 +558,7 @@ def run_once(args):
         if context.get("completed"):
             notify_order_result(notification_ledger, notifier, context)
     except Exception as exc:
-        # A later stdout/file error cannot undo a confirmed broker reservation.
+        # A later stdout/file error cannot undo a confirmed broker order.
         notify_order_result(notification_ledger, notifier, context,
                             error=None if context.get("completed") else exc)
         raise
@@ -540,9 +575,9 @@ def next_run(now, at):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="KMW SOXL LOC/MOC Meritz reservation runner (default: preview)")
+    parser = argparse.ArgumentParser(description="KMW SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--submit", action="store_true", help="Actually submit this account's planned reservations")
+    mode.add_argument("--submit", action="store_true", help="Actually submit this account's planned orders")
     mode.add_argument("--check-account", action="store_true", help="Read broker account and validate without placing orders")
     mode.add_argument("--status", action="store_true", help="Read reservation/fill status; does not change webapp snapshots")
     mode.add_argument("--test-notification", action="store_true", help="Send a Telegram test message without any broker calls")
@@ -551,6 +586,8 @@ def main(argv=None):
     parser.add_argument("--snapshot-file", type=Path, help="Use this snapshot instead of fetching GitHub main")
     parser.add_argument("--quantity-cap", type=int, help="Cap EACH order's quantity for a small live test")
     parser.add_argument("--side", choices=["BUY", "SELL"], help="Explicitly test only buy or only sell orders")
+    parser.add_argument("--order-route", choices=["direct", "reserved"], default="direct",
+                        help="Direct LOC/MOC orders by default; reserved must be selected explicitly")
     parser.add_argument("--allow-stale-preview", action="store_true", help="Inspect a stale snapshot's plan; submission is disabled")
     parser.add_argument("--fee-buffer", default="0.005", help="Buy cash reserve fraction; default 0.5%%")
     parser.add_argument("--ledger", type=Path, default=ROOT / ".autotrade" / "orders.sqlite3")

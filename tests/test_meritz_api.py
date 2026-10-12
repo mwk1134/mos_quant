@@ -23,6 +23,8 @@ def reply(body, status=200):
 TOKEN = {"access_token": "test-access-token", "token_type": "Bearer", "expires_in": 3600}
 EMPTY = {"rsp_cd": "5820", "tr_cont": "0"}
 RECEIPT = {"rsp_cd": "5620", "data": {"oder_rsev_mst_no": 23, "warn_cls_code": "0", "warn_msg": ""}}
+DIRECT_RECEIPT = {"rsp_cd": "0001", "data": {"oder_no": 42, "warn_cls_code": "0", "warn_msg": ""}}
+CANCEL_RESERVED_RECEIPT = {"rsp_cd": "5620", "data": {"pros_srno": 24}}
 
 
 class MeritzClientTests(unittest.TestCase):
@@ -37,6 +39,11 @@ class MeritzClientTests(unittest.TestCase):
         values = dict(side="buy", symbol="SOXL", exchange_vendor_code="0066", quantity=3, price="45.12")
         values.update(overrides)
         return self.client.submit_reserved_order(**values)
+
+    def submit_direct(self, **overrides):
+        values = dict(side="buy", symbol="SOXL", exchange_vendor_code="0066", quantity=3, price="45.12")
+        values.update(overrides)
+        return self.client.submit_order(**values)
 
     def test_from_env_is_lazy_and_mac_must_be_explicit(self):
         env = {"MERITZ_APP_KEY": "fake-key", "MERITZ_APP_SECRET": "fake-secret", "MERITZ_MAC_ADDRESS": "ABCDEF123456"}
@@ -164,6 +171,167 @@ class MeritzClientTests(unittest.TestCase):
             "odqt": "3", "ovrs_stck_oder_prc": "45.12", "oder_rsev_cls_code": "1",
             "oder_rsev_hour_clcd": "0", "warn_cnfr_yn": "N",
         })
+
+    def test_direct_loc_buy_and_sell_use_close_condition_and_numeric_quantity(self):
+        for side in ("buy", "sell"):
+            with self.subTest(side=side):
+                self.client._access_token = None
+                self.prepare(reply(DIRECT_RECEIPT))
+                self.assertEqual(self.submit_direct(side=side), DIRECT_RECEIPT)
+                call = self.session.request.call_args
+                self.assertEqual(call.args, ("POST", BASE_URL + "/trading/v1/overseas/orders/" + side))
+                self.assertEqual(call.kwargs["json"], {
+                    "ovrs_stck_symb_iscd": "SOXL", "ovrs_exch_vndr_idno": "0066",
+                    "oder_cls_code": "32", "oder_cond_cls_code": "7", "odqt": 3,
+                    "ovrs_stck_oder_prc": "45.12", "warn_cnfr_yn": "N",
+                })
+
+    def test_direct_expiry_sell_uses_moc_and_zero_price(self):
+        self.prepare(reply(DIRECT_RECEIPT))
+        self.submit_direct(side="sell", order_type="MOC", price=0)
+        payload = self.session.request.call_args.kwargs["json"]
+        self.assertEqual(payload["oder_cls_code"], "34")
+        self.assertEqual(payload["oder_cond_cls_code"], "7")
+        self.assertEqual(payload["ovrs_stck_oder_prc"], "0")
+
+    def test_direct_invalid_orders_never_reach_network(self):
+        invalid_orders = (
+            {"quantity": 0}, {"quantity": -1}, {"quantity": "NaN"}, {"quantity": "0.5"},
+            {"quantity": "10000000000000000000"}, {"price": "Infinity"}, {"price": 0},
+            {"symbol": "soxl"}, {"side": "BUY"}, {"order_type": "LIMIT"},
+            {"exchange_vendor_code": "0000"}, {"order_type": "MOC", "price": 0},
+            {"order_type": "MOC", "side": "sell", "price": 5},
+        )
+        for overrides in invalid_orders:
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                self.submit_direct(**overrides)
+        self.session.request.assert_not_called()
+
+    def test_direct_and_reserved_success_codes_are_not_interchangeable(self):
+        for submit, receipt in ((self.submit_direct, RECEIPT), (self.submit, DIRECT_RECEIPT)):
+            with self.subTest(submit=submit):
+                self.client._access_token = None
+                self.session.reset_mock()
+                self.prepare(reply(receipt))
+                with self.assertRaises(MeritzAPIError):
+                    submit()
+                self.assertEqual(self.session.request.call_count, 2)
+
+    def test_direct_warning_is_not_acknowledged_or_retried(self):
+        for warning_code in ("1", "2", "3"):
+            with self.subTest(warning_code=warning_code):
+                self.client._access_token = None
+                self.session.reset_mock()
+                body = {"rsp_cd": "0001", "data": {"oder_no": 0, "warn_cls_code": warning_code}}
+                self.prepare(reply(body))
+                with self.assertRaises(MeritzWarning):
+                    self.submit_direct()
+                self.assertEqual(self.session.request.call_count, 2)
+                self.assertEqual(self.session.request.call_args.kwargs["json"]["warn_cnfr_yn"], "N")
+
+    def test_direct_incomplete_or_inconsistent_receipt_is_ambiguous(self):
+        cases = [
+            ({"rsp_cd": "0001", "data": {"oder_no": 42}}, 200),
+            ({"rsp_cd": "0001", "data": {"warn_cls_code": "0"}}, 200),
+            ({"rsp_cd": "0001", "data": []}, 200),
+            ({"data": DIRECT_RECEIPT["data"]}, 200),
+            (DIRECT_RECEIPT, 500),
+        ]
+        for number in (0, -1, "NaN", "Infinity", "0.5", None):
+            cases.append(({"rsp_cd": "0001", "data": {"oder_no": number, "warn_cls_code": "0"}}, 200))
+        for warning_code in (None, "", "9", {}, True):
+            cases.append(({"rsp_cd": "0001", "data": {"oder_no": 42, "warn_cls_code": warning_code}}, 200))
+        for body, status in cases:
+            with self.subTest(body=body, status=status):
+                self.client._access_token = None
+                self.prepare(reply(body, status))
+                with self.assertRaises(AmbiguousSubmission):
+                    self.submit_direct()
+
+    def test_reserved_cancellation_uses_original_date_and_string_number(self):
+        self.prepare(reply(CANCEL_RESERVED_RECEIPT))
+        self.assertEqual(self.client.cancel_reserved_order(reservation_date="20261012", reservation_no=23), CANCEL_RESERVED_RECEIPT)
+        call = self.session.request.call_args
+        self.assertEqual(call.args, ("POST", BASE_URL + "/trading/v1/overseas/reserved-orders/cancel"))
+        self.assertEqual(call.kwargs["json"], {"oder_rsev_mst_date": "20261012", "oder_rsev_mst_no": "23"})
+
+    def test_reserved_cancel_success_without_positive_processing_number_is_ambiguous(self):
+        for data in (None, {}, {"pros_srno": 0}, {"pros_srno": -1}, {"pros_srno": "NaN"}, {"pros_srno": 1.5}):
+            with self.subTest(data=data):
+                self.client._access_token = None
+                self.prepare(reply({"rsp_cd": "5620", "data": data}))
+                with self.assertRaises(AmbiguousSubmission):
+                    self.client.cancel_reserved_order(reservation_date="20261012", reservation_no=23)
+
+    def test_reserved_cancel_live_alternate_code_needs_positive_receipt_and_preserves_response(self):
+        body = {"rsp_cd": "0000", "rsp_msg": "normal processing", "data": {"pros_srno": 0}}
+        self.prepare(reply(body))
+        with self.assertRaises(AmbiguousSubmission) as error:
+            self.client.cancel_reserved_order(reservation_date="20261012", reservation_no=23)
+        self.assertIs(error.exception.response, body)
+        self.assertEqual(self.session.request.call_count, 2)
+
+    def test_reserved_cancel_alternate_success_code_accepts_valid_processing_receipt(self):
+        body = {"rsp_cd": "0000", "data": {"pros_srno": 24}}
+        self.prepare(reply(body))
+        self.assertEqual(self.client.cancel_reserved_order(reservation_date="20261012", reservation_no=23), body)
+
+    def test_unexpected_submission_success_code_is_ambiguous_instead_of_rejection(self):
+        for submit, data in ((self.submit_direct, DIRECT_RECEIPT["data"]), (self.submit, RECEIPT["data"])):
+            with self.subTest(submit=submit):
+                self.client._access_token = None
+                self.session.reset_mock()
+                body = {"rsp_cd": "0000", "data": data}
+                self.prepare(reply(body))
+                with self.assertRaises(AmbiguousSubmission) as error:
+                    submit()
+                self.assertIs(error.exception.response, body)
+                self.assertEqual(self.session.request.call_count, 2)
+
+    def test_direct_cancellation_uses_original_number_and_type_without_price(self):
+        for order_type, code in (("LOC", "32"), ("MOC", "34")):
+            with self.subTest(order_type=order_type):
+                self.client._access_token = None
+                self.prepare(reply(DIRECT_RECEIPT))
+                self.assertEqual(self.client.cancel_order(order_date="20261012", order_no="41", quantity=3, order_type=order_type), DIRECT_RECEIPT)
+                call = self.session.request.call_args
+                self.assertEqual(call.args, ("POST", BASE_URL + "/trading/v1/overseas/orders/cancel"))
+                self.assertEqual(call.kwargs["json"], {
+                    "oder_date": "20261012", "orgl_oder_no": 41,
+                    "oder_cls_code": code, "odqt": 3, "warn_cnfr_yn": "N",
+                })
+
+    def test_invalid_cancellations_do_not_reach_network(self):
+        invalid_calls = (
+            lambda: self.client.cancel_reserved_order(reservation_date="20260231", reservation_no=23),
+            lambda: self.client.cancel_reserved_order(reservation_date="20261012", reservation_no=0),
+            lambda: self.client.cancel_reserved_order(reservation_date="20261012", reservation_no="1.5"),
+            lambda: self.client.cancel_reserved_order(reservation_date="20261012", reservation_no="100000000000"),
+            lambda: self.client.cancel_order(order_date="20260231", order_no=42, quantity=1),
+            lambda: self.client.cancel_order(order_date="20261012", order_no=0, quantity=1),
+            lambda: self.client.cancel_order(order_date="20261012", order_no=42, quantity=0),
+            lambda: self.client.cancel_order(order_date="20261012", order_no=42, quantity=1, order_type="LIMIT"),
+        )
+        for cancel in invalid_calls:
+            with self.subTest(cancel=cancel), self.assertRaises(ValueError):
+                cancel()
+        self.session.request.assert_not_called()
+
+    def test_direct_and_cancel_timeout_is_ambiguous_without_retry(self):
+        submissions = (
+            self.submit_direct,
+            lambda: self.client.cancel_reserved_order(reservation_date="20261012", reservation_no=23),
+            lambda: self.client.cancel_order(order_date="20261012", order_no=42, quantity=1),
+        )
+        for submit in submissions:
+            with self.subTest(submit=submit):
+                self.client._access_token = None
+                self.session.reset_mock()
+                self.prepare(requests.Timeout("contains-secret"))
+                with self.assertRaises(AmbiguousSubmission) as error:
+                    submit()
+                self.assertNotIn("contains-secret", str(error.exception))
+                self.assertEqual(self.session.request.call_count, 2)
 
     def test_expiry_sell_uses_moc_with_zero_price(self):
         self.prepare(reply(RECEIPT))
