@@ -52,12 +52,18 @@ def write_phone_config(path: Path, origin: str, *, port: int = 8702) -> dict:
     if path.exists() or path.is_symlink():
         previous = _private_json(path)
         username, password = previous.get("username"), previous.get("password")
-        if not isinstance(username, str) or not username or not isinstance(password, str) or len(password) < 32:
+        allow_short_password = previous.get("allow_short_password", False)
+        minimum = 4 if allow_short_password is True else 32
+        if (type(allow_short_password) is not bool or not isinstance(username, str) or not username
+                or not isinstance(password, str) or len(password) < minimum):
             raise ValueError("Invalid existing phone credentials")
     else:
         username, password = "kmw", secrets.token_urlsafe(32)
+        allow_short_password = False
     config = {"public_origin": origin, "username": username, "password": password,
               "engine_port": 8701, "port": port}
+    if allow_short_password:
+        config["allow_short_password"] = True
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + "." + secrets.token_hex(8) + ".tmp")
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

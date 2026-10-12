@@ -49,6 +49,50 @@ def test_configuration_is_private_and_reuses_user_login(tmp_path):
     assert not list(path.parent.glob("*.tmp"))
 
 
+def test_reuses_user_requested_short_login_and_preserves_explicit_opt_in(tmp_path):
+    path = tmp_path / "phone_gateway.json"
+    previous = {"public_origin": ORIGIN, "username": "kmw", "password": "1234",
+                "allow_short_password": True}
+    path.write_text(json.dumps(previous))
+    path.chmod(0o600)
+    config = access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert config["password"] == "1234"
+    assert config["username"] == "kmw"
+    assert config["allow_short_password"] is True
+    assert config["public_origin"] == "https://second-test.trycloudflare.com"
+    assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+    assert json.loads(path.read_text()) == config
+    assert gateway.load_config(path) == config
+    assert not list(path.parent.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("opt_in", [None, False])
+def test_existing_short_login_without_explicit_opt_in_is_rejected_unchanged(tmp_path, opt_in):
+    path = tmp_path / "phone_gateway.json"
+    previous = {"public_origin": ORIGIN, "username": "kmw", "password": "1234"}
+    if opt_in is not None:
+        previous["allow_short_password"] = opt_in
+    original = json.dumps(previous)
+    path.write_text(original)
+    path.chmod(0o600)
+    with pytest.raises(ValueError):
+        access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert path.read_text() == original
+    assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("flag", [None, 0, 1, "true", "false", [], {}])
+def test_existing_config_short_password_flag_requires_a_boolean(tmp_path, flag):
+    path = tmp_path / "phone_gateway.json"
+    previous = {"username": "kmw", "password": "p" * 40, "allow_short_password": flag}
+    original = json.dumps(previous)
+    path.write_text(original)
+    path.chmod(0o600)
+    with pytest.raises(ValueError):
+        access.write_phone_config(path, ORIGIN)
+    assert path.read_text() == original
+
+
 @pytest.mark.parametrize("mode", [0o400, 0o640, 0o644])
 def test_existing_config_must_be_private_writable_regular_file(tmp_path, mode):
     path = tmp_path / "phone_gateway.json"

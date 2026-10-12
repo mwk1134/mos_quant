@@ -3,6 +3,7 @@ import base64
 import http.client
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -161,6 +162,36 @@ def test_credentials_must_be_explicit_and_long_enough(username, password):
         create_server(public_origin=ORIGIN, username=username, password=password, port=0)
 
 
+def test_requested_short_password_requires_explicit_opt_in():
+    with pytest.raises(ValueError):
+        create_server(public_origin=ORIGIN, username=USERNAME, password="1234", port=0)
+    with pytest.raises(ValueError):
+        create_server(public_origin=ORIGIN, username=USERNAME, password="1234",
+                      allow_short_password=False, port=0)
+    server = create_server(public_origin=ORIGIN, username=USERNAME, password="1234",
+                           allow_short_password=True, port=0)
+    try:
+        expected = gateway_module.hashlib.sha256((USERNAME + ":1234").encode()).digest()
+        assert server.auth_digest == expected
+        assert server.server_address[0] == "127.0.0.1"
+    finally:
+        server.server_close()
+
+
+@pytest.mark.parametrize("password", ["", "1", "123", "1234\n", "x" * 1025])
+def test_short_password_opt_in_still_rejects_empty_too_short_or_invalid_values(password):
+    with pytest.raises(ValueError):
+        create_server(public_origin=ORIGIN, username=USERNAME, password=password,
+                      allow_short_password=True, port=0)
+
+
+@pytest.mark.parametrize("flag", [None, 0, 1, "true", "false", [], {}])
+def test_short_password_opt_in_requires_a_boolean(flag):
+    with pytest.raises(ValueError):
+        create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD,
+                      allow_short_password=flag, port=0)
+
+
 @pytest.mark.parametrize("method,path", [("GET", "/"), ("GET", "/api/status"),
                                          ("POST", "/api/enable"), ("POST", "/api/configure")])
 def test_unauthenticated_requests_return_nonempty_401_without_upstream(phone, method, path):
@@ -178,6 +209,52 @@ def test_unauthenticated_requests_return_nonempty_401_without_upstream(phone, me
 def test_bad_authentication_never_contacts_engine(phone, value):
     code, _, _ = request(phone, headers={"Authorization": value})
     assert code == 401 and phone[2].status_calls == 0
+
+
+def test_repeated_wrong_passwords_lock_only_the_failed_client_until_window_expires(phone, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(gateway_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    wrong = "Basic " + base64.b64encode((USERNAME + ":wrong-password").encode()).decode()
+    failed_client = {"Authorization": wrong, "CF-Connecting-IP": "192.0.2.10"}
+    for _ in range(5):
+        assert request(phone, headers=failed_client)[0] == 401
+    code, headers, body = request(phone, headers=failed_client)
+    assert code == 429 and headers["Retry-After"] == "60"
+    assert "WWW-Authenticate" not in headers and json.loads(body)["ok"] is False
+    assert phone[2].status_calls == 0 and phone[2].calls == []
+    # Even valid credentials cannot enter an engine mutation through a bucket
+    # currently locked after failed login attempts.
+    code, _, _ = request(phone, "/api/enable", method="POST", body={"confirm_live": True},
+                         headers={"CF-Connecting-IP": "192.0.2.10"})
+    assert code == 429 and phone[2].calls == [] and not phone[2].enabled
+    assert request(phone, headers={"CF-Connecting-IP": "192.0.2.11"})[0] == 200
+    assert phone[2].status_calls == 1
+    clock[0] += 60
+    assert request(phone, headers=failed_client)[0] == 401
+    assert request(phone, headers={"CF-Connecting-IP": "192.0.2.10"})[0] == 200
+    assert phone[2].status_calls == 2 and phone[2].calls == []
+
+
+def test_initial_browser_login_challenges_do_not_consume_failed_password_limit(phone):
+    client = {"CF-Connecting-IP": "192.0.2.12"}
+    for _ in range(10):
+        code, headers, _ = request(phone, authenticate=False, headers=client)
+        assert code == 401 and "WWW-Authenticate" in headers
+    assert phone[2].status_calls == 0
+    assert request(phone, headers=client)[0] == 200
+    assert phone[2].status_calls == 1 and phone[2].calls == []
+
+
+def test_successful_login_resets_unused_failed_password_count(phone):
+    client = {"CF-Connecting-IP": "192.0.2.13"}
+    wrong = {**client, "Authorization": "Basic " + base64.b64encode(b"wrong:password").decode()}
+    for _ in range(3):
+        assert request(phone, headers=wrong)[0] == 401
+    assert request(phone, headers=client)[0] == 200
+    for _ in range(3):
+        assert request(phone, headers=wrong)[0] == 401
+    assert request(phone, headers=client)[0] == 200
+    assert phone[2].status_calls == 2 and phone[2].calls == []
 
 
 @pytest.mark.parametrize("method", ["GET", "POST"])
@@ -400,6 +477,24 @@ def test_config_rejects_symlinks_unknown_fields_and_weak_password(tmp_path):
     with pytest.raises(ValueError):
         load_config(path)
     config_file(tmp_path, password="short")
+    with pytest.raises(ValueError):
+        load_config(path)
+
+
+def test_config_accepts_requested_short_password_only_with_explicit_opt_in(tmp_path):
+    path = config_file(tmp_path, password="1234", allow_short_password=True)
+    values = load_config(path)
+    assert values["password"] == "1234"
+    assert values["allow_short_password"] is True
+    for updates in [{"password": "1234"}, {"password": "1234", "allow_short_password": False}]:
+        path = config_file(tmp_path, **updates)
+        with pytest.raises(ValueError):
+            load_config(path)
+
+
+@pytest.mark.parametrize("flag", [None, 0, 1, "true", "false", [], {}])
+def test_config_rejects_nonboolean_short_password_opt_in(tmp_path, flag):
+    path = config_file(tmp_path, allow_short_password=flag)
     with pytest.raises(ValueError):
         load_config(path)
 

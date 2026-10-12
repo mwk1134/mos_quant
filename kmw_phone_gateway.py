@@ -11,11 +11,14 @@ import base64
 import hashlib
 import hmac
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -54,13 +57,16 @@ def _public_address(public_origin: str, trusted_host: str | None) -> tuple[str, 
     return "https://" + host, host
 
 
-def _credentials_digest(username: str, password: str) -> bytes:
+def _credentials_digest(username: str, password: str, *, allow_short_password: bool = False) -> bytes:
+    if type(allow_short_password) is not bool:
+        raise ValueError("allow_short_password must be an explicit boolean")
     if (not isinstance(username, str) or not username.strip() or len(username) > 128
             or ":" in username or any(ord(c) < 32 or ord(c) == 127 for c in username)):
         raise ValueError("A nonempty username without colons or control characters is required")
-    if (not isinstance(password, str) or len(password) < 24 or len(password) > 1024
+    minimum = 4 if allow_short_password else 24
+    if (not isinstance(password, str) or len(password) < minimum or len(password) > 1024
             or any(ord(c) < 32 or ord(c) == 127 for c in password)):
-        raise ValueError("A password of at least 24 characters without control characters is required")
+        raise ValueError(f"A password of at least {minimum} characters without control characters is required")
     return hashlib.sha256((username + ":" + password).encode("utf-8")).digest()
 
 
@@ -75,11 +81,14 @@ class PhoneGatewayServer(ThreadingHTTPServer):
 
     def __init__(self, *, public_origin: str, username: str, password: str,
                  trusted_host: str | None = None, engine_port: int = 8701,
-                 host: str = "127.0.0.1", port: int = 8702):
+                 host: str = "127.0.0.1", port: int = 8702,
+                 allow_short_password: bool = False):
         if host != "127.0.0.1":
             raise ValueError("KMW phone gateway must bind to 127.0.0.1")
         self.public_origin, self.allowed_host = _public_address(public_origin, trusted_host)
-        self.auth_digest = _credentials_digest(username, password)
+        self.auth_digest = _credentials_digest(username, password, allow_short_password=allow_short_password)
+        self.auth_lock = threading.Lock()
+        self.auth_failures: dict[str, list[float]] = {}
         self.engine_port = _port(engine_port)
         self.engine_host = f"127.0.0.1:{self.engine_port}"
         self.engine_origin = "http://" + self.engine_host
@@ -110,6 +119,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Strict-Transport-Security", "max-age=31536000")
         self.send_header("X-KMW-Phone-Gateway", "1")
         self.send_header("Connection", "close")
+        if code == 429:
+            self.send_header("Retry-After", "60")
         if challenge:
             self.send_header("WWW-Authenticate", 'Basic realm="KMW engine", charset="UTF-8"')
         self.end_headers()
@@ -138,6 +149,31 @@ class _Handler(BaseHTTPRequestHandler):
                 except (ValueError, UnicodeEncodeError):
                     pass
         matches = hmac.compare_digest(hashlib.sha256(credential).digest(), self.server.auth_digest)
+        # The explicitly configured Cloudflare tunnel supplies the visitor IP;
+        # malformed/missing values share a bounded fallback bucket.
+        addresses = self.headers.get_all("CF-Connecting-IP", [])
+        try:
+            visitor = str(ipaddress.ip_address(addresses[0])) if len(addresses) == 1 else "shared"
+        except ValueError:
+            visitor = "shared"
+        now = time.monotonic()
+        with self.server.auth_lock:
+            if visitor not in self.server.auth_failures and len(self.server.auth_failures) >= 1024:
+                for key, failures in list(self.server.auth_failures.items()):
+                    if not failures or failures[-1] <= now - 60:
+                        del self.server.auth_failures[key]
+                if len(self.server.auth_failures) >= 1024:
+                    visitor = "overflow"
+            failures = [stamp for stamp in self.server.auth_failures.get(visitor, []) if stamp > now - 60]
+            limited = len(failures) >= 5
+            if not limited and well_formed and matches:
+                failures = []
+            elif not limited and values:
+                failures.append(now)
+            self.server.auth_failures[visitor] = failures
+        if limited:
+            self._error(429, "로그인 실패가 반복되어 잠시 제한했습니다. 60초 뒤 다시 시도하세요.")
+            return False
         if not (well_formed and matches):
             self._error(401, "관리 화면 로그인이 필요합니다.", challenge=True)
             return False
@@ -279,11 +315,11 @@ def load_config(path: str | Path) -> dict[str, Any]:
         if len(raw) > 65_536:
             raise ValueError("Gateway configuration is too large")
         values = json.loads(raw)
-        allowed = {"public_origin", "username", "password", "engine_port", "trusted_host", "port"}
+        allowed = {"public_origin", "username", "password", "engine_port", "trusted_host", "port", "allow_short_password"}
         if not isinstance(values, dict) or set(values) - allowed or not {"public_origin", "username", "password"} <= set(values):
             raise ValueError("Gateway configuration fields are invalid")
         _public_address(values["public_origin"], values.get("trusted_host"))
-        _credentials_digest(values["username"], values["password"])
+        _credentials_digest(values["username"], values["password"], allow_short_password=values.get("allow_short_password", False))
         _port(values.get("engine_port", 8701))
         _port(values.get("port", 8702))
         return values
