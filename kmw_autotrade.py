@@ -362,14 +362,25 @@ class OrderLedger:
         return [{"event_key": key, "text": text} for key, text in rows]
 
 
-def submit_plan(client, plan, ledger, account, exchange_code, notification_context=None, order_route="reserved"):
+def submit_plan(client, plan, ledger, account, exchange_code, notification_context=None, order_route="reserved", should_continue=None):
     validate_order_route(order_route)
     if notification_context is not None:
         notification_context["order_route"] = order_route
+    if should_continue is not None and not should_continue():
+        if notification_context is not None:
+            notification_context.update(failed_state="STOPPED", not_sent_count=len(plan["orders"]))
+        raise OrderBlocked("Submission stopped by user")
     ledger.unresolved(account)
     identities = ledger.claim(account, plan)
     results = []
     for index, (identity, order) in enumerate(zip(identities, plan["orders"])):
+        if should_continue is not None and not should_continue():
+            for pending in identities[index:]:
+                ledger.update(pending, "NOT_SENT")
+            if notification_context is not None:
+                notification_context.update(results=results, failed_order=order, failed_state="STOPPED",
+                                            not_sent_count=len(identities) - index)
+            raise OrderBlocked("Submission stopped by user")
         ledger.update(identity, "SENDING")
         try:
             parameters = dict(side=order["side"].lower(), symbol=order["ticker"],

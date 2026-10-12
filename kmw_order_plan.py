@@ -158,7 +158,7 @@ def build_kmw_plan(
 
     ``all_snapshots`` has the same shape as ``data/positions_snapshots.json``.
     ``now`` must carry a timezone; omitted means the current instant.  Plans
-    only run before 09:30 ET because this runner submits reservation orders.
+    only run before 09:30 ET because recommendations use completed daily bars.
     That also keeps early-close days outside any uncertain intraday cutoff.
     ``allow_stale_snapshot`` permits a preview using older factual holdings;
     the returned ``snapshot_fresh=False`` must prohibit broker submission.
@@ -183,7 +183,7 @@ def build_kmw_plan(
         plan["reason"] = "US market holiday or weekend"
         return plan
     if et_now.time().replace(tzinfo=None) >= time(9, 30):
-        plan["reason"] = "Reservation window closed; run before 09:30 America/New_York"
+        plan["reason"] = "Recommendation window closed; run before 09:30 America/New_York"
         return plan
     if not isinstance(all_snapshots, dict):
         raise ValueError("Snapshot document must be an object")
@@ -331,5 +331,5 @@ def build_kmw_plan(
                 "using available cash and the broker cent price"
             )
     if any(o["side"] == "BUY" for o in plan["orders"]) and any(o["side"] == "SELL" for o in plan["orders"]):
-        plan["warnings"].append("Same-day SOXL buy and sell reservations require broker self-trade validation")
+        plan["warnings"].append("같은 날 SOXL 매수·매도 주문은 서로 상충하지 않는지 사전 확인합니다.")
     return plan
