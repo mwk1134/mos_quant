@@ -75,3 +75,33 @@ python kmw_autotrade.py --env-file .env.meritz --submit --schedule
 - [메리츠 API JSON 정본](https://openapi.imeritz.com/api-spec/download/json)
 - [메리츠 미국 예약시간·LOC/MOC·상충주문 안내](https://home.imeritz.com/mobile/content/overseas/usa.html)
 - [공식 Python 예제와 운영계좌 안내](https://github.com/meritz-securities/open-api)
+
+## 텔레그램 주문 결과 알림
+
+`.env.meritz`에 두 값을 추가한다. 봇 토큰은 [BotFather](https://t.me/BotFather)에서 만든 봇의 토큰이고, 채팅 ID는 메시지를 받을 개인/그룹의 숫자 ID다. 그룹 ID의 앞자리 `-`를 포함한다. 알림을 받을 채팅에서 봇과 대화를 시작하거나 그룹에 봇을 추가한다. 토큰을 채팅이나 GitHub에 올리지 않는다.
+
+```dotenv
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+```sh
+# 브로커 호출이나 주문 없이 텔레그램 연결만 테스트
+python kmw_autotrade.py --env-file .env.meritz --test-notification
+
+# 기존 주문 실행 명령에 알림이 자동 적용된다.
+python kmw_autotrade.py --env-file .env.meritz --submit --side BUY --quantity-cap 1
+
+# 전송 실패/미설정으로 보류된 알림만 재전송. 주문은 재전송하지 않는다.
+python kmw_autotrade.py --env-file .env.meritz --retry-notifications
+```
+
+실제 `--submit` 실행이 끝나면 KMW·미국 주문일·한국시간 계산 시각·종목·매수/매도·수량·LOC 가격 또는 MOC·회차·예약번호를 보낸다. 일부 접수 후 실패, 통신 문제로 접수 여부가 불확실한 경우, 사전검증에서 전송이 중단된 경우도 구분해 알린다. 미리보기·계좌조회·`--status`는 자동 알림을 보내지 않는다.
+
+성공 알림은 **예약주문 접수 완료**이며 **체결 완료가 아니다**. 체결 여부는 기존 `--status`로 확인한다. 이 기능은 체결을 자동으로 감시하지 않는다.
+
+알림은 `.autotrade/orders.sqlite3`에 별도로 보관한다. 텔레그램 실패는 브로커 주문 상태를 바꾸거나 주문 재시도를 유발하지 않는다. 토큰/채팅 ID가 없거나 설정이 잘못되면 알림을 보류하고 로컬 로그에 표시한다. 설정 후 `--retry-notifications`로 보낼 수 있다. 한 번의 재전송은 최대 20건을 처리한다.
+
+통신 중단으로 알림 전송 여부까지 불확실하면 수동 재전송 시 같은 메시지가 두 번 보일 수 있다. 재시도해도 주문은 다시 넣지 않는다. 이미 확인된 성공 알림은 재전송하지 않는다. 전송 중 프로세스가 종료된 알림은 5분 후 재전송 대상으로 들어간다.
+
+API 전송은 [Telegram Bot API sendMessage](https://core.telegram.org/bots/api#sendmessage)를 사용한다. 봇 토큰과 앱키, 계좌 잔고, 원본 오류 응답은 알림에 포함하지 않는다.

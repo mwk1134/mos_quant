@@ -23,6 +23,7 @@ import requests
 
 from kmw_order_plan import build_kmw_plan
 from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
+from telegram_notify import TelegramNotificationError, TelegramNotifier, format_order_notification
 
 KST = ZoneInfo("Asia/Seoul")
 ET = ZoneInfo("America/New_York")
@@ -50,6 +51,7 @@ def load_env(path: Path):
     allowed = {
         "MERITZ_APP_KEY", "MERITZ_APP_SECRET", "MERITZ_MAC_ADDRESS",
         "MERITZ_ACCOUNT_PRESET", "MERITZ_SOXL_EXCHANGE_CODE", "MERITZ_SOXL_PRICE_TICK", "GITHUB_TOKEN",
+        "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     }
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -258,6 +260,9 @@ class OrderLedger:
             identity TEXT PRIMARY KEY, account TEXT NOT NULL, order_date TEXT NOT NULL,
             plan_hash TEXT NOT NULL, payload TEXT NOT NULL, state TEXT NOT NULL,
             response TEXT, updated_at TEXT NOT NULL)""")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS notifications (
+            event_key TEXT PRIMARY KEY, text TEXT NOT NULL, state TEXT NOT NULL,
+            message_id INTEGER, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
         self.db.commit()
 
     @staticmethod
@@ -302,8 +307,40 @@ class OrderLedger:
         return [{"order_date": d, "order": json.loads(p), "state": s,
                  "response": json.loads(r) if r else None, "updated_at": u} for d, p, s, r, u in rows]
 
+    def queue_notification(self, event_key, text):
+        stamp = datetime.now(KST).isoformat()
+        cursor = self.db.execute("INSERT OR IGNORE INTO notifications VALUES (?,?,?,?,?,?,?)",
+                                 (event_key, text, "PENDING", None, None, stamp, stamp))
+        self.db.commit()
+        return cursor.rowcount == 1
 
-def submit_plan(client, plan, ledger, account, exchange_code):
+    def claim_notification(self, event_key, retry=False):
+        stamp = datetime.now(KST).isoformat()
+        expired = (datetime.now(KST) - timedelta(minutes=5)).isoformat()
+        condition = "state='PENDING'"
+        parameters = [stamp, event_key]
+        if retry:
+            condition = "(state IN ('PENDING','FAILED','UNKNOWN') OR (state='SENDING' AND updated_at<?))"
+            parameters.append(expired)
+        cursor = self.db.execute(
+            f"UPDATE notifications SET state='SENDING',updated_at=? WHERE event_key=? AND {condition}", parameters)
+        self.db.commit()
+        return cursor.rowcount == 1
+
+    def update_notification(self, event_key, state, message_id=None, error=None):
+        self.db.execute("UPDATE notifications SET state=?,message_id=?,last_error=?,updated_at=? WHERE event_key=?",
+                        (state, message_id, error, datetime.now(KST).isoformat(), event_key))
+        self.db.commit()
+
+    def pending_notifications(self):
+        expired = (datetime.now(KST) - timedelta(minutes=5)).isoformat()
+        rows = self.db.execute("""SELECT event_key,text FROM notifications
+            WHERE state IN ('PENDING','FAILED','UNKNOWN') OR (state='SENDING' AND updated_at<?)
+            ORDER BY created_at LIMIT 20""", (expired,)).fetchall()
+        return [{"event_key": key, "text": text} for key, text in rows]
+
+
+def submit_plan(client, plan, ledger, account, exchange_code, notification_context=None):
     ledger.unresolved(account)
     identities = ledger.claim(account, plan)
     results = []
@@ -323,6 +360,9 @@ def submit_plan(client, plan, ledger, account, exchange_code):
             ledger.update(identity, state, body if isinstance(body, dict) else None)
             for pending in identities[index + 1:]:
                 ledger.update(pending, "NOT_SENT")
+            if notification_context is not None:
+                notification_context.update(results=results, failed_order=order,
+                                            failed_state=state, not_sent_count=len(identities) - index - 1)
             print(json.dumps({"accepted_before_error": results, "stopped_order": order,
                               "state": state, "broker_response": body if isinstance(body, dict) else None},
                              ensure_ascii=False, indent=2))
@@ -343,7 +383,69 @@ def account_id():
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-def run_once(args):
+def configured_notifier(required=False):
+    try:
+        notifier = TelegramNotifier.from_env()
+        if notifier is None and required:
+            raise TelegramNotificationError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in the environment file")
+        return notifier
+    except TelegramNotificationError:
+        if required:
+            raise
+        print("[Telegram] Configuration invalid; order-result notifications will remain pending", file=sys.stderr)
+        return None
+
+
+def deliver_notification(ledger, event_key, text, notifier, retry=False):
+    """Notification errors never propagate into the order submission path."""
+    try:
+        if notifier is None:
+            print("[Telegram] Not configured; notification saved for --retry-notifications", file=sys.stderr)
+            return False
+        if not ledger.claim_notification(event_key, retry=retry):
+            return False
+        try:
+            message_id = notifier.send(text)
+        except TelegramNotificationError as exc:
+            state = "UNKNOWN" if exc.delivery_unknown else "FAILED"
+            # Never store or print transport exception strings containing a bot URL/token.
+            ledger.update_notification(event_key, state, error="Telegram delivery was not confirmed")
+            print(f"[Telegram] Delivery {state}; retry notifications separately", file=sys.stderr)
+            return False
+        except Exception:
+            ledger.update_notification(event_key, "UNKNOWN", error="Telegram delivery was not confirmed")
+            print("[Telegram] Delivery UNKNOWN; retry notifications separately", file=sys.stderr)
+            return False
+        ledger.update_notification(event_key, "SENT", message_id=message_id)
+        print("[Telegram] Order-result notification sent", file=sys.stderr)
+        return True
+    except Exception:
+        print("[Telegram] Could not save delivery status; broker order states are unchanged", file=sys.stderr)
+        return False
+
+
+def notify_order_result(ledger, notifier, context, error=None):
+    try:
+        plan = context.get("plan") or {"preset": "KMW", "orders": [],
+                                      "order_date": datetime.now(ET).date().isoformat(),
+                                      "generated_at": datetime.now(KST).isoformat()}
+        results = context.get("results", [])
+        text = format_order_notification(plan, results, error=error,
+                                         failed_order=context.get("failed_order"),
+                                         failed_state=context.get("failed_state"),
+                                         not_sent_count=context.get("not_sent_count", 0))
+        account = hashlib.sha256(os.environ.get("MERITZ_APP_KEY", "unconfigured").encode()).hexdigest()
+        identities = sorted(OrderLedger.identity(account, plan, o) for o in plan["orders"])
+        outcome = "RESERVED" if error is None else context.get("failed_state", "BLOCKED")
+        event = [account, plan["order_date"], identities, outcome]
+        event_key = hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
+        if ledger.queue_notification(event_key, text):
+            deliver_notification(ledger, event_key, text, notifier)
+    except Exception:
+        print("[Telegram] Could not queue notification; broker order states are unchanged", file=sys.stderr)
+
+
+def _run_once(args, notification_context=None):
     now = datetime.now(KST)
     if args.status:
         account = account_id()
@@ -364,6 +466,8 @@ def run_once(args):
         generated = build_kmw_plan(snapshots, now=now, allow_stale_snapshot=args.allow_stale_preview)
     plan = cap_quantities(select_side(generated, args.side), args.quantity_cap)
     plan["snapshot_source"] = source
+    if notification_context is not None:
+        notification_context["plan"] = plan
     print_plan(plan)
     if plan.get("status") == "skipped":
         return
@@ -380,11 +484,51 @@ def run_once(args):
         checked = preflight(client, plan, datetime.now(KST), decimal(args.fee_buffer))
         print_plan({"preflight": checked})
         if args.submit and plan["orders"]:
-            result = submit_plan(client, plan, ledger, account, checked["exchange_code"])
+            result = submit_plan(client, plan, ledger, account, checked["exchange_code"],
+                                 notification_context=notification_context)
+            if notification_context is not None:
+                notification_context.update(results=result, completed=True)
             print_plan({"preset": "KMW", "state": "RESERVED", "orders": result,
                         "note": "Reservation accepted; fills must be checked separately with --status"})
     finally:
         ledger.db.close()
+
+
+def run_once(args):
+    if args.test_notification:
+        notifier = configured_notifier(required=True)
+        notifier.send("KMW 텔레그램 알림 연결 테스트\n이 메시지는 주문 접수나 체결을 의미하지 않습니다.")
+        print("Telegram test notification sent")
+        return
+    if args.retry_notifications:
+        notifier = configured_notifier(required=True)
+        ledger = OrderLedger(args.ledger)
+        try:
+            pending = ledger.pending_notifications()
+            sent = sum(deliver_notification(ledger, row["event_key"], row["text"], notifier, retry=True)
+                       for row in pending)
+            print_plan({"telegram_notifications": {"pending": len(pending), "sent": sent}})
+            if sent != len(pending):
+                raise TelegramNotificationError("Some notification deliveries were not confirmed; broker orders were not retried")
+        finally:
+            ledger.db.close()
+        return
+    if not args.submit:
+        return _run_once(args)
+    notifier = configured_notifier()
+    context = {}
+    notification_ledger = OrderLedger(args.ledger)
+    try:
+        _run_once(args, notification_context=context)
+        if context.get("completed"):
+            notify_order_result(notification_ledger, notifier, context)
+    except Exception as exc:
+        # A later stdout/file error cannot undo a confirmed broker reservation.
+        notify_order_result(notification_ledger, notifier, context,
+                            error=None if context.get("completed") else exc)
+        raise
+    finally:
+        notification_ledger.db.close()
 
 
 def next_run(now, at):
@@ -401,6 +545,8 @@ def main(argv=None):
     mode.add_argument("--submit", action="store_true", help="Actually submit this account's planned reservations")
     mode.add_argument("--check-account", action="store_true", help="Read broker account and validate without placing orders")
     mode.add_argument("--status", action="store_true", help="Read reservation/fill status; does not change webapp snapshots")
+    mode.add_argument("--test-notification", action="store_true", help="Send a Telegram test message without any broker calls")
+    mode.add_argument("--retry-notifications", action="store_true", help="Retry saved Telegram messages without submitting orders")
     parser.add_argument("--env-file", type=Path, help="Local literal KEY=value credential file")
     parser.add_argument("--snapshot-file", type=Path, help="Use this snapshot instead of fetching GitHub main")
     parser.add_argument("--quantity-cap", type=int, help="Cap EACH order's quantity for a small live test")
@@ -417,8 +563,8 @@ def main(argv=None):
         if args.env_file:
             load_env(args.env_file)
         if args.schedule:
-            if args.status:
-                raise OrderBlocked("--status is a one-time read command")
+            if args.status or args.test_notification or args.retry_notifications:
+                raise OrderBlocked("Status and Telegram-only commands are one-time commands")
             at = datetime.strptime(args.at, "%H:%M").time()
             while True:
                 target = next_run(datetime.now(KST), at)
