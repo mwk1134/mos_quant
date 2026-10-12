@@ -192,12 +192,8 @@ def validate_plan(plan, now, order_route="reserved"):
         if identity in seen:
             raise OrderBlocked("Duplicate position in plan")
         seen.add(identity)
-    buys = [o for o in plan["orders"] if o["side"] == "BUY"]
-    sells = [o for o in plan["orders"] if o["side"] == "SELL"]
-    for buy in buys:
-        for sell in sells:
-            if sell["order_type"] == "MOC" or decimal(buy["price"]) >= decimal(sell["price"]):
-                raise OrderBlocked("Opposing SOXL orders overlap; resolve the account's self-trade conflict first")
+    # Each recommendation is an independent close order. Preserve its terms;
+    # acceptance of opposing orders is determined by the brokerage response.
 
 
 def preflight(client, plan, now, fee_buffer, order_route="reserved"):

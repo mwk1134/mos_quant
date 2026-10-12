@@ -20,10 +20,11 @@ NOW = datetime(2026, 10, 12, 17, 1, tzinfo=ZoneInfo("Asia/Seoul"))
 
 def plan():
     quantities = [41, 89, 78, 102, 115]
+    prices = ["170.02", "170.01", "164.47", "147.51", "144.65"]
     positions = [{"round": i, "position_key": f"{i}_2026-10-0{i + 4}", "quantity": qty}
                  for i, qty in enumerate(quantities, 1)]
     sells = [{"ticker": "SOXL", "side": "SELL", "quantity": qty,
-              "price": f"{154 + i}.65", "order_type": "LOC", "round": i,
+              "price": prices[i - 1], "order_type": "LOC", "round": i,
               "position_key": positions[i - 1]["position_key"], "reason": "target_price"}
              for i, qty in enumerate(quantities, 1)]
     buy = {"ticker": "SOXL", "side": "BUY", "quantity": 142, "price": "144.79",
@@ -133,6 +134,15 @@ def test_six_recommendations_send_six_separate_direct_calls_unchanged(setup_back
     result = engine.execute(p, NOW, should_continue=lambda: True)
     assert result["state"] == "DIRECT_ACCEPTED"
     assert len(result["orders"]) == client.submit_order.call_count == 6
+    assert [(call.kwargs["side"], call.kwargs["quantity"], call.kwargs["price"], call.kwargs["order_type"])
+            for call in client.submit_order.call_args_list] == [
+                ("sell", 41, "170.02", "LOC"),
+                ("sell", 89, "170.01", "LOC"),
+                ("sell", 78, "164.47", "LOC"),
+                ("sell", 102, "147.51", "LOC"),
+                ("sell", 115, "144.65", "LOC"),
+                ("buy", 142, "144.79", "LOC"),
+            ]
     for call, order in zip(client.submit_order.call_args_list, p["orders"]):
         assert call.kwargs == {"side": order["side"].lower(), "symbol": "SOXL", "exchange_vendor_code": "0066",
                                "quantity": order["quantity"], "price": order["price"], "order_type": order["order_type"]}
@@ -148,40 +158,42 @@ def test_six_recommendations_send_six_separate_direct_calls_unchanged(setup_back
     assert "접수 완료" in text and "체결 완료 알림이 아닙니다" in text
 
 
-def test_preview_explains_current_crossing_prices_without_changing_six_rows(tmp_path, monkeypatch):
+def test_preview_keeps_all_webapp_rows_without_local_overlap_warning(tmp_path, monkeypatch):
     p = plan()
-    p["orders"][4]["price"] = "144.65"
     original_orders = deepcopy(p["orders"])
     monkeypatch.setattr(backend_module, "load_snapshots", Mock(return_value=({"KMW": {}}, "test")))
     monkeypatch.setattr(backend_module, "build_kmw_plan", Mock(return_value=p))
     result = KMWBackend(env_file=None, ledger_path=tmp_path / "unused.db").preview(NOW)
-    assert "매수 LOC $144.79와 5회차 매도 LOC $144.65가 교차해 전체 전송이 차단됩니다." in result["warnings"]
+    assert result["warnings"] == []
     assert result["orders"] == original_orders and len(result["orders"]) == 6
 
 
-def test_crossing_batch_blocks_all_orders_before_any_broker_client(setup_backend):
-    engine, client, notifier, create_client = setup_backend
+def test_moc_sell_and_loc_buy_are_separate_unchanged_broker_calls(setup_backend):
+    engine, client, notifier, _ = setup_backend
     p = plan()
-    p["orders"][4]["price"] = "144.65"
+    p["orders"][4].update(order_type="MOC", price="0", reason="holding_period_expired")
+    unchanged = deepcopy(p)
     result = engine.execute(p, NOW)
-    assert result["state"] == "BLOCKED" and result["error_code"] == "CROSSING_ORDERS"
-    assert "전체 주문" in result["error"]
-    create_client.assert_not_called()
-    client.submit_order.assert_not_called()
+    assert result["state"] == "DIRECT_ACCEPTED"
+    assert client.submit_order.call_count == len(result["orders"]) == 6
+    for call, order in zip(client.submit_order.call_args_list, p["orders"]):
+        assert call.kwargs == {"side": order["side"].lower(), "symbol": "SOXL", "exchange_vendor_code": "0066",
+                               "quantity": order["quantity"], "price": order["price"], "order_type": order["order_type"]}
+    assert client.submit_order.call_args_list[4].kwargs["order_type"] == "MOC"
+    assert client.submit_order.call_args_list[4].kwargs["price"] == "0"
+    assert client.submit_order.call_args_list[5].kwargs["side"] == "buy"
+    assert p == unchanged
+    assert [row["state"] for row in ledger_rows(engine)] == ["DIRECT_ACCEPTED"] * 6
+    client.submit_reserved_order.assert_not_called()
     notifier.send.assert_called_once()
-    assert "전송 중단" in notifier.send.call_args.args[0]
-    assert result["notification_pending"] == 0
-    assert ledger_rows(engine) == []
 
 
-def test_crossing_notification_config_failure_stays_blocked_without_broker(tmp_path, monkeypatch):
-    p = plan()
-    p["orders"][4]["price"] = "144.65"
-    create_client = Mock(side_effect=AssertionError("Broker initialized after local block"))
+def test_missing_local_configuration_stops_before_broker_initialization(tmp_path, monkeypatch):
+    create_client = Mock(side_effect=AssertionError("Broker initialized without local configuration"))
     monkeypatch.setattr(backend_module.MeritzClient, "from_env", create_client)
     engine = KMWBackend(env_file=tmp_path / "absent.env", ledger_path=tmp_path / "unused.db")
-    result = engine.execute(p, NOW)
-    assert result["state"] == "BLOCKED" and result["error_code"] == "CROSSING_ORDERS"
+    result = engine.execute(plan(), NOW)
+    assert result["state"] == "BLOCKED" and result["error_code"] == "LOCAL_CONFIGURATION"
     assert result["notification_status"] == "UNAVAILABLE"
     create_client.assert_not_called()
     assert not engine.ledger_path.exists()
@@ -266,6 +278,43 @@ def test_rejected_second_order_preserves_first_and_reports_safe_error(setup_back
     assert [row["state"] for row in ledger_rows(engine)] == ["DIRECT_ACCEPTED", "REJECTED"] + ["NOT_SENT"] * 4
     assert "private-url-and-secret" not in json.dumps(result) + notifier.send.call_args.args[0]
     assert client.submit_order.call_count == 2
+
+
+def test_broker_rejected_buy_after_five_sells_preserves_actual_receipts_and_stops(setup_backend):
+    engine, client, notifier, _ = setup_backend
+    p = plan()
+    unchanged = deepcopy(p)
+    private = "private-url-and-secret"
+    rejection = {"rsp_cd": "0760", "rsp_msg": private}
+    client.submit_order.side_effect = [receipt(1000 + i) for i in range(5)] + [
+        MeritzAPIError(private, response=rejection),
+    ]
+    result = engine.execute(p, NOW)
+    assert result["state"] == "REJECTED" and result["error_code"] == "BROKER_ERROR"
+    assert [row["order_no"] for row in result["orders"]] == [str(1000 + i) for i in range(5)]
+    assert [row["state"] for row in result["orders"]] == ["DIRECT_ACCEPTED"] * 5
+    assert result["failed_order"] == p["orders"][-1]
+    assert result["not_sent_count"] == 0
+    rows = ledger_rows(engine)
+    assert [row["state"] for row in rows] == ["DIRECT_ACCEPTED"] * 5 + ["REJECTED"]
+    assert rows[-1]["response"] == rejection
+    assert [row["order"] for row in rows] == p["orders"]
+    assert p == unchanged
+    assert client.submit_order.call_count == 6
+    assert client.submit_order.call_args_list[-1].kwargs == {
+        "side": "buy", "symbol": "SOXL", "exchange_vendor_code": "0066", "quantity": 142,
+        "price": "144.79", "order_type": "LOC",
+    }
+    client.submit_reserved_order.assert_not_called()
+    notifier.send.assert_called_once()
+    text = notifier.send.call_args.args[0]
+    assert all(f"주문번호 {1000 + i}" in text for i in range(5))
+    assert "실패: 매수 142주 LOC $144.79" in text and "일부 주문 접수 후 전송 중단" in text
+    assert private not in json.dumps(result) + text
+    retry = engine.execute(p, NOW)
+    assert retry["state"] == "BLOCKED" and retry["error_code"] == "ALREADY_ATTEMPTED"
+    assert client.submit_order.call_count == 6
+    client.submit_reserved_order.assert_not_called()
 
 
 def test_unexpected_error_after_sending_transition_is_unknown_and_not_retried(setup_backend, monkeypatch):

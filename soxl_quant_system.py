@@ -1,6 +1,7 @@
 import requests
 import json
 import time
+import math
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from threading import RLock
 from datetime import datetime, timedelta, timezone
@@ -37,6 +38,31 @@ _STOCK_DATA_CACHE_TTL_SECONDS = 300
 _STOCK_DATA_RETRY_COOLDOWN_SECONDS = 60
 _STOCK_DATA_STALE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 _ORDER_PRICE_QUANTUM = Decimal("0.01")
+
+
+def recommendation_buy_order_terms(price: float, budget: float) -> dict:
+    """Return the buy price and quantity displayed by the daily recommendation.
+
+    Preserve the UI's two-decimal float formatting and its whole-share quantity
+    calculated from the unrounded strategy price. Cash availability is checked
+    separately; it must not silently change the recommended order quantity.
+    """
+    try:
+        if isinstance(price, bool) or isinstance(budget, bool):
+            raise ValueError
+        raw_price = float(price)
+        amount = float(budget)
+        if not math.isfinite(raw_price) or raw_price <= 0:
+            raise ValueError
+        if not math.isfinite(amount) or amount < 0:
+            raise ValueError
+        price_text = f"{raw_price:.2f}"
+        if float(price_text) <= 0:
+            raise ValueError
+        quantity = int(amount / raw_price)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("Invalid recommendation buy price or budget") from exc
+    return {"price": price_text, "quantity": quantity}
 
 
 def normalize_order_price(price: float) -> float:

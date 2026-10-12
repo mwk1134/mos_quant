@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal, InvalidOperation, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from soxl_quant_system import SOXLQuantTrader
+from soxl_quant_system import SOXLQuantTrader, recommendation_buy_order_terms
 from us_market_calendar import is_us_equity_trading_day
 
 
@@ -309,27 +309,18 @@ def build_kmw_plan(
             "expiry_date": expiry.date().isoformat(),
         })
     if recommendation.get("can_buy"):
-        price_text = order_price(recommendation["buy_price"])
-        price = Decimal(price_text)
-        budget = _number(recommendation["next_buy_amount"], "buy budget")
-        available = _number(trader.available_cash, "available cash")
-        qty = int((min(budget, available) / price).to_integral_value(rounding=ROUND_FLOOR))
-        displayed_qty = int(float(budget) / float(recommendation["buy_price"]))
+        terms = recommendation_buy_order_terms(
+            recommendation["buy_price"], recommendation["next_buy_amount"]
+        )
+        qty = terms["quantity"]
         if qty > 0:
             buy_round = _quantity(recommendation["next_buy_round"], "buy round")
             plan["orders"].append({
                 "side": "BUY", "ticker": "SOXL", "quantity": qty,
-                "price": price_text, "order_type": "LOC", "round": buy_round,
+                "price": terms["price"], "order_type": "LOC", "round": buy_round,
                 "position_key": f"{buy_round}_{order_day.isoformat()}",
                 "reason": "daily_recommendation",
             })
         else:
-            plan["warnings"].append("Available cash and buy budget cannot buy one whole share")
-        if qty != displayed_qty:
-            plan["warnings"].append(
-                f"Buy quantity adjusted from displayed {displayed_qty} to {qty} "
-                "using available cash and the broker cent price"
-            )
-    if any(o["side"] == "BUY" for o in plan["orders"]) and any(o["side"] == "SELL" for o in plan["orders"]):
-        plan["warnings"].append("같은 날 SOXL 매수·매도 주문은 서로 상충하지 않는지 사전 확인합니다.")
+            plan["warnings"].append("Recommended buy budget cannot buy one whole share")
     return plan

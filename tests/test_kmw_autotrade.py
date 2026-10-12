@@ -99,8 +99,6 @@ def test_first_rejection_stops_remaining_orders(tmp_path):
 @pytest.mark.parametrize("mutation", [
     lambda p: p.update(preset="JEH"),
     lambda p: p.update(snapshot_date="2026-10-08"),
-    lambda p: p["orders"][1].update(price="110.00"),
-    lambda p: p["orders"][0].update(order_type="MOC", price="0"),
     lambda p: p["orders"][1].update(quantity=0),
     lambda p: p["orders"][1].update(quantity=True),
     lambda p: p["orders"][1].update(price="NaN"),
@@ -110,6 +108,16 @@ def test_unsafe_or_unintended_plans_are_blocked(mutation):
     mutation(p)
     with pytest.raises(OrderBlocked):
         validate_plan(p, NOW)
+
+
+@pytest.mark.parametrize("sell_kind,sell_price", [("LOC", "99.00"), ("MOC", "0")])
+@pytest.mark.parametrize("route", ["direct", "reserved"])
+def test_independent_close_orders_preserve_terms_without_comparing_prices(sell_kind, sell_price, route):
+    p = plan()
+    p["orders"][0].update(order_type=sell_kind, price=sell_price)
+    original = deepcopy(p)
+    validate_plan(p, NOW, order_route=route)
+    assert p == original
 
 
 def test_preflight_verifies_holdings_sellable_cash_and_units(monkeypatch):

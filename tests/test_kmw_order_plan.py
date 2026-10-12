@@ -62,8 +62,8 @@ class KMWOrderPlanTests(unittest.TestCase):
         plan = self.build(source)
         buy = next(row for row in plan["orders"] if row["side"] == "BUY")
         sell = next(row for row in plan["orders"] if row["side"] == "SELL")
-        self.assertEqual(buy["quantity"], 9)
-        self.assertEqual(buy["price"], "100.01")
+        self.assertEqual(buy["quantity"], 10)
+        self.assertEqual(buy["price"], "100.00")
         self.assertEqual(buy["position_key"], "2_2026-10-12")
         self.assertEqual(sell["quantity"], 41)
         self.assertEqual(sell["price"], "170.02")
@@ -81,13 +81,25 @@ class KMWOrderPlanTests(unittest.TestCase):
         self.assertEqual(sell["order_type"], "MOC")
         self.assertEqual(sell["price"], "0")
 
-    def test_buy_is_limited_by_cash_using_normalized_submission_price(self):
+    def test_buy_preserves_displayed_quantity_even_when_snapshot_cash_is_lower(self):
         source = snapshots()
         source["KMW"]["available_cash"] = 250
         plan = self.build(source)
         buy = next(row for row in plan["orders"] if row["side"] == "BUY")
-        self.assertEqual(buy["quantity"], 2)
-        self.assertTrue(any("displayed" in warning for warning in plan["warnings"]))
+        self.assertEqual(buy["quantity"], 10)
+        self.assertEqual(buy["price"], "100.00")
+        self.assertFalse(any("adjusted" in warning for warning in plan["warnings"]))
+
+    def test_buy_budget_below_one_share_does_not_create_a_zero_quantity_order(self):
+        def small_budget(trader, **kwargs):
+            result = recommendation(trader, **kwargs)
+            result["next_buy_amount"] = 50.0
+            return result
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", small_budget):
+            plan = build_kmw_plan(snapshots(), NOW)
+        self.assertFalse(any(order["side"] == "BUY" for order in plan["orders"]))
+        self.assertTrue(any("one whole share" in warning for warning in plan["warnings"]))
 
     def test_missing_stale_or_malformed_snapshot_is_not_simulated(self):
         malformed = []

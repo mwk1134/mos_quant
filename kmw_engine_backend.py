@@ -63,7 +63,6 @@ def _failure(exc: Exception) -> tuple[str, str]:
         message = str(exc)
         cases = (
             ("Submission stopped by user", "USER_STOPPED", "자동매매가 비활성화되어 남은 주문 전송을 중단했습니다."),
-            ("Opposing SOXL orders overlap", "CROSSING_ORDERS", "매수·매도 종가 주문 가격이 겹쳐 전체 주문을 중단했습니다. 웹앱의 KMW 추천 주문표를 확인해 주세요."),
             ("already attempted", "ALREADY_ATTEMPTED", "오늘 같은 계좌·회차의 주문을 이미 시도했습니다. 주문 내역을 확인하고 기존 기록을 유지해 주세요. 자동 재전송하지 않습니다."),
             ("unknown result", "UNRESOLVED_ORDER", "이전 주문의 접수 여부가 불확실합니다. 메리츠 주문 내역과 로컬 기록을 먼저 확인해 주세요."),
             ("broker holds", "HOLDINGS_MISMATCH", "웹앱 KMW 보유 수량과 메리츠 실제 보유 수량이 다릅니다. 실제 체결 내역으로 웹앱을 갱신해 주세요."),
@@ -181,29 +180,6 @@ def _public_result(row):
     return result
 
 
-def _crossing_warnings(plan):
-    """Explain the existing runner gate in the preview without changing terms."""
-    orders = plan.get("orders", [])
-    buys = [order for order in orders if isinstance(order, dict) and order.get("side") == "BUY"]
-    sells = [order for order in orders if isinstance(order, dict) and order.get("side") == "SELL"]
-    warnings = []
-    for buy in buys:
-        buy_price = _nonnegative_number(buy.get("price"))
-        for sell in sells:
-            number = _number(sell.get("round"))
-            label = f"{number}회차 " if number else ""
-            if sell.get("order_type") == "MOC":
-                message = f"매수 LOC와 {label}매도 MOC가 함께 있어 전체 전송이 차단됩니다. 웹앱 KMW 주문표를 확인해 주세요."
-            else:
-                sell_price = _nonnegative_number(sell.get("price"))
-                if buy_price is None or sell_price is None or buy_price < sell_price:
-                    continue
-                message = f"매수 LOC ${buy_price:.2f}와 {label}매도 LOC ${sell_price:.2f}가 교차해 전체 전송이 차단됩니다."
-            if message not in warnings:
-                warnings.append(message)
-    return warnings
-
-
 class KMWBackend:
     """Direct LOC/MOC adapter. All external work starts in explicit methods."""
 
@@ -228,10 +204,6 @@ class KMWBackend:
             plan = json.loads(json.dumps(plan, ensure_ascii=False, allow_nan=False))
             plan["order_route"] = "direct"
             plan["snapshot_source"] = source
-            warnings = plan.setdefault("warnings", [])
-            for message in _crossing_warnings(plan):
-                if message not in warnings:
-                    warnings.append(message)
             return plan
         except Exception as exc:
             code, message = _failure(exc)
@@ -283,8 +255,8 @@ class KMWBackend:
             if plan.get("preset") == "KMW" and plan.get("status") == "skipped":
                 return {"state": "SKIPPED", "orders": [], "preflight": None}
             context = {"plan": plan, "order_route": "direct", "results": []}
-            # Validate before even constructing a broker client. In particular,
-            # opposing orders never result in a partially transmitted batch.
+            # Validate the recommendation date and each row's format before
+            # constructing a client. Do not compare independent rows' prices.
             validate_plan(plan, current, order_route="direct")
             self._load_credentials()
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
