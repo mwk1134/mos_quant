@@ -39,6 +39,23 @@ def snapshots():
     }
 
 
+def two_preset_snapshots():
+    source = snapshots()
+    source["KMW2"] = {
+        "1_2026-10-06": {
+            "round": 1, "shares": 17, "buy_price": 80.0,
+            "amount": 1360.0, "mode": "AG",
+            "buy_threshold": 3.6, "sell_threshold": 3.5, "max_hold_days": 7,
+        },
+        "available_cash": 4321.0,
+        "as_of_date": "2026-10-09",
+        "compound_seed": 67612.0,
+        "compound_reference_seed": 67612.0,
+        "processed_seed_dates": [],
+    }
+    return source
+
+
 def recommendation(self, **kwargs):
     assert kwargs == {"skip_simulate": True, "preserve_snapshot_shares": True}
     return {
@@ -235,6 +252,172 @@ class KMWOrderPlanTests(unittest.TestCase):
         for value in ("NaN", "Infinity", "0", "0.001", "-1"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 order_price(value)
+
+
+class KMW2OrderPlanTests(unittest.TestCase):
+    def build(self, source=None, *, preset="KMW2", now=NOW, allow_stale_snapshot=False):
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", recommendation):
+            return build_kmw_plan(
+                source if source is not None else two_preset_snapshots(),
+                now, preset=preset, allow_stale_snapshot=allow_stale_snapshot,
+            )
+
+    def test_kmw2_uses_only_its_factual_holdings_and_cash(self):
+        source = two_preset_snapshots()
+        original = deepcopy(source)
+        plan = self.build(source)
+        self.assertEqual(plan["preset"], "KMW2")
+        self.assertEqual(plan["available_cash"], 4321)
+        self.assertEqual(plan["snapshot_positions"][0]["position_key"], "1_2026-10-06")
+        sell = next(order for order in plan["orders"] if order["side"] == "SELL")
+        self.assertEqual(sell["quantity"], 17)
+        self.assertEqual(sell["price"], "82.80")
+        buy = next(order for order in plan["orders"] if order["side"] == "BUY")
+        self.assertEqual(buy["quantity"], 10)
+        self.assertEqual(buy["price"], "100.00")
+        self.assertEqual(source, original)
+        json.dumps(plan, allow_nan=False)
+
+    def test_kmw2_defaults_match_app_and_never_inject_kmw_seed(self):
+        captured = {}
+
+        def capture(trader, **kwargs):
+            captured.update({
+                "capital": trader.initial_capital,
+                "start": trader.session_start_date,
+                "alignment": trader.ma_alignment_switch_enabled,
+                "seeds": deepcopy(trader.seed_increases),
+            })
+            return recommendation(trader, **kwargs)
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
+            build_kmw_plan(two_preset_snapshots(), NOW, preset="KMW2")
+        self.assertEqual(captured, {
+            "capital": 67612,
+            "start": "2026-04-29",
+            "alignment": False,
+            "seeds": [],
+        })
+
+    def test_saved_kmw2_configuration_and_position_edits_are_selected_exactly(self):
+        source = two_preset_snapshots()
+        source["_preset_configs"]["KMW"] = {
+            "initial_capital": 1234,
+            "ma_alignment_switch_enabled": False,
+            "seed_increases": [{"date": "2026-08-04", "amount": 999}],
+        }
+        source["_preset_configs"]["KMW2"] = {
+            "initial_capital": 70000,
+            "session_start_date": "2026-05-04",
+            "ma_alignment_switch_enabled": True,
+            "seed_increases": [{"date": "2026-08-03", "amount": 2000}],
+            "position_edits": {
+                "1_2026-10-06": {"shares": 19, "buy_price": 81},
+            },
+        }
+        source["KMW2"]["processed_seed_dates"].append("2026-08-03")
+        source["KMW2"]["ma_alignment_switch_enabled"] = False
+        original = deepcopy(source)
+        captured = {}
+
+        def capture(trader, **kwargs):
+            captured.update({
+                "capital": trader.initial_capital,
+                "start": trader.session_start_date,
+                "alignment": trader.ma_alignment_switch_enabled,
+                "seeds": deepcopy(trader.seed_increases),
+            })
+            return recommendation(trader, **kwargs)
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
+            plan = build_kmw_plan(source, NOW, preset="KMW2")
+        captured["seeds"] = [
+            {"date": seed["date"], "amount": seed["amount"]}
+            for seed in captured["seeds"]
+        ]
+        self.assertEqual(captured, {
+            "capital": 70000,
+            "start": "2026-05-04",
+            "alignment": True,
+            "seeds": [{"date": "2026-08-03", "amount": 2000.0}],
+        })
+        sell = next(order for order in plan["orders"] if order["side"] == "SELL")
+        self.assertEqual(sell["quantity"], 19)
+        self.assertEqual(sell["price"], "83.84")
+        self.assertEqual(source, original)
+
+    def test_snapshot_alignment_fallback_is_preset_specific(self):
+        source = two_preset_snapshots()
+        source["KMW"]["ma_alignment_switch_enabled"] = False
+        source["KMW2"]["ma_alignment_switch_enabled"] = True
+        captured = []
+
+        def capture(trader, **kwargs):
+            captured.append(trader.ma_alignment_switch_enabled)
+            return recommendation(trader, **kwargs)
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
+            build_kmw_plan(source, NOW, preset="KMW2")
+            build_kmw_plan(source, NOW)
+        self.assertEqual(captured, [True, False])
+
+    def test_missing_kmw2_and_unsupported_presets_never_fall_back_to_kmw(self):
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation") as get_rec:
+            for missing in (None, {}, [], "KMW"):
+                source = snapshots()
+                if missing is not None:
+                    source["KMW2"] = missing
+                with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "KMW2 portfolio"):
+                    build_kmw_plan(source, NOW, preset="KMW2")
+            for preset in ("JEH", "kmw2", "", None, []):
+                with self.subTest(preset=preset), self.assertRaisesRegex(ValueError, "Unsupported preset"):
+                    build_kmw_plan(two_preset_snapshots(), NOW, preset=preset)
+            get_rec.assert_not_called()
+
+    def test_only_selected_saved_config_is_validated(self):
+        source = two_preset_snapshots()
+        source["_preset_configs"]["KMW"] = "malformed other account config"
+        self.assertEqual(self.build(source)["preset"], "KMW2")
+        source["_preset_configs"]["KMW2"] = "malformed selected account config"
+        with self.assertRaisesRegex(ValueError, r"_preset_configs\.KMW2"):
+            self.build(source)
+
+    def test_kmw2_freshness_is_enforced_without_using_fresh_kmw_snapshot(self):
+        source = two_preset_snapshots()
+        source["KMW2"]["as_of_date"] = "2026-10-08"
+        with self.assertRaisesRegex(ValueError, "Stale KMW2 snapshot"):
+            self.build(source)
+        plan = self.build(source, allow_stale_snapshot=True)
+        self.assertFalse(plan["snapshot_fresh"])
+        self.assertEqual(plan["snapshot_positions"][0]["quantity"], 17)
+        self.assertTrue(any("Preview only" in warning for warning in plan["warnings"]))
+
+    def test_kmw2_recommendation_stays_visible_after_close(self):
+        source = two_preset_snapshots()
+        source["KMW2"]["as_of_date"] = "2026-10-12"
+        plan = self.build(source, now=datetime(2026, 10, 13, 8, 41, tzinfo=KST))
+        self.assertEqual(plan["basis_date"], "2026-10-12")
+        self.assertEqual(plan["order_date"], "2026-10-13")
+        self.assertEqual(plan["status"], "ready")
+
+    def test_legacy_kmw_default_still_enforces_its_mandatory_seed(self):
+        source = two_preset_snapshots()
+        source["_preset_configs"]["KMW"]["seed_increases"] = []
+        captured = []
+
+        def capture(trader, **kwargs):
+            captured.extend(deepcopy(trader.seed_increases))
+            return recommendation(trader, **kwargs)
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
+            plan = build_kmw_plan(source, NOW)
+        self.assertEqual(plan["preset"], "KMW")
+        self.assertEqual(plan["available_cash"], 10000)
+        self.assertEqual(plan["snapshot_positions"][0]["quantity"], 41)
+        self.assertEqual(
+            [{"date": seed["date"], "amount": seed["amount"]} for seed in captured],
+            [{"date": "2026-06-21", "amount": 11293.0}],
+        )
 
 
 class KMWEngineIntegrationTests(unittest.TestCase):

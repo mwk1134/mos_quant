@@ -15,6 +15,7 @@ import time
 from typing import Callable
 
 from kmw_autotrade import ET, KST, ROOT, next_run
+from kmw_order_plan import SUPPORTED_PRESETS
 
 
 class EngineStateError(ValueError):
@@ -34,17 +35,24 @@ def validate_time(at: str) -> str:
 def review_id(plan: dict | None) -> str | None:
     if not isinstance(plan, dict) or plan.get("status") != "ready":
         return None
-    fields = ("order_date", "basis_date", "snapshot_date", "snapshot_fresh",
+    fields = ("preset", "order_date", "basis_date", "snapshot_date", "snapshot_fresh",
               "orders", "snapshot_positions", "mode", "buy_budget")
     reviewed = {key: plan.get(key) for key in fields}
     return hashlib.sha256(json.dumps(reviewed, sort_keys=True).encode()).hexdigest()
 
 
 class KMWEngine:
-    def __init__(self, backend, state_file: Path | str = ROOT / ".autotrade/engine.json",
-                 clock: Callable[[], datetime] | None = None):
+    def __init__(self, backend, state_file: Path | str | None = None,
+                 clock: Callable[[], datetime] | None = None, *, preset: str = "KMW"):
+        if preset not in SUPPORTED_PRESETS:
+            raise EngineStateError("지원하지 않는 자동매매 프리셋입니다.")
+        backend_preset = getattr(backend, "preset", None)
+        if isinstance(backend_preset, str) and backend_preset != preset:
+            raise EngineStateError("엔진 프리셋과 계좌 연결 프리셋이 다릅니다.")
+        self.preset = preset
         self.backend = backend
-        self.state_file = Path(state_file)
+        self.state_file = Path(state_file) if state_file is not None else ROOT / ".autotrade" / (
+            "engine.json" if preset == "KMW" else "engine_kmw2.json")
         self.clock = clock or (lambda: datetime.now(KST))
         self._lock = threading.RLock()
         self._run_lock = threading.Lock()
@@ -59,13 +67,15 @@ class KMWEngine:
         self._next = self._next_target(self.clock())
 
     def _read_state(self):
-        default = {"version": 1, "enabled": False, "at": "17:01", "phase": "INACTIVE",
+        default = {"version": 1, "preset": self.preset, "enabled": False, "at": "17:01", "phase": "INACTIVE",
                    "plan": None, "last_run": None, "scheduled_days": [], "events": []}
         if not self.state_file.exists():
             return default
         try:
             saved = json.loads(self.state_file.read_text(encoding="utf-8"))
             if not isinstance(saved, dict) or saved.get("version") != 1:
+                raise ValueError()
+            if saved.get("preset", "KMW") != self.preset:
                 raise ValueError()
             if type(saved.get("enabled")) is not bool:
                 raise ValueError()
@@ -111,7 +121,14 @@ class KMWEngine:
     def status(self):
         with self._lock:
             state = deepcopy(self._state)
+            account_ready = True
+            if callable(getattr(type(self.backend), "validate_account_configuration", None)):
+                try:
+                    account_ready = self.backend.validate_account_configuration().get("ready") is True
+                except Exception:
+                    account_ready = False
             state.update(running=self._running, timezone="Asia/Seoul",
+                         preset=self.preset, account_ready=account_ready,
                          next_run=self._next.isoformat() if state["enabled"] else None,
                          review_id=review_id(state["plan"]), broker_status=deepcopy(self._broker_status))
             return state
@@ -125,6 +142,12 @@ class KMWEngine:
         return self.status()
 
     def enable(self):
+        if callable(getattr(type(self.backend), "validate_account_configuration", None)):
+            try:
+                if self.backend.validate_account_configuration().get("ready") is not True:
+                    raise ValueError()
+            except Exception:
+                raise EngineStateError(f"{self.preset} 계좌의 API 설정을 먼저 확인하세요.") from None
         with self._lock:
             if not self._state["enabled"]:
                 self._event("사용자가 실제 주문 자동 실행을 활성화했습니다.", enabled=True, phase="WAITING")
@@ -145,12 +168,18 @@ class KMWEngine:
         if not self._run_lock.acquire(blocking=False):
             raise EngineBusyError("주문 처리 중입니다. 완료 후 추천을 새로고침하세요.")
         try:
-            plan = self.backend.preview(now=self.clock())
+            plan = (self.backend.preview(now=self.clock(), allow_stale_snapshot=True)
+                    if self.preset == "KMW2" else self.backend.preview(now=self.clock()))
+            self._validate_plan_preset(plan)
             with self._lock:
-                self._event("최신 웹앱 KMW 저장 데이터로 추천을 새로 계산했습니다.", plan=plan)
+                self._event(f"최신 웹앱 {self.preset} 저장 데이터로 추천을 새로 계산했습니다.", plan=plan)
             return self.status()
         finally:
             self._run_lock.release()
+
+    def _validate_plan_preset(self, plan):
+        if not isinstance(plan, dict) or plan.get("preset", self.preset if plan.get("status") == "skipped" else None) != self.preset:
+            raise EngineStateError("추천 주문표의 프리셋이 선택한 계좌와 다릅니다.")
 
     def run_now(self, expected_review_id=None):
         if not isinstance(expected_review_id, str) or not expected_review_id:
@@ -179,13 +208,14 @@ class KMWEngine:
                 # A further explicit manual review remains possible; per-order
                 # brokerage receipts still prevent duplicate submissions.
                 attempted = sorted(set(attempted + [day]))[-90:]
-                self._event("KMW 추천과 실제 계좌의 주문 가능 상태를 확인합니다.",
+                self._event(f"{self.preset} 추천과 실제 계좌의 주문 가능 상태를 확인합니다.",
                             phase="RUNNING", scheduled_days=attempted)
                 self._running = True
                 generation = self._generation
             execute_started = False
             try:
                 plan = self.backend.preview(now=now)
+                self._validate_plan_preset(plan)
                 with self._lock:
                     self._commit(plan=plan)
                 if expected_review_id is not None and review_id(plan) != expected_review_id:
@@ -210,7 +240,7 @@ class KMWEngine:
                 if uncertain:
                     self._generation += 1
                 phase = "INACTIVE" if not enabled else "BLOCKED" if result.get("state") in {"BLOCKED", "ERROR"} else "WAITING"
-                summary = result.get("error") or f"KMW 실행 결과: {result.get('state', 'ERROR')}"
+                summary = result.get("error") or f"{self.preset} 실행 결과: {result.get('state', 'ERROR')}"
                 self._event(summary, last_run=result, phase=phase, enabled=enabled)
             return result
         finally:
@@ -283,18 +313,26 @@ class KMWEngine:
 def main(argv=None):
     parser = argparse.ArgumentParser(description="사용자가 활성화하는 KMW 자동매매 엔진")
     parser.add_argument("command", choices=("serve", "status", "preview"))
-    parser.add_argument("--env-file", type=Path, default=ROOT / ".env.meritz")
-    parser.add_argument("--state-file", type=Path, default=ROOT / ".autotrade/engine.json")
-    parser.add_argument("--ledger", type=Path, default=ROOT / ".autotrade/orders.sqlite3")
-    parser.add_argument("--port", type=int, default=8701)
+    parser.add_argument("--preset", choices=SUPPORTED_PRESETS, default="KMW")
+    parser.add_argument("--env-file", type=Path)
+    parser.add_argument("--state-file", type=Path)
+    parser.add_argument("--ledger", type=Path)
+    parser.add_argument("--port", type=int)
     args = parser.parse_args(argv)
+    args.port = args.port if args.port is not None else (8701 if args.preset == "KMW" else 8703)
     from kmw_engine_backend import KMWBackend
-    backend = KMWBackend(env_file=args.env_file, ledger_path=args.ledger)
+    backend_kwargs = {"preset": args.preset}
+    if args.env_file is not None:
+        backend_kwargs["env_file"] = args.env_file
+    if args.ledger is not None:
+        backend_kwargs["ledger_path"] = args.ledger
+    backend = KMWBackend(**backend_kwargs)
     if args.command == "preview":
         # CLI preview must not overwrite a running service's activation journal.
         print(json.dumps(backend.preview(), ensure_ascii=False, indent=2))
         return 0
-    engine = KMWEngine(backend, args.state_file)
+    engine = KMWEngine(backend, args.state_file, preset=args.preset)
+    args.state_file = engine.state_file
     if args.command == "status":
         print(json.dumps(engine.status(), ensure_ascii=False, indent=2))
         return 0
@@ -309,7 +347,7 @@ def main(argv=None):
             raise EngineStateError("같은 설정의 엔진이 이미 실행 중입니다.") from None
         server = create_server(engine, host="127.0.0.1", port=args.port)
         engine.start_worker()
-        print(f"KMW 관리 화면: http://127.0.0.1:{server.server_address[1]} · "
+        print(f"{args.preset} 관리 화면: http://127.0.0.1:{server.server_address[1]} · "
               f"{'활성' if engine.status()['enabled'] else '비활성'}", flush=True)
         try:
             server.serve_forever(poll_interval=0.5)

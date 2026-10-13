@@ -157,7 +157,9 @@ def test_cli_passes_selected_route_to_preflight_and_submit(tmp_path, route_arg, 
          patch("kmw_autotrade.account_id", return_value="account"), \
          patch("kmw_autotrade.MeritzClient.from_env", return_value=client), \
          patch("kmw_autotrade.preflight", return_value={"exchange_code": "0066"}) as check, \
-         patch("kmw_autotrade.configured_notifier", return_value=None):
+         patch("kmw_autotrade.configured_notifier", return_value=None), \
+         patch("kmw_autotrade.datetime", wraps=datetime) as frozen_clock:
+        frozen_clock.now.side_effect = lambda tz=None: NOW.astimezone(tz) if tz else NOW
         assert main(["--submit", "--ledger", str(tmp_path / "orders.db"), *route_arg]) == 0
     assert check.call_args.kwargs["order_route"] == expected
     assert client.submit_order.call_count == (1 if expected == "direct" else 0)

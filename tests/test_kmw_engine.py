@@ -124,6 +124,84 @@ def test_generation_time_only_does_not_change_review_id():
     assert review_id(a) == review_id(b)
 
 
+def test_review_is_scoped_to_the_selected_preset():
+    second = deepcopy(plan())
+    second["preset"] = "KMW2"
+    assert review_id(second) != review_id(plan())
+
+
+class SeparateAccountBackend:
+    def __init__(self, preset, ready=True):
+        self.preset = preset
+        self.ready = ready
+        displayed = deepcopy(plan())
+        displayed["preset"] = preset
+        self.preview = Mock(return_value=displayed)
+        self.execute = Mock(return_value={"state": "DIRECT_ACCEPTED", "orders": []})
+        self.poll_status = Mock(return_value={"orders": []})
+
+    def validate_account_configuration(self):
+        return {"ready": self.ready, "preset": self.preset}
+
+
+def test_second_account_activation_and_schedule_do_not_change_first_account(tmp_path):
+    first = KMWEngine(SeparateAccountBackend("KMW"), tmp_path / "first.json", clock=lambda: NOW)
+    second_backend = SeparateAccountBackend("KMW2")
+    second = KMWEngine(second_backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    second.configure("18:07")
+    second.enable()
+    assert first.status()["preset"] == "KMW" and first.status()["enabled"] is False
+    assert first.status()["at"] == "17:01"
+    assert second.status()["preset"] == "KMW2" and second.status()["enabled"] is True
+    assert second.status()["at"] == "18:07"
+    assert json.loads(second.state_file.read_text())["preset"] == "KMW2"
+    second_backend.execute.assert_not_called()
+
+
+def test_second_account_cannot_restore_first_accounts_activation_file(tmp_path):
+    first = KMWEngine(SeparateAccountBackend("KMW"), tmp_path / "shared.json", clock=lambda: NOW)
+    first.enable()
+    with pytest.raises(EngineStateError, match="설정 파일"):
+        KMWEngine(SeparateAccountBackend("KMW2"), first.state_file, clock=lambda: NOW, preset="KMW2")
+
+
+def test_unconfigured_account_cannot_be_activated(tmp_path):
+    second = KMWEngine(SeparateAccountBackend("KMW2", ready=False), tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    assert second.status()["account_ready"] is False
+    with pytest.raises(EngineStateError, match="KMW2 계좌"):
+        second.enable()
+    assert second.status()["enabled"] is False
+    second.backend.execute.assert_not_called()
+
+
+def test_second_account_preview_rejects_first_accounts_recommendation(tmp_path):
+    backend = SeparateAccountBackend("KMW2")
+    backend.preview.return_value = plan()
+    second = KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    with pytest.raises(EngineStateError, match="프리셋"):
+        second.preview()
+    assert second.status()["plan"] is None
+    backend.execute.assert_not_called()
+
+
+def test_second_account_can_display_marked_stale_preview_without_activation(tmp_path):
+    backend = SeparateAccountBackend("KMW2")
+    backend.preview.return_value["snapshot_fresh"] = False
+    second = KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    state = second.preview()
+    backend.preview.assert_called_once_with(now=NOW, allow_stale_snapshot=True)
+    assert state["plan"]["snapshot_fresh"] is False and state["enabled"] is False
+    backend.execute.assert_not_called()
+
+
+def test_mismatched_backend_preset_is_rejected_before_any_action(tmp_path):
+    backend = SeparateAccountBackend("KMW")
+    with pytest.raises(EngineStateError, match="계좌 연결"):
+        KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    backend.preview.assert_not_called()
+    backend.execute.assert_not_called()
+
+
 def test_blocked_session_is_not_automatically_retried(engine):
     engine.backend.execute.return_value = {"state": "BLOCKED", "error": "가격 교차", "orders": []}
     engine.enable()

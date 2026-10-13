@@ -153,6 +153,11 @@ class TelegramNotifierTests(unittest.TestCase):
 
 
 class OrderNotificationFormattingTests(unittest.TestCase):
+    def test_kmw2_notification_is_labeled_with_the_second_account_preset(self):
+        text = format_order_notification({**PLAN, "preset": "KMW2"}, [RESULT])
+        self.assertTrue(text.startswith("KMW2 자동매매 · SOXL\n"))
+        self.assertIn("예약번호 23", text)
+
     def test_success_distinguishes_reservation_from_fill(self):
         text = format_order_notification(PLAN, [RESULT])
         for value in ("KMW", "SOXL", "예약주문 접수 완료", "미국 주문일: 2026-10-12", "KST", "2026-10-12 17:01:00", "매수 1주 LOC $144.79", "3회차", "예약번호 23", "체결 완료 알림이 아닙니다"):

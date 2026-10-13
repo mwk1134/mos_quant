@@ -76,6 +76,29 @@ def phone():
             thread.join(timeout=2)
 
 
+@pytest.fixture
+def phone_pair():
+    engines = [FakeEngine(), FakeEngine()]
+    engines[1].at = "18:02"
+    dashboards = [create_dashboard(engine, port=0) for engine in engines]
+    gateway = create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD,
+                            engine_port=dashboards[0].server_port,
+                            kmw2_engine_port=dashboards[1].server_port, port=0)
+    servers = [*dashboards, gateway]
+    threads = [threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+               for s in servers]
+    for thread in threads:
+        thread.start()
+    try:
+        yield [(gateway, dashboard, engine) for dashboard, engine in zip(dashboards, engines)]
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
 def request(phone, path="/api/status", *, method="GET", body=None, headers=None, authenticate=True):
     gateway, dashboard, _ = phone
     values = {"Host": HOST, "X-Forwarded-Proto": "https"}
@@ -504,3 +527,159 @@ def test_cli_never_starts_without_serve(tmp_path):
     with pytest.raises(SystemExit) as result:
         gateway_module.main(["--config", str(path)])
     assert result.value.code == 2
+
+
+def test_kmw2_constructor_and_configuration_are_inert_and_require_separate_ports(tmp_path):
+    server = create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD,
+                           engine_port=8701, kmw2_engine_port=8703, port=0)
+    try:
+        assert server.kmw2_engine_port == 8703
+        assert server.engine_port == 8701
+    finally:
+        server.server_close()
+    assert load_config(config_file(tmp_path, kmw2_engine_port=8703))["kmw2_engine_port"] == 8703
+    assert load_config(config_file(tmp_path, kmw2_engine_port=None))["kmw2_engine_port"] is None
+    with pytest.raises(ValueError, match="separate"):
+        create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD,
+                      kmw2_engine_port=8701, port=0)
+    with pytest.raises(ValueError, match="separate"):
+        load_config(config_file(tmp_path, kmw2_engine_port=8701))
+
+
+@pytest.mark.parametrize("port", [True, False, 0, -1, 65536, "8703", 8703.0, []])
+def test_kmw2_target_port_cannot_come_from_invalid_configuration(tmp_path, port):
+    with pytest.raises(ValueError):
+        create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD,
+                      kmw2_engine_port=port, port=0)
+    with pytest.raises(ValueError):
+        load_config(config_file(tmp_path, kmw2_engine_port=port))
+
+
+@pytest.mark.parametrize("path", ["/kmw2/", "/kmw2/api/status", "/kmw2/?kmw_api=status"])
+def test_unconfigured_kmw2_routes_never_fall_back_to_kmw(phone, path):
+    assert request(phone, path)[0] == 404
+    assert phone[2].status_calls == 0 and phone[2].calls == []
+    assert request(phone, "/kmw2/api/enable", method="POST", body={"confirm_live": True})[0] == 404
+    assert phone[2].status_calls == 0 and phone[2].calls == []
+
+
+def test_kmw_and_kmw2_ui_and_status_use_independent_targets_and_csrf_tokens(phone_pair):
+    first, second = phone_pair
+    assert first[1].csrf_token != second[1].csrf_token
+    for phone, prefix, expected_time in [(first, "", "17:01"), (second, "/kmw2", "18:02")]:
+        code, _, html = request(phone, prefix + "/")
+        assert code == 200 and phone[1].csrf_token.encode() in html
+        other_token = second[1].csrf_token if phone is first else first[1].csrf_token
+        assert other_token.encode() not in html
+        for path in [prefix + "/api/status", prefix + "/?kmw_api=status"]:
+            code, _, body = request(phone, path)
+            assert code == 200 and json.loads(body)["at"] == expected_time
+    assert first[2].status_calls == second[2].status_calls == 2
+    assert first[2].calls == second[2].calls == []
+
+
+@pytest.mark.parametrize("alias", [False, True])
+@pytest.mark.parametrize("action,body,expected_call", [
+    ("configure", {"at": "19:15"}, ("configure", "19:15")),
+    ("preview", {}, "preview"),
+    ("enable", {"confirm_live": True}, "enable"),
+    ("disable", {}, "disable"),
+    ("run", {"confirm_live": True, "review_id": "kmw2-reviewed-plan"}, ("run", "kmw2-reviewed-plan")),
+])
+def test_kmw2_mutations_forward_only_to_its_fake_engine(phone_pair, alias, action, body, expected_call):
+    first, second = phone_pair
+    path = "/kmw2/?kmw_api=" + action if alias else "/kmw2/api/" + action
+    code, _, response = request(second, path, method="POST", body=body)
+    assert code == 200 and json.loads(response)["ok"] is True
+    assert second[2].calls == [expected_call]
+    assert first[2].calls == [] and first[2].status_calls == 0 and first[2].enabled is False
+
+
+def test_kmw2_never_uses_other_engine_csrf_or_supplies_live_acknowledgement(phone_pair):
+    first, second = phone_pair
+    assert request(second, "/kmw2/api/enable", method="POST", body={"confirm_live": True},
+                   headers={"X-CSRF-Token": first[1].csrf_token})[0] == 403
+    assert request(first, "/api/enable", method="POST", body={"confirm_live": True},
+                   headers={"X-CSRF-Token": second[1].csrf_token})[0] == 403
+    for body in [{}, {"confirm_live": False}, {"confirm_live": "true"}]:
+        assert request(second, "/kmw2/api/enable", method="POST", body=body)[0] == 400
+    assert first[2].calls == second[2].calls == []
+    assert first[2].enabled is second[2].enabled is False
+
+
+@pytest.mark.parametrize("headers,authenticate,expected", [
+    ({}, False, 401), ({"X-Forwarded-Proto": "http"}, True, 403),
+    ({"Host": "attacker.example"}, True, 403), ({"Origin": "https://attacker.example"}, True, 403),
+])
+def test_kmw2_keeps_authentication_https_host_and_origin_requirements(phone_pair, headers, authenticate, expected):
+    first, second = phone_pair
+    assert request(second, "/kmw2/api/enable", method="POST", body={"confirm_live": True},
+                   headers=headers, authenticate=authenticate)[0] == expected
+    assert first[2].calls == second[2].calls == []
+
+
+@pytest.mark.parametrize("action", ["preview", "configure", "enable", "disable", "run"])
+def test_kmw2_get_routes_cannot_mutate_an_engine(phone_pair, action):
+    first, second = phone_pair
+    for path in ["/kmw2/api/" + action, "/kmw2/?kmw_api=" + action]:
+        assert request(second, path)[0] == 404
+    assert first[2].calls == second[2].calls == []
+    assert first[2].status_calls == second[2].status_calls == 0
+
+
+@pytest.mark.parametrize("path", [
+    "/kmw2", "/KMW2/", "/kmw3/api/status", "/kmw2//api/status", "/kmw2/../api/status",
+    "/kmw2/%2e%2e/api/status", "/%6bmw2/api/status", "/kmw2%2fapi/status", "/kmw2/%2fapi/status",
+    "/kmw2/api/status?kmw_api=status", "/kmw2/?kmw_api=status&kmw_api=enable",
+    "/kmw2/?kmw_api=status&port=8701", "/kmw2/?kmw_api=unknown", "/kmw2/?kmw_api=status&",
+    "/kmw2/kmw2/api/status", "/kmw2/?preset=KMW&kmw_api=status",
+])
+def test_kmw2_routing_rejects_unknown_prefixes_traversal_and_extra_query_fields(phone_pair, path):
+    first, second = phone_pair
+    assert request(second, path)[0] == 404
+    assert first[2].status_calls == second[2].status_calls == 0
+    assert first[2].calls == second[2].calls == []
+
+
+def test_kmw2_forwarding_fixes_host_origin_and_does_not_forward_authentication(phone_pair, monkeypatch):
+    first, second = phone_pair
+    original = http.client.HTTPConnection.request
+    forwarded = []
+
+    def record(self, method, url, body=None, headers=None, **kwargs):
+        if self.port in {first[1].server_port, second[1].server_port}:
+            forwarded.append((self.host, self.port, method, url, headers))
+        return original(self, method, url, body=body, headers=headers or {}, **kwargs)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "request", record)
+    assert request(second, "/kmw2/api/configure", method="POST", body={"at": "19:15"},
+                   headers={"X-Forwarded-Host": "attacker.example"})[0] == 200
+    assert len(forwarded) == 1
+    host, port, method, path, headers = forwarded[0]
+    assert host == "127.0.0.1" and port == second[1].server_port
+    assert method == "POST" and path == "/api/configure"
+    assert headers["Host"] == second[1].allowed_host and headers["Origin"] == second[1].origin
+    assert headers["X-CSRF-Token"] == second[1].csrf_token
+    assert "Authorization" not in headers and "X-Forwarded-Host" not in headers
+    assert "X-Forwarded-Proto" not in headers
+    assert first[2].calls == [] and first[2].status_calls == 0
+
+
+def test_kmw2_unavailable_engine_is_not_retried_or_routed_to_kmw(phone_pair, monkeypatch):
+    first, second = phone_pair
+    original = http.client.HTTPConnection.request
+    forwarded = []
+
+    def fail_second(self, method, url, body=None, headers=None, **kwargs):
+        if self.port == second[1].server_port:
+            forwarded.append((self.host, self.port))
+            raise OSError("private-transport-detail")
+        return original(self, method, url, body=body, headers=headers or {}, **kwargs)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "request", fail_second)
+    code, _, body = request(second, "/kmw2/api/status")
+    assert code == 502 and json.loads(body)["ok"] is False
+    assert b"private-transport-detail" not in body
+    assert forwarded == [("127.0.0.1", second[1].server_port)]
+    assert first[2].status_calls == second[2].status_calls == 0
+    assert first[2].calls == second[2].calls == []

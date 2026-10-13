@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KMW-only Meritz order runner. Default execution only prints a plan."""
+"""Account-isolated KMW/KMW2 Meritz runner; default execution prints a plan."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import sqlite3
 import sys
@@ -31,10 +32,26 @@ ET = ZoneInfo("America/New_York")
 ROOT = Path(__file__).resolve().parent
 SNAPSHOT_REPO = "mwk1134/mos_quant"
 SNAPSHOT_PATH = "data/positions_snapshots.json"
+SUPPORTED_PRESETS = ("KMW", "KMW2")
 
 
 class OrderBlocked(ValueError):
     pass
+
+
+def validate_preset(preset):
+    if not isinstance(preset, str) or preset not in SUPPORTED_PRESETS:
+        raise OrderBlocked("Only KMW and KMW2 account presets are supported")
+    return preset
+
+
+def default_env_file(preset="KMW"):
+    return ROOT / (".env.meritz" if validate_preset(preset) == "KMW" else ".env.meritz.kmw2")
+
+
+def default_ledger_path(preset="KMW"):
+    name = "orders.sqlite3" if validate_preset(preset) == "KMW" else "orders_kmw2.sqlite3"
+    return ROOT / ".autotrade" / name
 
 
 def decimal(value, name="number"):
@@ -47,14 +64,15 @@ def decimal(value, name="number"):
     return result
 
 
-def load_env(path: Path):
-    """Read literal KEY=value entries; never execute shell or expand substitutions."""
+def read_env(path: Path):
+    """Parse literal credentials without modifying another account's environment."""
     allowed = {
         "MERITZ_APP_KEY", "MERITZ_APP_SECRET", "MERITZ_MAC_ADDRESS",
         "MERITZ_ACCOUNT_PRESET", "MERITZ_SOXL_EXCHANGE_CODE", "MERITZ_SOXL_PRICE_TICK", "GITHUB_TOKEN",
         "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     }
-    for line in path.read_text(encoding="utf-8").splitlines():
+    result = {}
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         key, separator, raw = line.partition("=")
@@ -64,15 +82,25 @@ def load_env(path: Path):
         values = shlex.split(raw, comments=True)
         if len(values) > 1:
             raise OrderBlocked(f"Quote the value for {key}")
-        os.environ[key] = values[0] if values else ""
+        if key in result:
+            raise OrderBlocked("Duplicate entry in environment file")
+        result[key] = values[0] if values else ""
+    return result
 
 
-def load_snapshots(path: Path | None = None):
+def load_env(path: Path):
+    """Legacy single-account loader; new backends use an isolated mapping."""
+    os.environ.update(read_env(path))
+
+
+def load_snapshots(path: Path | None = None, *, preset="KMW", env=None):
+    preset = validate_preset(preset)
     if path is not None:
         data = json.loads(path.read_text(encoding="utf-8"))
         source = str(path.resolve())
     else:
-        token = os.environ.get("GITHUB_TOKEN", "")
+        source_env = os.environ if env is None else env
+        token = source_env.get("GITHUB_TOKEN", "")
         if token:
             url = f"https://api.github.com/repos/{SNAPSHOT_REPO}/contents/{SNAPSHOT_PATH}"
             response = requests.get(url, headers={"Authorization": f"Bearer {token}",
@@ -86,8 +114,8 @@ def load_snapshots(path: Path | None = None):
             response.raise_for_status()
             data = response.json()
         source = f"github:{SNAPSHOT_REPO}/main/{SNAPSHOT_PATH}"
-    if not isinstance(data, dict) or not isinstance(data.get("KMW"), dict):
-        raise OrderBlocked("KMW snapshot is missing")
+    if not isinstance(data, dict) or not isinstance(data.get(preset), dict):
+        raise OrderBlocked(f"{preset} snapshot is missing")
     return data, source
 
 
@@ -162,9 +190,10 @@ def active_reservation(row, order_day):
     return True
 
 
-def validate_plan(plan, now, order_route="reserved"):
-    if plan.get("preset") != "KMW" or plan.get("status") != "ready":
-        raise OrderBlocked("Only a ready KMW plan can be submitted")
+def validate_plan(plan, now, order_route="reserved", *, preset="KMW"):
+    preset = validate_preset(preset)
+    if not isinstance(plan, dict) or plan.get("preset") != preset or plan.get("status") != "ready":
+        raise OrderBlocked(f"Only a ready {preset} plan can be submitted")
     validate_order_route(order_route)
     if order_route == "direct":
         direct_order_window(now, plan["order_date"])
@@ -173,11 +202,11 @@ def validate_plan(plan, now, order_route="reserved"):
     if plan.get("basis_date") != plan.get("expected_basis_date"):
         raise OrderBlocked("Plan does not use the most recent completed trading session")
     if plan.get("snapshot_date") != plan.get("expected_basis_date") or plan.get("snapshot_fresh") is False:
-        raise OrderBlocked("The KMW snapshot is stale. Refresh and reconcile it before submitting")
+        raise OrderBlocked(f"The {preset} snapshot is stale. Refresh and reconcile it before submitting")
     seen = set()
     for order in plan["orders"]:
         if order.get("ticker") != "SOXL" or order.get("side") not in ("BUY", "SELL"):
-            raise OrderBlocked("Only KMW SOXL buy/sell orders are supported")
+            raise OrderBlocked(f"Only {preset} SOXL buy/sell orders are supported")
         quantity = order.get("quantity")
         if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
             raise OrderBlocked("Orders must have a positive whole-share quantity")
@@ -196,8 +225,9 @@ def validate_plan(plan, now, order_route="reserved"):
     # acceptance of opposing orders is determined by the brokerage response.
 
 
-def preflight(client, plan, now, fee_buffer, order_route="reserved"):
-    validate_plan(plan, now, order_route=order_route)
+def preflight(client, plan, now, fee_buffer, order_route="reserved", *, preset="KMW", env=None):
+    validate_plan(plan, now, order_route=order_route, preset=preset)
+    source_env = os.environ if env is None else env
     holdings = [r for r in client.holdings() if symbol(r) == "SOXL"]
     for row in holdings:
         if row.get("rmnd_clcd") != "1" or row.get("loan_dtl_type_code") != "0000":
@@ -205,13 +235,13 @@ def preflight(client, plan, now, fee_buffer, order_route="reserved"):
     held = sum((decimal(r.get("rmnd_dqty"), "held quantity") for r in holdings), Decimal(0))
     expected = sum((decimal(p["quantity"]) for p in plan["snapshot_positions"]), Decimal(0))
     if held != expected:
-        raise OrderBlocked(f"KMW snapshot holds {expected} SOXL shares; broker holds {held}. Reconcile first")
+        raise OrderBlocked(f"{preset} snapshot holds {expected} SOXL shares; broker holds {held}. Reconcile first")
     sellable = sum((decimal(r.get("seln_able_dqty"), "sellable quantity") for r in holdings), Decimal(0))
     requested_sells = sum(o["quantity"] for o in plan["orders"] if o["side"] == "SELL")
     if decimal(requested_sells) > sellable:
         raise OrderBlocked("Broker sellable quantity is below the planned sell quantity")
     codes = {str(r.get("ovrs_exch_vndr_idno", "")).strip() for r in holdings}
-    configured = os.environ.get("MERITZ_SOXL_EXCHANGE_CODE", "").strip()
+    configured = source_env.get("MERITZ_SOXL_EXCHANGE_CODE", "").strip()
     if configured:
         codes.add(configured)
     if len(codes) != 1 or "" in codes:
@@ -225,7 +255,7 @@ def preflight(client, plan, now, fee_buffer, order_route="reserved"):
     quote = client.quote("SOXL", matches[0]["ovrs_stck_exch_idno"], delayed=True)
     if symbol(quote) != "SOXL":
         raise OrderBlocked("Broker quote did not identify SOXL")
-    configured_tick = os.environ.get("MERITZ_SOXL_PRICE_TICK", "").strip()
+    configured_tick = source_env.get("MERITZ_SOXL_PRICE_TICK", "").strip()
     for order in plan["orders"]:
         prefix = "shnu" if order["side"] == "BUY" else "seln"
         tick = decimal(quote.get(f"{prefix}_aspr_unit"), "broker price tick")
@@ -286,7 +316,7 @@ class OrderLedger:
     @staticmethod
     def identity(account, plan, order):
         # Price/quantity are intentionally excluded: changing a recommendation cannot resend a position.
-        values = [account, "KMW", plan["order_date"], order["ticker"], order["side"],
+        values = [account, validate_preset(plan.get("preset")), plan["order_date"], order["ticker"], order["side"],
                   order.get("round"), order.get("position_key")]
         return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
@@ -410,18 +440,32 @@ def print_plan(plan):
     print(json.dumps(plan, ensure_ascii=False, indent=2))
 
 
-def account_id():
-    if os.environ.get("MERITZ_ACCOUNT_PRESET", "") != "KMW":
-        raise OrderBlocked("Set MERITZ_ACCOUNT_PRESET=KMW for the App Key's intended account")
-    key = os.environ.get("MERITZ_APP_KEY", "")
+def account_id(preset="KMW", *, env=None):
+    preset = validate_preset(preset)
+    source = os.environ if env is None else env
+    if source.get("MERITZ_ACCOUNT_PRESET", "") != preset:
+        raise OrderBlocked(f"Set MERITZ_ACCOUNT_PRESET={preset} for the App Key's intended account")
+    key = source.get("MERITZ_APP_KEY", "")
     if not key:
         raise OrderBlocked("MERITZ_APP_KEY is missing")
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-def configured_notifier(required=False):
+def validate_account_configuration(preset="KMW", *, env=None):
+    """Readiness check without opening a broker client or disclosing credentials."""
+    source = os.environ if env is None else env
+    account_id(preset, env=source)
+    if not source.get("MERITZ_APP_SECRET", ""):
+        raise OrderBlocked("MERITZ_APP_SECRET is missing")
+    mac = source.get("MERITZ_MAC_ADDRESS", "")
+    if not isinstance(mac, str) or not re.fullmatch(r"[0-9a-fA-F]{12}", mac):
+        raise OrderBlocked("MERITZ_MAC_ADDRESS must be 12 hexadecimal characters")
+    return {"ready": True, "preset": preset}
+
+
+def configured_notifier(required=False, *, env=None):
     try:
-        notifier = TelegramNotifier.from_env()
+        notifier = TelegramNotifier.from_env(env)
         if notifier is None and required:
             raise TelegramNotificationError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in the environment file")
         return notifier
@@ -460,9 +504,10 @@ def deliver_notification(ledger, event_key, text, notifier, retry=False):
         return False
 
 
-def notify_order_result(ledger, notifier, context, error=None):
+def notify_order_result(ledger, notifier, context, error=None, *, env=None):
     try:
-        plan = context.get("plan") or {"preset": "KMW", "orders": [],
+        preset = validate_preset(context.get("preset", "KMW"))
+        plan = context.get("plan") or {"preset": preset, "orders": [],
                                       "order_date": datetime.now(ET).date().isoformat(),
                                       "generated_at": datetime.now(KST).isoformat()}
         results = context.get("results", [])
@@ -471,11 +516,16 @@ def notify_order_result(ledger, notifier, context, error=None):
                                          failed_state=context.get("failed_state"),
                                          not_sent_count=context.get("not_sent_count", 0),
                                          order_route=context.get("order_route"))
-        account = hashlib.sha256(os.environ.get("MERITZ_APP_KEY", "unconfigured").encode()).hexdigest()
+        preset = validate_preset(plan.get("preset"))
+        source = os.environ if env is None else env
+        account = context.get("account") or hashlib.sha256(source.get("MERITZ_APP_KEY", "unconfigured").encode()).hexdigest()
         identities = sorted(OrderLedger.identity(account, plan, o) for o in plan["orders"])
         direct = context.get("order_route") == "direct" or any(r.get("state") == "DIRECT_ACCEPTED" for r in results)
         outcome = ("DIRECT_ACCEPTED" if direct else "RESERVED") if error is None else context.get("failed_state", "BLOCKED")
         event = [account, plan["order_date"], identities, outcome]
+        if preset != "KMW":
+            # Preserve all historical KMW event keys, including empty batches.
+            event.append(preset)
         event_key = hashlib.sha256(json.dumps(event, sort_keys=True).encode()).hexdigest()
         if ledger.queue_notification(event_key, text):
             deliver_notification(ledger, event_key, text, notifier)
@@ -485,23 +535,25 @@ def notify_order_result(ledger, notifier, context, error=None):
 
 def _run_once(args, notification_context=None):
     now = datetime.now(KST)
+    preset = validate_preset(getattr(args, "preset", "KMW"))
+    env = getattr(args, "credentials", None)
     if args.status:
-        account = account_id()
-        client = MeritzClient.from_env()
+        account = account_id(preset, env=env)
+        client = MeritzClient.from_env(env=env)
         ledger = OrderLedger(args.ledger)
         try:
             start = (now.date() - timedelta(days=30)).strftime("%Y%m%d")
             end = now.strftime("%Y%m%d")
-            print_plan({"preset": "KMW", "ledger": ledger.rows(account),
+            print_plan({"preset": preset, "ledger": ledger.rows(account),
                         "reservations": [r for r in client.reserved_orders(start, end) if symbol(r) == "SOXL"],
                         "orders": [r for r in client.orders_history(start, end) if symbol(r) == "SOXL"],
                         "holdings": [r for r in client.holdings() if symbol(r) == "SOXL"]})
         finally:
             ledger.db.close()
         return
-    snapshots, source = load_snapshots(args.snapshot_file)
+    snapshots, source = load_snapshots(args.snapshot_file, preset=preset, env=env)
     with redirect_stdout(io.StringIO()):
-        generated = build_kmw_plan(snapshots, now=now, allow_stale_snapshot=args.allow_stale_preview)
+        generated = build_kmw_plan(snapshots, now=now, allow_stale_snapshot=args.allow_stale_preview, preset=preset)
     plan = cap_quantities(select_side(generated, args.side), args.quantity_cap)
     order_route = validate_order_route(getattr(args, "order_route", "direct"))
     plan["order_route"] = order_route
@@ -512,17 +564,22 @@ def _run_once(args, notification_context=None):
     print_plan(plan)
     if plan.get("status") == "skipped":
         return
-    plan_dir = ROOT / ".autotrade" / "plans"
+    if plan.get("preset") != preset:
+        raise OrderBlocked(f"The recommendation does not match the {preset} account preset")
+    plan_dir = ROOT / ".autotrade" / ("plans" if preset == "KMW" else "plans_kmw2")
     plan_dir.mkdir(parents=True, exist_ok=True)
     (plan_dir / f"{plan['order_date']}.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     if not args.submit and not args.check_account:
         return
-    account = account_id()
-    client = MeritzClient.from_env()
+    # A displayable next-session recommendation is not executable yet.
+    validate_plan(plan, datetime.now(KST), order_route=order_route, preset=preset)
+    account = account_id(preset, env=env)
+    client = MeritzClient.from_env(env=env)
     ledger = OrderLedger(args.ledger)
     try:
         ledger.unresolved(account)
-        checked = preflight(client, plan, datetime.now(KST), decimal(args.fee_buffer), order_route=order_route)
+        checked = preflight(client, plan, datetime.now(KST), decimal(args.fee_buffer), order_route=order_route,
+                            preset=preset, env=env)
         print_plan({"preflight": checked})
         if args.submit and plan["orders"]:
             result = submit_plan(client, plan, ledger, account, checked["exchange_code"],
@@ -530,20 +587,23 @@ def _run_once(args, notification_context=None):
             if notification_context is not None:
                 notification_context.update(results=result, completed=True)
             state = "DIRECT_ACCEPTED" if order_route == "direct" else "RESERVED"
-            print_plan({"preset": "KMW", "state": state, "orders": result,
+            print_plan({"preset": preset, "state": state, "orders": result,
                         "note": "Order accepted; fills must be checked separately with --status"})
     finally:
         ledger.db.close()
 
 
 def run_once(args):
+    preset = validate_preset(getattr(args, "preset", "KMW"))
+    env = getattr(args, "credentials", None)
+    notifier_kwargs = {} if env is None else {"env": env}
     if args.test_notification:
-        notifier = configured_notifier(required=True)
-        notifier.send("KMW 텔레그램 알림 연결 테스트\n이 메시지는 주문 접수나 체결을 의미하지 않습니다.")
+        notifier = configured_notifier(required=True, **notifier_kwargs)
+        notifier.send(f"{preset} 텔레그램 알림 연결 테스트\n이 메시지는 주문 접수나 체결을 의미하지 않습니다.")
         print("Telegram test notification sent")
         return
     if args.retry_notifications:
-        notifier = configured_notifier(required=True)
+        notifier = configured_notifier(required=True, **notifier_kwargs)
         ledger = OrderLedger(args.ledger)
         try:
             pending = ledger.pending_notifications()
@@ -557,17 +617,17 @@ def run_once(args):
         return
     if not args.submit:
         return _run_once(args)
-    notifier = configured_notifier()
-    context = {}
+    notifier = configured_notifier(**notifier_kwargs)
+    context = {"preset": preset}
     notification_ledger = OrderLedger(args.ledger)
     try:
         _run_once(args, notification_context=context)
         if context.get("completed"):
-            notify_order_result(notification_ledger, notifier, context)
+            notify_order_result(notification_ledger, notifier, context, env=env)
     except Exception as exc:
         # A later stdout/file error cannot undo a confirmed broker order.
         notify_order_result(notification_ledger, notifier, context,
-                            error=None if context.get("completed") else exc)
+                            error=None if context.get("completed") else exc, env=env)
         raise
     finally:
         notification_ledger.db.close()
@@ -582,13 +642,14 @@ def next_run(now, at):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="KMW SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
+    parser = argparse.ArgumentParser(description="KMW/KMW2 SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--submit", action="store_true", help="Actually submit this account's planned orders")
     mode.add_argument("--check-account", action="store_true", help="Read broker account and validate without placing orders")
     mode.add_argument("--status", action="store_true", help="Read reservation/fill status; does not change webapp snapshots")
     mode.add_argument("--test-notification", action="store_true", help="Send a Telegram test message without any broker calls")
     mode.add_argument("--retry-notifications", action="store_true", help="Retry saved Telegram messages without submitting orders")
+    parser.add_argument("--preset", choices=SUPPORTED_PRESETS, default="KMW", help="Account preset; KMW2 has separate credentials and ledger")
     parser.add_argument("--env-file", type=Path, help="Local literal KEY=value credential file")
     parser.add_argument("--snapshot-file", type=Path, help="Use this snapshot instead of fetching GitHub main")
     parser.add_argument("--quantity-cap", type=int, help="Cap EACH order's quantity for a small live test")
@@ -597,36 +658,49 @@ def main(argv=None):
                         help="Direct LOC/MOC orders by default; reserved must be selected explicitly")
     parser.add_argument("--allow-stale-preview", action="store_true", help="Inspect a stale snapshot's plan; submission is disabled")
     parser.add_argument("--fee-buffer", default="0.005", help="Buy cash reserve fraction; default 0.5%%")
-    parser.add_argument("--ledger", type=Path, default=ROOT / ".autotrade" / "orders.sqlite3")
+    parser.add_argument("--ledger", type=Path, help="Account ledger; defaults to separate KMW/KMW2 paths")
     parser.add_argument("--schedule", action="store_true", help="Keep running daily at --at in Asia/Seoul")
     parser.add_argument("--at", default="17:01", help="Daily KST run time (default 17:01)")
     args = parser.parse_args(argv)
     try:
+        if args.ledger is None:
+            args.ledger = default_ledger_path(args.preset)
         if args.allow_stale_preview and (args.submit or args.check_account or args.status):
             raise OrderBlocked("--allow-stale-preview cannot be used with broker account commands")
-        if args.env_file:
-            load_env(args.env_file)
+        if args.env_file is None and args.preset == "KMW2":
+            args.env_file = default_env_file(args.preset)
+        if args.env_file is not None:
+            if args.env_file.exists():
+                args.credentials = read_env(args.env_file)
+            elif args.submit or args.check_account or args.status or args.test_notification or args.retry_notifications:
+                raise OrderBlocked(f"The {args.preset} credential file is missing")
+            else:
+                # Preview needs no broker credentials. Never inherit another
+                # account's keys while waiting for the KMW2 credential file.
+                args.credentials = {}
+        else:
+            args.credentials = None
         if args.schedule:
             if args.status or args.test_notification or args.retry_notifications:
                 raise OrderBlocked("Status and Telegram-only commands are one-time commands")
             at = datetime.strptime(args.at, "%H:%M").time()
             while True:
                 target = next_run(datetime.now(KST), at)
-                print(f"Next KMW run: {target.isoformat()}", flush=True)
+                print(f"Next {args.preset} run: {target.isoformat()}", flush=True)
                 while datetime.now(KST) < target:
                     time.sleep(min(30, max(0.1, (target - datetime.now(KST)).total_seconds())))
                 try:
                     run_once(args)
                 except Exception as exc:
                     # No automatic same-day retry after an uncertain order result.
-                    print(f"KMW run stopped: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+                    print(f"{args.preset} run stopped: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
         else:
             run_once(args)
         return 0
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(f"KMW run stopped: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"{args.preset} run stopped: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
 

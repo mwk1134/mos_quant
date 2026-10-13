@@ -10,7 +10,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from kmw_autotrade import (
-    OrderBlocked, OrderLedger, active_reservation, cap_quantities, load_env, main,
+    OrderBlocked, OrderLedger, account_id, active_reservation, cap_quantities, load_env, load_snapshots, main,
+    notify_order_result, read_env,
     next_run, preflight, reservation_window, select_side, submit_plan, validate_plan,
 )
 from meritz_api import AmbiguousSubmission, MeritzAPIError
@@ -236,3 +237,105 @@ def test_environment_file_does_not_execute_shell(tmp_path, monkeypatch):
     load_env(path)
     assert __import__("os").environ["MERITZ_APP_KEY"] == "$(touch /tmp/never-execute)"
     monkeypatch.delenv("MERITZ_APP_KEY")
+
+
+def test_legacy_order_identity_is_exact_and_kmw2_has_a_distinct_identity():
+    import hashlib
+    original = plan()
+    order = original["orders"][0]
+    values = ["account", "KMW", original["order_date"], order["ticker"], order["side"],
+              order["round"], order["position_key"]]
+    legacy = hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+    assert OrderLedger.identity("account", original, order) == legacy
+    second = {**original, "preset": "KMW2"}
+    assert OrderLedger.identity("account", second, order) != legacy
+    with pytest.raises(OrderBlocked, match="KMW and KMW2"):
+        OrderLedger.identity("account", {**original, "preset": "JEH"}, order)
+
+
+def test_account_marker_must_match_the_selected_plan_without_exposing_key():
+    credentials = {"MERITZ_ACCOUNT_PRESET": "KMW2", "MERITZ_APP_KEY": "fake-key"}
+    assert account_id("KMW2", env=credentials)
+    with pytest.raises(OrderBlocked, match="MERITZ_ACCOUNT_PRESET=KMW") as caught:
+        account_id("KMW", env=credentials)
+    assert "fake-key" not in str(caught.value)
+
+
+def test_kmw2_plan_requires_explicit_preset_selection():
+    second = {**plan(), "preset": "KMW2"}
+    with pytest.raises(OrderBlocked, match="ready KMW"):
+        validate_plan(second, NOW)
+    validate_plan(second, NOW, preset="KMW2")
+    with pytest.raises(OrderBlocked, match="ready KMW2"):
+        validate_plan(plan(), NOW, preset="KMW2")
+
+
+def test_snapshot_loader_never_substitutes_the_other_account(tmp_path):
+    path = tmp_path / "snapshots.json"
+    path.write_text('{"KMW": {"marker": "first"}}')
+    with pytest.raises(OrderBlocked, match="KMW2 snapshot is missing"):
+        load_snapshots(path, preset="KMW2")
+    path.write_text('{"KMW": {"marker": "first"}, "KMW2": {"marker": "second"}}')
+    assert load_snapshots(path, preset="KMW2")[0]["KMW2"]["marker"] == "second"
+
+
+def test_isolated_environment_parser_does_not_change_existing_account(tmp_path, monkeypatch):
+    monkeypatch.setenv("MERITZ_APP_KEY", "fake-existing-key")
+    path = tmp_path / "second.env"
+    path.write_text("MERITZ_ACCOUNT_PRESET=KMW2\nMERITZ_APP_KEY=fake-second-key\n")
+    assert read_env(path) == {"MERITZ_ACCOUNT_PRESET": "KMW2", "MERITZ_APP_KEY": "fake-second-key"}
+    assert __import__("os").environ["MERITZ_APP_KEY"] == "fake-existing-key"
+    path.write_text("MERITZ_APP_KEY=one\nMERITZ_APP_KEY=two\n")
+    with pytest.raises(OrderBlocked, match="Duplicate"):
+        read_env(path)
+
+
+def test_preflight_uses_account_mapping_instead_of_other_accounts_exchange_settings(monkeypatch):
+    monkeypatch.setenv("MERITZ_SOXL_EXCHANGE_CODE", "wrong-other-account-code")
+    monkeypatch.setenv("MERITZ_SOXL_PRICE_TICK", "invalid-other-account-tick")
+    second = {**plan(), "preset": "KMW2"}
+    checked = preflight(broker(), second, NOW, Decimal("0.005"), preset="KMW2", env={})
+    assert checked["exchange_code"] == "0066"
+
+
+def test_notification_events_are_preset_scoped_even_when_no_orders(tmp_path, monkeypatch):
+    import hashlib
+    ledger = OrderLedger(tmp_path / "outbox.db")
+    source = {"MERITZ_APP_KEY": "fake-shared-key"}
+    for preset in ("KMW", "KMW2"):
+        empty = {**plan(), "preset": preset, "orders": []}
+        notify_order_result(ledger, None, {"plan": empty}, error=ValueError("blocked"), env=source)
+    account = hashlib.sha256(source["MERITZ_APP_KEY"].encode()).hexdigest()
+    legacy_event = [account, plan()["order_date"], [], "BLOCKED"]
+    legacy = hashlib.sha256(json.dumps(legacy_event, sort_keys=True).encode()).hexdigest()
+    rows = ledger.db.execute("SELECT event_key,text FROM notifications ORDER BY created_at").fetchall()
+    assert len(rows) == 2 and rows[0][0] == legacy
+    assert rows[0][1].startswith("KMW 자동매매") and rows[1][1].startswith("KMW2 자동매매")
+    ledger.db.close()
+
+
+def test_kmw2_cli_preview_needs_no_credentials_and_selects_its_own_snapshot(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "snapshot.json"
+    path.write_text('{"KMW": {}, "KMW2": {}}')
+    monkeypatch.setattr("kmw_autotrade.ROOT", tmp_path)
+    monkeypatch.setenv("MERITZ_APP_KEY", "fake-first-account-key")
+    second = {**plan(), "preset": "KMW2", "warnings": []}
+    with patch("kmw_autotrade.build_kmw_plan", return_value=second) as planner, \
+         patch("kmw_autotrade.MeritzClient.from_env", side_effect=AssertionError("broker called")):
+        assert main(["--preset", "KMW2", "--snapshot-file", str(path)]) == 0
+    assert planner.call_args.kwargs["preset"] == "KMW2"
+    assert '"preset": "KMW2"' in capsys.readouterr().out
+    assert __import__("os").environ["MERITZ_APP_KEY"] == "fake-first-account-key"
+    assert (tmp_path / ".autotrade/plans_kmw2/2026-10-12.json").exists()
+    assert not (tmp_path / ".autotrade/plans/2026-10-12.json").exists()
+
+
+def test_kmw2_cli_missing_credentials_cannot_use_inherited_first_account(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr("kmw_autotrade.ROOT", tmp_path)
+    monkeypatch.setenv("MERITZ_ACCOUNT_PRESET", "KMW")
+    monkeypatch.setenv("MERITZ_APP_KEY", "fake-first-account-key")
+    forbidden = Mock(side_effect=AssertionError("Missing KMW2 credentials reached a broker"))
+    monkeypatch.setattr("kmw_autotrade.MeritzClient.from_env", forbidden)
+    assert main(["--preset", "KMW2", "--check-account"]) == 1
+    assert "KMW2 credential file is missing" in capsys.readouterr().err
+    forbidden.assert_not_called()

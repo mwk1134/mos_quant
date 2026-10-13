@@ -21,6 +21,7 @@ _HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf-token" content="__CSRF_TOKEN__">
+<meta name="engine-preset" content="__ENGINE_PRESET__">
 <title>KMW 자동매매</title>
 <style>
 :root{color-scheme:light;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;color:#172b42;background:#edf2f7}
@@ -33,6 +34,7 @@ _HTML = r"""<!doctype html>
 <div class="row space"><h2 style="margin:0">엔진 상태</h2><span id="engine-state" class="status">비활성</span></div>
 <div class="stats"><div><span class="label">자동 주문 시간 · 한국 시간</span><span id="schedule" class="value">—</span></div><div><span class="label">다음 실행</span><span id="next-run" class="value">—</span></div><div><span class="label">최근 실행</span><span id="last-run" class="value">—</span></div></div>
 <div id="connection" class="notice info" role="status">PC 엔진 연결을 확인하고 있습니다. 상태 응답을 받으면 시간 설정과 주문 제어를 사용할 수 있습니다.</div>
+<div id="account-connection" class="notice error" role="status" hidden></div>
 <div class="row" style="margin-top:20px"><label for="at" class="muted">주문 시간</label><input id="at" type="time" value="17:01" required disabled><button id="save-time" type="button" disabled>시간 저장</button></div>
 <label class="ack"><input id="live-ack" type="checkbox"><span>실제 계좌 주문 활성화에 동의합니다. 활성화하면 중지할 때까지 지정한 시간에 KMW 추천 주문을 전송합니다.</span></label>
 <div class="row actions"><button id="enable" class="primary" disabled>활성화</button><button id="disable" class="danger" disabled>중지</button><button id="preview" disabled>추천 새로고침</button><button id="run" disabled>지금 주문</button></div>
@@ -48,6 +50,7 @@ _HTML = r"""<!doctype html>
 </main>
 <script>
 const token=document.querySelector('meta[name="csrf-token"]').content;
+const preset=document.querySelector('meta[name="engine-preset"]').content;
 const $=id=>document.getElementById(id);
 let current={enabled:false,running:false,plan:null},busy=false,pendingRequests=0,initialTime=true,connectionReady=false;
 let commandError='',statusError='',engineError='';
@@ -61,11 +64,11 @@ function setConnection(ready){connectionReady=ready;const banner=$('connection')
 function isObject(value){return value!==null&&typeof value==='object'&&!Array.isArray(value);}
 async function readApiResponse(response,mutation=false){const http='HTTP '+response.status;let text;try{text=await response.text();}catch{throw transportError('엔진 응답을 읽지 못했습니다 ('+http+').',mutation);}if(!text.trim())throw transportError('엔진 응답이 비어 있습니다 ('+http+').',mutation);let result;try{result=JSON.parse(text);}catch{throw transportError('엔진 대신 다른 페이지가 응답했습니다 ('+http+').',mutation);}if(!isObject(result))throw transportError('엔진 응답 형식이 올바르지 않습니다 ('+http+').',mutation);if(!response.ok||result.ok===false||result.error){const detail=typeof result.error==='string'&&result.error.trim()?result.error:'요청을 처리하지 못했습니다 ('+http+').';const error=new Error(detail);if([401,403,404].includes(response.status)||response.status>=500)error.connectionUncertain=true;throw error;}return result;}
 async function apiRequest(path,options={},mutation=false){let response;try{response=await fetch(apiUrl(path),mutation?{...options,redirect:'error'}:options);}catch{throw transportError('엔진에 연결하지 못했습니다.',mutation);}return readApiResponse(response,mutation);}
-function checkedStatus(status,mutation=false){if(!isObject(status)||typeof status.enabled!=='boolean'||typeof status.running!=='boolean'||typeof status.at!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(status.at))throw transportError('엔진 상태를 확인할 수 없습니다.',mutation);return status;}
-function updateButtons(){const running=busy||current.running;$('enable').disabled=!connectionReady||running||current.enabled||!$('live-ack').checked;$('disable').disabled=!current.enabled;$('preview').disabled=!connectionReady||running;$('run').disabled=!connectionReady||running||!current.enabled||!current.review_id||!current.plan||current.plan.status!=='ready'||!(current.plan.orders||[]).length;$('save-time').disabled=!connectionReady||running;$('at').disabled=!connectionReady||running;}
+function checkedStatus(status,mutation=false){if(!isObject(status)||typeof status.enabled!=='boolean'||typeof status.running!=='boolean'||typeof status.at!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(status.at)||(status.preset!==undefined&&status.preset!==preset)||(preset==='KMW2'&&status.preset!==preset))throw transportError('선택한 프리셋의 엔진 상태를 확인할 수 없습니다.',mutation);return status;}
+function updateButtons(){const running=busy||current.running;$('enable').disabled=!connectionReady||running||current.enabled||current.account_ready===false||!$('live-ack').checked;$('disable').disabled=!current.enabled;$('preview').disabled=!connectionReady||running;$('run').disabled=!connectionReady||running||!current.enabled||current.account_ready===false||!current.review_id||!current.plan||current.plan.snapshot_fresh===false||current.plan.status!=='ready'||!(current.plan.orders||[]).length;$('save-time').disabled=!connectionReady||running;$('at').disabled=!connectionReady||running;}
 function stateText(state){return {DIRECT_ACCEPTED:'주문 접수 완료',RESERVED:'예약 접수',OPEN:'미체결',FILLED:'체결 완료',PARTIALLY_FILLED:'일부 체결',CANCELLED:'취소 완료',BLOCKED:'전송 차단',REJECTED:'거절',UNKNOWN:'결과 확인 필요',ERROR:'오류',STOPPED:'중지',SKIPPED:'주문 대상 없음',NOT_SENT:'미전송',COMPLETED:'실행 완료'}[state]||state||'—';}
 function eventText(event){if(typeof event==='string')return event;return event.text||event.message||event.error||event.detail||stateText(event.state)||event.type||'실행 기록';}
-function render(status){current=status;const badge=$('engine-state');badge.textContent=status.running?'실행 중':status.enabled?'활성':'비활성';badge.className='status'+(status.running?' running':status.enabled?' active':'');$('schedule').textContent=(status.at||'17:01')+' 매일';$('next-run').textContent=dateText(status.next_run);$('last-run').textContent=dateText(status.last_run);if(initialTime&&status.at){$('at').value=status.at;initialTime=false;}
+function render(status){current=status;const badge=$('engine-state');badge.textContent=status.running?'실행 중':status.enabled?'활성':'비활성';badge.className='status'+(status.running?' running':status.enabled?' active':'');$('schedule').textContent=(status.at||'17:01')+' 매일';$('next-run').textContent=dateText(status.next_run);$('last-run').textContent=dateText(status.last_run);if(initialTime&&status.at){$('at').value=status.at;initialTime=false;}$('account-connection').hidden=status.account_ready!==false;$('account-connection').textContent=preset+' 계좌의 API 연결 설정을 확인해야 활성화할 수 있습니다.';
  const plan=status.plan||{};$('plan-status').textContent=plan.status==='ready'?'추천 '+(plan.orders||[]).length+'건':plan.reason||'추천을 새로고침하세요.';$('basis').textContent='기준일 '+(plan.basis_date||'—')+' · 주문일 '+(plan.order_date||'—');const body=$('orders');body.replaceChildren();for(const order of plan.orders||[]){const row=document.createElement('tr');for(const [index,value] of [order.side==='BUY'?'매수':order.side==='SELL'?'매도':order.side,order.ticker,order.round,order.quantity,order.order_type,order.order_type==='MOC'?'종가':order.price].entries()){const cell=document.createElement('td');cell.textContent=value??'—';if([2,3,5].includes(index))cell.className='num';if(index===0)cell.className=order.side==='BUY'?'buy':'sell';row.append(cell);}body.append(row);}if(!body.children.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=6;cell.className='empty';cell.textContent='전송할 추천 주문이 없습니다.';row.append(cell);body.append(row);}const warnings=Array.isArray(plan.warnings)?plan.warnings:[];$('warnings').textContent=warnings.join('\n');$('warnings').hidden=!warnings.length;const error=status.error||status.last_error||status.blocked_reason||status.last_run?.error||status.broker_status?.error;engineError=error?String(error):'';renderErrors();
  const broker=status.broker_status||{},brokerRows=broker.orders||[],brokerBody=$('broker-orders');$('broker-checked').textContent='최근 조회 '+dateText(broker.checked_at);brokerBody.replaceChildren();for(const order of brokerRows){const row=document.createElement('tr');for(const [index,value] of [order.order_no,order.side==='BUY'?'매수':order.side==='SELL'?'매도':order.side,order.ticker,order.quantity,order.filled_quantity,stateText(order.state)].entries()){const cell=document.createElement('td');cell.textContent=value??'—';if([3,4].includes(index))cell.className='num';row.append(cell);}brokerBody.append(row);}if(!brokerBody.children.length){const row=document.createElement('tr'),cell=document.createElement('td');cell.colSpan=6;cell.className='empty';cell.textContent='아직 조회한 주문이 없습니다.';row.append(cell);brokerBody.append(row);}
  const receipt=$('receipt');receipt.hidden=!status.last_run;if(status.last_run){const run=status.last_run;receipt.textContent=typeof run==='string'?run:`${dateText(run.finished_at)} · ${stateText(run.state)} · ${(run.orders||[]).length}건${run.error?'\n'+run.error:''}`;}const events=$('events');events.replaceChildren();for(const event of (status.events||[]).slice(-20).reverse()){const li=document.createElement('li'),when=document.createElement('span');when.className='event-time';when.textContent=dateText(typeof event==='object'&&(event.at||event.timestamp||event.time));li.append(when,document.createTextNode(eventText(event)));events.append(li);}if(!events.children.length){const li=document.createElement('li');li.className='muted';li.textContent='실행 기록이 없습니다.';events.append(li);}updateButtons();}
@@ -91,6 +94,9 @@ class DashboardServer(ThreadingHTTPServer):
         if host != "127.0.0.1":
             raise ValueError("KMW dashboard must bind to 127.0.0.1")
         self.engine = engine
+        self.preset = getattr(engine, "preset", "KMW")
+        if self.preset not in {"KMW", "KMW2"}:
+            raise ValueError("Unsupported dashboard preset")
         self.csrf_token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()
         super().__init__((host, port), _Handler)
@@ -168,7 +174,9 @@ class _Handler(BaseHTTPRequestHandler):
             return
         route = self._route()
         if route == "/":
-            self._respond(200, _HTML.replace("__CSRF_TOKEN__", self.server.csrf_token), html=True)
+            self._respond(200, re.sub(r"KMW(?!2)", self.server.preset, _HTML)
+                          .replace("__ENGINE_PRESET__", self.server.preset)
+                          .replace("__CSRF_TOKEN__", self.server.csrf_token), html=True)
         elif route == "/api/status":
             try:
                 self._respond(200, self.server.engine.status())

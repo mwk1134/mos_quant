@@ -81,6 +81,7 @@ class PhoneGatewayServer(ThreadingHTTPServer):
 
     def __init__(self, *, public_origin: str, username: str, password: str,
                  trusted_host: str | None = None, engine_port: int = 8701,
+                 kmw2_engine_port: int | None = None,
                  host: str = "127.0.0.1", port: int = 8702,
                  allow_short_password: bool = False):
         if host != "127.0.0.1":
@@ -92,6 +93,9 @@ class PhoneGatewayServer(ThreadingHTTPServer):
         self.engine_port = _port(engine_port)
         self.engine_host = f"127.0.0.1:{self.engine_port}"
         self.engine_origin = "http://" + self.engine_host
+        self.kmw2_engine_port = _port(kmw2_engine_port) if kmw2_engine_port is not None else None
+        if self.kmw2_engine_port == self.engine_port:
+            raise ValueError("KMW and KMW2 engines must use separate loopback ports")
         super().__init__((host, _port(port, allow_zero=True)), _Handler)
 
 
@@ -194,28 +198,40 @@ class _Handler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _route(self) -> str | None:
+    def _route(self) -> tuple[int, str] | None:
         try:
             parsed = urlsplit(self.path)
             if parsed.scheme or parsed.netloc or parsed.fragment:
                 return None
+            # Prefixes select only preconfigured loopback engines. They never
+            # supply a target host/port or relax the route allowlist.
+            if parsed.path.startswith("/kmw2/"):
+                if self.server.kmw2_engine_port is None:
+                    return None
+                engine_port = self.server.kmw2_engine_port
+                path = parsed.path[len("/kmw2"):]
+            else:
+                engine_port = self.server.engine_port
+                path = parsed.path
             if parsed.query:
                 query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
                 values = query.get("kmw_api", [])
-                if parsed.path != "/" or set(query) != {"kmw_api"} or len(values) != 1 or values[0] not in _ACTIONS:
+                if path != "/" or set(query) != {"kmw_api"} or len(values) != 1 or values[0] not in _ACTIONS:
                     return None
-                return "/api/" + values[0]
-            return parsed.path
+                return engine_port, "/api/" + values[0]
+            return engine_port, path
         except ValueError:
             return None
 
-    def _proxy(self, route: str, body: bytes | None = None, csrf_token: str | None = None) -> None:
+    def _proxy(self, engine_port: int, route: str, body: bytes | None = None,
+               csrf_token: str | None = None) -> None:
         # Fixed loopback target and fixed allowed route. No redirects or retries.
-        headers = {"Host": self.server.engine_host}
+        engine_host = f"127.0.0.1:{engine_port}"
+        headers = {"Host": engine_host}
         if self.command == "POST":
-            headers.update({"Origin": self.server.engine_origin, "Content-Type": "application/json",
+            headers.update({"Origin": "http://" + engine_host, "Content-Type": "application/json",
                             "Content-Length": str(len(body or b"")), "X-CSRF-Token": csrf_token or ""})
-        connection = http.client.HTTPConnection("127.0.0.1", self.server.engine_port, timeout=120)
+        connection = http.client.HTTPConnection("127.0.0.1", engine_port, timeout=120)
         try:
             connection.request(self.command, route, body=body, headers=headers)
             response = connection.getresponse()
@@ -248,17 +264,17 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not self._trusted_request():
             return
-        route = self._route()
-        if route not in {"/", "/api/status"}:
+        target = self._route()
+        if target is None or target[1] not in {"/", "/api/status"}:
             self._error(404, "페이지를 찾을 수 없습니다.")
             return
-        self._proxy(route)
+        self._proxy(*target)
 
     def do_POST(self) -> None:
         if not self._trusted_request():
             return
-        route = self._route()
-        if route not in _POST_ROUTES:
+        target = self._route()
+        if target is None or target[1] not in _POST_ROUTES:
             self._error(404, "지원하지 않는 요청입니다.")
             return
         if self.headers.get_all("Origin", []) != [self.server.public_origin]:
@@ -286,7 +302,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         # Keep live acknowledgement, review ID, and the browser-provided CSRF
         # token intact. The existing engine must validate every one itself.
-        self._proxy(route, body, tokens[0])
+        self._proxy(*target, body, tokens[0])
 
     def _unsupported(self) -> None:
         if self._trusted_request():
@@ -315,12 +331,17 @@ def load_config(path: str | Path) -> dict[str, Any]:
         if len(raw) > 65_536:
             raise ValueError("Gateway configuration is too large")
         values = json.loads(raw)
-        allowed = {"public_origin", "username", "password", "engine_port", "trusted_host", "port", "allow_short_password"}
+        allowed = {"public_origin", "username", "password", "engine_port", "kmw2_engine_port",
+                   "trusted_host", "port", "allow_short_password"}
         if not isinstance(values, dict) or set(values) - allowed or not {"public_origin", "username", "password"} <= set(values):
             raise ValueError("Gateway configuration fields are invalid")
         _public_address(values["public_origin"], values.get("trusted_host"))
         _credentials_digest(values["username"], values["password"], allow_short_password=values.get("allow_short_password", False))
         _port(values.get("engine_port", 8701))
+        if values.get("kmw2_engine_port") is not None:
+            kmw2_port = _port(values["kmw2_engine_port"])
+            if kmw2_port == values.get("engine_port", 8701):
+                raise ValueError("KMW and KMW2 engines must use separate loopback ports")
         _port(values.get("port", 8702))
         return values
     finally:

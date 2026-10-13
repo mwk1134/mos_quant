@@ -13,6 +13,7 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import io
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -20,8 +21,9 @@ from typing import Callable
 
 from kmw_autotrade import (
     KST, ROOT, OrderBlocked, OrderLedger, account_id, configured_notifier,
+    default_env_file, default_ledger_path, read_env,
     direct_order_window, load_env, load_snapshots, notify_order_result, preflight, submit_plan,
-    symbol, validate_plan,
+    symbol, validate_account_configuration, validate_plan, validate_preset,
 )
 from kmw_order_plan import build_kmw_plan
 from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
@@ -44,6 +46,7 @@ _ORDER_FIELDS = (
     "ticker", "side", "quantity", "price", "order_type", "round",
     "position_key", "reason", "expiry_date",
 )
+_DEFAULT_ENV = object()
 
 
 def _now(value: datetime | None) -> datetime:
@@ -183,30 +186,51 @@ def _public_result(row):
 class KMWBackend:
     """Direct LOC/MOC adapter. All external work starts in explicit methods."""
 
-    def __init__(self, env_file: Path | str | None = ROOT / ".env.meritz",
-                 ledger_path: Path | str = ROOT / ".autotrade" / "orders.sqlite3", *,
+    def __init__(self, env_file: Path | str | None = _DEFAULT_ENV,
+                 ledger_path: Path | str | None = None, *, preset: str = "KMW",
                  clock: Callable[[], datetime] | None = None):
+        self.preset = validate_preset(preset)
+        if env_file is _DEFAULT_ENV:
+            env_file = default_env_file(self.preset)
         self.env_file = Path(env_file) if env_file is not None else None
-        self.ledger_path = Path(ledger_path)
+        self.ledger_path = Path(ledger_path) if ledger_path is not None else default_ledger_path(self.preset)
         self._clock = clock if clock is not None else lambda: datetime.now(KST)
 
     def _load_credentials(self):
-        if self.env_file is not None:
-            load_env(self.env_file)
+        # Never update process globals: a partial second-account file cannot
+        # retain the first account's key, secret, or exchange configuration.
+        return read_env(self.env_file) if self.env_file is not None else dict(os.environ)
 
-    def preview(self, now: datetime | None = None) -> dict:
+    def validate_account_configuration(self) -> dict:
+        """Check local activation readiness without broker/network side effects."""
+        try:
+            return validate_account_configuration(self.preset, env=self._load_credentials())
+        except Exception:
+            raise EngineBlocked(f"{self.preset} 계좌의 API 키·시크릿·MAC 주소와 프리셋 설정을 확인해 주세요.",
+                                code="CONFIGURATION") from None
+
+    def _failure(self, exc):
+        code, message = _failure(exc)
+        return code, re.sub(r"KMW(?!2)", self.preset, message) if self.preset != "KMW" else message
+
+    def preview(self, now: datetime | None = None, *, allow_stale_snapshot: bool = False) -> dict:
         """Fetch the same persisted KMW portfolio as the web app; no broker calls."""
         current = _now(now)
         try:
-            snapshots, source = load_snapshots()
+            snapshots, source = load_snapshots(preset=self.preset)
+            planner_options = {"now": current, "preset": self.preset}
+            if allow_stale_snapshot:
+                planner_options["allow_stale_snapshot"] = True
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                plan = build_kmw_plan(snapshots, now=current)
+                plan = build_kmw_plan(snapshots, **planner_options)
             plan = json.loads(json.dumps(plan, ensure_ascii=False, allow_nan=False))
+            if plan.get("preset") != self.preset:
+                raise EngineBlocked(f"{self.preset} 프리셋의 추천 주문표가 필요합니다.", code="PRESET_MISMATCH")
             plan["order_route"] = "direct"
             plan["snapshot_source"] = source
             return plan
         except Exception as exc:
-            code, message = _failure(exc)
+            code, message = self._failure(exc)
             raise EngineBlocked(message, code=code) from None
 
     def execute(self, plan: dict, now: datetime | None = None,
@@ -228,6 +252,7 @@ class KMWBackend:
         failure = None
         financial_started = False
         deadline_reached = False
+        credentials = None
 
         def may_dispatch():
             nonlocal deadline_reached
@@ -249,19 +274,23 @@ class KMWBackend:
                 return {"state": "STOPPED", "orders": [], "preflight": None,
                         "error_code": "USER_STOPPED", "error": "자동매매가 비활성화되어 주문을 전송하지 않았습니다."}
             if not isinstance(plan, dict):
-                raise EngineBlocked("KMW 주문표가 필요합니다.", code="INVALID_PLAN")
+                raise EngineBlocked(f"{self.preset} 주문표가 필요합니다.", code="INVALID_PLAN")
             plan = deepcopy(plan)
             plan["order_route"] = "direct"
-            if plan.get("preset") == "KMW" and plan.get("status") == "skipped":
+            if plan.get("preset") != self.preset:
+                raise EngineBlocked(f"주문표 프리셋이 {self.preset} 계좌와 다릅니다.", code="PRESET_MISMATCH")
+            if plan.get("status") == "skipped":
                 return {"state": "SKIPPED", "orders": [], "preflight": None}
-            context = {"plan": plan, "order_route": "direct", "results": []}
+            context = {"plan": plan, "preset": self.preset, "order_route": "direct", "results": []}
             # Validate the recommendation date and each row's format before
             # constructing a client. Do not compare independent rows' prices.
-            validate_plan(plan, current, order_route="direct")
-            self._load_credentials()
+            validate_plan(plan, current, order_route="direct", preset=self.preset)
+            credentials = self._load_credentials()
+            validate_account_configuration(self.preset, env=credentials)
+            account = account_id(self.preset, env=credentials)
+            context["account"] = account
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                notifier = configured_notifier()
-            account = account_id()
+                notifier = configured_notifier(env=credentials)
             ledger = OrderLedger(self.ledger_path)
             ledger.unresolved(account)
             # Check durable identities before broker reads; keep the previous
@@ -284,8 +313,9 @@ class KMWBackend:
                            "preflight": None, "error_code": "ALREADY_ATTEMPTED",
                            "error": f"오늘 같은 계좌·회차의 주문 기록이 있습니다. {detail}을 확인해 주세요. 기록을 삭제하거나 자동 재전송하지 않습니다."}
                 raise OrderBlocked("This account/date/position was already attempted")
-            client = MeritzClient.from_env()
-            checked = preflight(client, plan, current, Decimal("0.005"), order_route="direct")
+            client = MeritzClient.from_env(env=credentials)
+            checked = preflight(client, plan, current, Decimal("0.005"), order_route="direct",
+                                preset=self.preset, env=credentials)
             # Recheck activation after read-only preflight, before claiming or
             # sending any identities. submit_plan also checks between orders.
             if not may_dispatch():
@@ -304,7 +334,7 @@ class KMWBackend:
                            "preflight": checked}
         except Exception as exc:
             failure = exc
-            code, message = _failure(exc)
+            code, message = self._failure(exc)
             if outcome is None:
                 state = context.get("failed_state")
                 if context.get("completed"):
@@ -339,9 +369,9 @@ class KMWBackend:
                     # A locally blocked batch still needs a Telegram notice.
                     # Initialize only the notification config/outbox here;
                     # never instantiate or query a brokerage client.
-                    self._load_credentials()
+                    credentials = self._load_credentials()
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                        notifier = configured_notifier()
+                        notifier = configured_notifier(env=credentials)
                     ledger = OrderLedger(self.ledger_path)
                 except Exception:
                     if outcome is not None:
@@ -353,7 +383,8 @@ class KMWBackend:
                     if context.get("plan") and (context.get("completed") or failure is not None):
                         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                             notify_order_result(ledger, notifier, context,
-                                                error=None if context.get("completed") else failure)
+                                                error=None if context.get("completed") else failure,
+                                                env=credentials)
                     if outcome is not None:
                         count = ledger.db.execute(
                             "SELECT COUNT(*) FROM notifications WHERE state!='SENT'"
@@ -393,16 +424,16 @@ class KMWBackend:
                                     "response": json.loads(response) if response else None, "updated_at": updated})
                     for day, payload, state, response, updated in rows]
         except Exception as exc:
-            code, message = _failure(exc)
+            code, message = self._failure(exc)
             raise EngineBlocked(message, code=code) from None
 
     def poll_status(self, now: datetime | None = None) -> dict:
         """Read ordinary SOXL order/fill status; no submission or notifications."""
         try:
             current = _now(now)
-            self._load_credentials()
-            account_id()  # Ensure the configured account is the KMW account.
-            client = MeritzClient.from_env()
+            credentials = self._load_credentials()
+            account_id(self.preset, env=credentials)
+            client = MeritzClient.from_env(env=credentials)
             orders = []
             for row in client.orders_today():
                 if not isinstance(row, dict) or symbol(row) != "SOXL":
@@ -433,5 +464,5 @@ class KMWBackend:
                 })
             return {"state": "OK", "checked_at": current.isoformat(), "orders": orders}
         except Exception as exc:
-            code, message = _failure(exc)
+            code, message = self._failure(exc)
             return {"state": "ERROR", "orders": [], "error_code": code, "error": message}

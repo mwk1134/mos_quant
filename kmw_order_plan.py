@@ -1,4 +1,4 @@
-"""Build KMW reservation orders from the web app's persisted portfolio.
+"""Build KMW or KMW2 orders from that web app preset's persisted portfolio.
 
 This module never submits orders or writes snapshots.  It uses the strategy
 engine, but disables its price-history-based simulated fills: a broker holding
@@ -32,6 +32,18 @@ DEFAULT_KMW_CONFIG = {
     ],
     "position_edits": {},
     "ma_alignment_switch_enabled": False,
+}
+DEFAULT_KMW2_CONFIG = {
+    "initial_capital": 67612.0,
+    "session_start_date": "2026-04-29",
+    "seed_increases": [],
+    "position_edits": {},
+    "ma_alignment_switch_enabled": False,
+}
+SUPPORTED_PRESETS = ("KMW", "KMW2")
+_DEFAULT_PRESET_CONFIGS = {
+    "KMW": DEFAULT_KMW_CONFIG,
+    "KMW2": DEFAULT_KMW2_CONFIG,
 }
 
 
@@ -129,40 +141,40 @@ class _KMWPlanTrader(SOXLQuantTrader):
         return None
 
 
-def _kmw_config(all_snapshots: dict, snapshot: dict) -> dict:
-    config = deepcopy(DEFAULT_KMW_CONFIG)
+def _kmw_config(all_snapshots: dict, snapshot: dict, *, preset: str = "KMW") -> dict:
+    config = deepcopy(_DEFAULT_PRESET_CONFIGS[preset])
     persisted = all_snapshots.get("_preset_configs", {})
     if not isinstance(persisted, dict):
         raise ValueError("_preset_configs must be an object")
-    persisted = persisted.get("KMW", {})
+    persisted = persisted.get(preset, {})
     if not isinstance(persisted, dict):
-        raise ValueError("_preset_configs.KMW must be an object")
+        raise ValueError(f"_preset_configs.{preset} must be an object")
     for field in config:
         if field in persisted:
             config[field] = deepcopy(persisted[field])
     if "ma_alignment_switch_enabled" not in persisted:
         config["ma_alignment_switch_enabled"] = bool(
-            snapshot.get("ma_alignment_switch_enabled", False)
+            snapshot.get("ma_alignment_switch_enabled", config["ma_alignment_switch_enabled"])
         )
     _number(config["initial_capital"], "initial_capital", minimum=Decimal("0.01"))
     _date(config["session_start_date"], "session_start_date")
     if not isinstance(config["seed_increases"], list):
-        raise ValueError("KMW seed_increases must be a list")
+        raise ValueError(f"{preset} seed_increases must be a list")
     for seed in config["seed_increases"]:
         if not isinstance(seed, dict):
-            raise ValueError("Each KMW seed increase must be an object")
+            raise ValueError(f"Each {preset} seed increase must be an object")
         _date(seed.get("date"), "seed increase date")
         _number(seed.get("amount"), "seed increase amount")
     # app.py's ensure_preset_seed_increase enforces this entry after loading.
     mandatory_seed = {"date": "2026-06-21", "amount": 11293.0}
-    if not any(
+    if preset == "KMW" and not any(
         seed["date"] == mandatory_seed["date"]
         and Decimal(str(seed["amount"])) == Decimal("11293")
         for seed in config["seed_increases"]
     ):
         config["seed_increases"].append(mandatory_seed)
     if not isinstance(config["position_edits"], dict):
-        raise ValueError("KMW position_edits must be an object")
+        raise ValueError(f"{preset} position_edits must be an object")
     return config
 
 
@@ -170,9 +182,10 @@ def build_kmw_plan(
     all_snapshots: dict,
     now: datetime | None = None,
     *,
+    preset: str = "KMW",
     allow_stale_snapshot: bool = False,
 ) -> dict:
-    """Return the upcoming KMW plan, or raise for stale/incomplete holdings.
+    """Return the selected preset's plan, or raise for incomplete holdings.
 
     ``all_snapshots`` has the same shape as ``data/positions_snapshots.json``.
     ``now`` must carry a timezone; omitted means the current instant.  Like the
@@ -182,7 +195,11 @@ def build_kmw_plan(
     checked separately by the order engine.
     ``allow_stale_snapshot`` permits a preview using older factual holdings;
     the returned ``snapshot_fresh=False`` must prohibit broker submission.
+    ``preset`` selects only that preset's snapshot and saved configuration;
+    KMW2 never inherits KMW holdings, seeds, or cash. Omission preserves KMW.
     """
+    if not isinstance(preset, str) or preset not in SUPPORTED_PRESETS:
+        raise ValueError(f"Unsupported preset: {preset!r}; expected KMW or KMW2")
     now = now if now is not None else datetime.now(timezone.utc)
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be a timezone-aware datetime")
@@ -190,7 +207,7 @@ def build_kmw_plan(
     basis_day = completed_trading_date(et_now)
     order_day = next_trading_date(basis_day)
     plan = {
-        "preset": "KMW",
+        "preset": preset,
         "status": "skipped",
         "generated_at": now.isoformat(),
         "order_date": order_day.isoformat(),
@@ -201,33 +218,33 @@ def build_kmw_plan(
     }
     if not isinstance(all_snapshots, dict):
         raise ValueError("Snapshot document must be an object")
-    snapshot = deepcopy(all_snapshots.get("KMW"))
+    snapshot = deepcopy(all_snapshots.get(preset))
     if not isinstance(snapshot, dict) or not snapshot:
-        raise ValueError("A nonempty KMW portfolio snapshot is required; simulation is disabled")
-    snapshot_day = _date(snapshot.get("as_of_date"), "KMW as_of_date")
+        raise ValueError(f"A nonempty {preset} portfolio snapshot is required; simulation is disabled")
+    snapshot_day = _date(snapshot.get("as_of_date"), f"{preset} as_of_date")
     plan["snapshot_date"] = snapshot_day.isoformat()
     plan["snapshot_fresh"] = snapshot_day == basis_day
     if snapshot_day > basis_day:
-        raise ValueError("KMW snapshot is after the completed trading day")
+        raise ValueError(f"{preset} snapshot is after the completed trading day")
     if snapshot_day != basis_day:
         stale_message = (
-            f"Stale KMW snapshot: {snapshot_day.isoformat()}; "
+            f"Stale {preset} snapshot: {snapshot_day.isoformat()}; "
             f"expected {basis_day.isoformat()}. Refresh and reconcile actual holdings first."
         )
         if not allow_stale_snapshot:
             raise ValueError(stale_message)
         plan["warnings"].append(stale_message + " Preview only; submission is prohibited.")
-    cash = _number(snapshot.get("available_cash"), "KMW available_cash")
+    cash = _number(snapshot.get("available_cash"), f"{preset} available_cash")
     for field in ("compound_seed", "compound_reference_seed"):
-        _number(snapshot.get(field), f"KMW {field}", minimum=Decimal("0.01"))
+        _number(snapshot.get(field), f"{preset} {field}", minimum=Decimal("0.01"))
     processed = snapshot.get("processed_seed_dates")
     if not isinstance(processed, list):
-        raise ValueError("KMW processed_seed_dates is required")
+        raise ValueError(f"{preset} processed_seed_dates is required")
     for processed_day in processed:
         _date(processed_day, "processed seed date")
-    config = _kmw_config(all_snapshots, snapshot)
+    config = _kmw_config(all_snapshots, snapshot, preset=preset)
     if _date(config["session_start_date"], "session_start_date") > basis_day:
-        raise ValueError("KMW session_start_date is after the completed trading day")
+        raise ValueError(f"{preset} session_start_date is after the completed trading day")
     for seed in config["seed_increases"]:
         if _date(seed["date"], "seed increase date") <= basis_day and seed["date"] not in processed:
             raise ValueError(f"Snapshot has not accounted for seed increase {seed['date']}")
@@ -237,17 +254,17 @@ def build_kmw_plan(
         if match is None:
             continue
         if not isinstance(saved, dict):
-            raise ValueError(f"Invalid KMW holding {key}")
+            raise ValueError(f"Invalid {preset} holding {key}")
         buy_day = _date(match.group(2), f"{key} buy date")
         if buy_day > basis_day or not is_us_equity_trading_day(buy_day):
-            raise ValueError(f"Invalid KMW holding date: {key}")
+            raise ValueError(f"Invalid {preset} holding date: {key}")
         if _quantity(saved.get("round"), f"{key} round") != int(match.group(1)):
             raise ValueError(f"Position key and stored round disagree: {key}")
         _quantity(saved.get("shares"), f"{key} shares")
         _number(saved.get("buy_price"), f"{key} buy_price", minimum=Decimal("0.01"))
         _number(saved.get("amount", Decimal(str(saved["shares"])) * Decimal(str(saved["buy_price"]))), f"{key} amount")
         if saved.get("mode") not in ("SF", "AG"):
-            raise ValueError(f"KMW holding {key} requires its saved SF/AG entry mode")
+            raise ValueError(f"{preset} holding {key} requires its saved SF/AG entry mode")
         position_keys.append(key)
     trader = _KMWPlanTrader(
         now=now,
@@ -275,15 +292,15 @@ def build_kmw_plan(
             qty = _quantity(edits.get("shares"), f"{key} edited shares")
             price = float(_number(edits.get("buy_price"), f"{key} edited buy_price", minimum=Decimal("0.01")))
             if not trader.update_position(trader.positions.index(position), qty, price):
-                raise ValueError(f"KMW position edit cannot be applied: {key}")
+                raise ValueError(f"{preset} position edit cannot be applied: {key}")
     if len(trader.positions) != len(position_keys):
-        raise ValueError("Some KMW holding rows could not be restored")
+        raise ValueError(f"Some {preset} holding rows could not be restored")
     expected_positions = [(p["_snapshot_key"], p["shares"], p["buy_price"]) for p in trader.positions]
     recommendation = trader.get_daily_recommendation(skip_simulate=True, preserve_snapshot_shares=True)
     if "error" in recommendation:
-        raise ValueError(f"KMW recommendation failed: {recommendation['error']}")
+        raise ValueError(f"{preset} recommendation failed: {recommendation['error']}")
     if [(p["_snapshot_key"], p["shares"], p["buy_price"]) for p in trader.positions] != expected_positions:
-        raise ValueError("Recommendation altered factual KMW holdings")
+        raise ValueError(f"Recommendation altered factual {preset} holdings")
     if recommendation.get("basis_date") != basis_day.isoformat():
         raise ValueError(f"Stale recommendation basis: {recommendation.get('basis_date')}")
     if recommendation.get("can_buy") and recommendation.get("buy_order_date") != order_day.isoformat():

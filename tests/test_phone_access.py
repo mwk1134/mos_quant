@@ -49,6 +49,30 @@ def test_configuration_is_private_and_reuses_user_login(tmp_path):
     assert not list(path.parent.glob("*.tmp"))
 
 
+def test_tunnel_restart_keeps_both_accounts_loopback_ports(tmp_path):
+    path = tmp_path / "phone_gateway.json"
+    previous = access.write_phone_config(path, ORIGIN)
+    previous.update(engine_port=8701, kmw2_engine_port=8703)
+    path.write_text(json.dumps(previous))
+    renewed = access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert renewed["engine_port"] == 8701 and renewed["kmw2_engine_port"] == 8703
+    assert renewed["username"] == previous["username"]
+    assert renewed["password"] == previous["password"]
+    assert gateway.load_config(path) == renewed
+
+
+@pytest.mark.parametrize("second_port", [8701, True, 0, 65536, "8703"])
+def test_invalid_second_account_port_is_not_saved(tmp_path, second_port):
+    path = tmp_path / "phone_gateway.json"
+    config = access.write_phone_config(path, ORIGIN)
+    config["kmw2_engine_port"] = second_port
+    path.write_text(json.dumps(config))
+    original = path.read_text()
+    with pytest.raises(ValueError, match="engine ports"):
+        access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert path.read_text() == original
+
+
 def test_reuses_user_requested_short_login_and_preserves_explicit_opt_in(tmp_path):
     path = tmp_path / "phone_gateway.json"
     previous = {"public_origin": ORIGIN, "username": "kmw", "password": "1234",
