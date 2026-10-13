@@ -19,6 +19,7 @@ import re
 import sqlite3
 from typing import Callable
 
+from credential_redaction import environment_secret_values
 from kmw_autotrade import (
     KST, ROOT, OrderBlocked, OrderLedger, account_id, configured_notifier,
     default_env_file, default_ledger_path, read_env,
@@ -291,7 +292,7 @@ class KMWBackend:
             context["account"] = account
             with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 notifier = configured_notifier(env=credentials)
-            ledger = OrderLedger(self.ledger_path)
+            ledger = OrderLedger(self.ledger_path, secrets=environment_secret_values(credentials))
             ledger.unresolved(account)
             # Check durable identities before broker reads; keep the previous
             # test BUY receipt and never delete/replace it to force a new batch.
@@ -372,7 +373,7 @@ class KMWBackend:
                     credentials = self._load_credentials()
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         notifier = configured_notifier(env=credentials)
-                    ledger = OrderLedger(self.ledger_path)
+                    ledger = OrderLedger(self.ledger_path, secrets=environment_secret_values(credentials))
                 except Exception:
                     if outcome is not None:
                         outcome["notification_status"] = "UNAVAILABLE"

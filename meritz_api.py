@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Mapping, Optional
 
 import requests
 
+from credential_redaction import redact_credentials
+
 
 BASE_URL = "https://openapi.imeritz.com:9443"
 QUERY_CODES = frozenset({"5762", "5766", "5820"})
@@ -198,7 +200,11 @@ class MeritzClient:
             if submission:
                 raise AmbiguousSubmission("Order request interrupted; reconcile orders before retrying") from None
             raise MeritzError("Meritz query request failed") from None
-        body = self._json(response, submission=submission)
+        # OAuth parsing stays private in authenticate(). All query/submission
+        # bodies leaving this client, including exception.response, are safe
+        # to persist or display even if the broker reflects credentials.
+        body = redact_credentials(self._json(response, submission=submission),
+                                  (self._app_key, self._app_secret, self._access_token))
         code = body.get("rsp_cd")
         if not isinstance(code, str) or not re.fullmatch(r"[A-Za-z0-9]{1,32}", code):
             if submission:

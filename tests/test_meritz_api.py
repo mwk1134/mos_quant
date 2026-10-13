@@ -415,6 +415,54 @@ class MeritzClientTests(unittest.TestCase):
         self.assertNotIn("fake-app-secret", str(error.exception))
         self.assertNotIn("test-access-token", str(error.exception))
 
+    def test_accepted_receipt_masks_credentials_and_preserves_receipt_fields(self):
+        body = {**DIRECT_RECEIPT, "data": {**DIRECT_RECEIPT["data"],
+                "app_secret": "reflected-secret", "nested": [{"Authorization": "Bearer other-secret"}]},
+                "rsp_msg": "fake-app-key / fake-app-secret / test-access-token"}
+        self.prepare(reply(body))
+        result = self.submit_direct()
+        self.assertEqual(result["rsp_cd"], "0001")
+        self.assertEqual(result["data"]["oder_no"], 42)
+        self.assertEqual(result["data"]["warn_cls_code"], "0")
+        self.assertEqual(result["data"]["app_secret"], "[REDACTED]")
+        self.assertEqual(result["data"]["nested"][0]["Authorization"], "[REDACTED]")
+        for secret in ("fake-app-key", "fake-app-secret", "test-access-token", "other-secret", "reflected-secret"):
+            self.assertNotIn(secret, repr(result))
+        self.assertEqual(body["data"]["app_secret"], "reflected-secret")
+        self.assertEqual(self.session.request.call_count, 2)
+        self.assertEqual(self.session.request.call_args.kwargs["headers"]["Authorization"],
+                         "Bearer test-access-token")
+
+    def test_rejection_and_ambiguous_receipts_mask_exception_response(self):
+        for code in ("3174", "0000", "0001"):
+            with self.subTest(code=code):
+                self.client._access_token = None
+                self.session.request.reset_mock()
+                body = {"rsp_cd": code, "access_token": "reflected-token",
+                        "rsp_msg": "fake-app-key fake-app-secret test-access-token",
+                        "data": {"oder_no": 0, "warn_cls_code": "0"}}
+                self.prepare(reply(body))
+                with self.assertRaises((MeritzAPIError, AmbiguousSubmission)) as caught:
+                    self.submit_direct()
+                self.assertEqual(caught.exception.response["rsp_cd"], code)
+                self.assertEqual(caught.exception.response["data"]["oder_no"], 0)
+                for secret in ("fake-app-key", "fake-app-secret", "test-access-token", "reflected-token"):
+                    self.assertNotIn(secret, str(caught.exception) + repr(caught.exception.response))
+                self.assertEqual(self.session.request.call_count, 2)
+
+    def test_queries_mask_credentials_before_returning_rows(self):
+        body = {"rsp_cd": "5766", "data": [{"iscd": "SOXL.AX", "rmnd_dqty": "12.0000",
+                "refresh_token": "reflected-token", "freeform": "contains fake-app-key"}]}
+        self.prepare(reply(body))
+        rows = self.client.holdings()
+        self.assertEqual(rows[0]["rmnd_dqty"], "12.0000")
+        self.assertEqual(rows[0]["refresh_token"], "[REDACTED]")
+        self.assertNotIn("fake-app-key", repr(rows))
+
+    def test_safe_receipt_still_preserves_object_identity(self):
+        self.prepare(reply(DIRECT_RECEIPT))
+        self.assertIs(self.submit_direct(), DIRECT_RECEIPT)
+
 
 if __name__ == "__main__":
     unittest.main()

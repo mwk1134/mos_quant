@@ -339,3 +339,83 @@ def test_kmw2_cli_missing_credentials_cannot_use_inherited_first_account(tmp_pat
     assert main(["--preset", "KMW2", "--check-account"]) == 1
     assert "KMW2 credential file is missing" in capsys.readouterr().err
     forbidden.assert_not_called()
+
+
+def test_new_ledger_is_private_and_new_receipts_mask_sensitive_fields(tmp_path):
+    import stat
+
+    path = tmp_path / "orders.db"
+    ledger = OrderLedger(path, secrets=("synthetic-known-key",))
+    try:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        identity = ledger.claim("account", plan())[0]
+        response = {"rsp_cd": "5620", "data": {"oder_rsev_mst_no": 118082,
+                    "app_secret": "synthetic-private"}, "rsp_msg": "contains synthetic-known-key"}
+        ledger.update(identity, "RESERVED", response)
+        stored = json.loads(ledger.db.execute("SELECT response FROM orders WHERE identity=?", (identity,)).fetchone()[0])
+        assert stored["rsp_cd"] == "5620" and stored["data"]["oder_rsev_mst_no"] == 118082
+        assert stored["data"]["app_secret"] == "[REDACTED]"
+        assert "synthetic-known-key" not in json.dumps(stored)
+        assert response["data"]["app_secret"] == "synthetic-private"
+    finally:
+        ledger.db.close()
+
+
+def test_old_ledger_rows_are_masked_when_read_without_rewriting_receipts(tmp_path):
+    ledger = OrderLedger(tmp_path / "orders.db", secrets=("synthetic-known-key",))
+    try:
+        identity = ledger.claim("account", plan())[0]
+        original = json.dumps({"rsp_cd": "3174", "access_token": "legacy-private-token",
+                               "rsp_msg": "contains synthetic-known-key"})
+        ledger.db.execute("UPDATE orders SET state='REJECTED',response=? WHERE identity=?", (original, identity))
+        ledger.db.commit()
+        rows = ledger.rows("account")
+        assert rows[0]["response"]["access_token"] == "[REDACTED]"
+        assert "synthetic-known-key" not in json.dumps(rows)
+        assert ledger.db.execute("SELECT response FROM orders WHERE identity=?", (identity,)).fetchone()[0] == original
+    finally:
+        ledger.db.close()
+
+
+def test_plan_files_and_stdout_mask_registered_credentials(tmp_path, monkeypatch, capsys):
+    import stat
+    from kmw_autotrade import _write_private_plan, print_plan
+
+    monkeypatch.setenv("MERITZ_APP_KEY", "synthetic-known-key")
+    original = {"order_no": 118082, "price": "100.00", "app_secret": "synthetic-private",
+                "diagnostic": "contains synthetic-known-key"}
+    print_plan(original)
+    output = capsys.readouterr().out
+    assert "synthetic-known-key" not in output and "synthetic-private" not in output
+    path = tmp_path / "plans/2026-10-12.json"
+    _write_private_plan(path, original)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    saved = json.loads(path.read_text())
+    assert saved["order_no"] == 118082 and saved["price"] == "100.00"
+    assert "synthetic-known-key" not in path.read_text()
+    assert original["app_secret"] == "synthetic-private"
+
+
+def test_cli_uses_fixed_error_for_arbitrary_transport_exception(monkeypatch, capsys):
+    private = "synthetic-private-token https://example.test/?credential=hidden"
+    monkeypatch.setattr("kmw_autotrade.run_once", Mock(side_effect=RuntimeError(private)))
+    assert main([]) == 1
+    output = capsys.readouterr().err
+    assert private not in output and "synthetic-private-token" not in output
+    assert "Execution could not be completed" in output
+
+
+def test_notification_outbox_masks_new_messages_and_old_reads_without_rewriting(tmp_path):
+    ledger = OrderLedger(tmp_path / "orders.db", secrets=("synthetic-known-bot-token",))
+    try:
+        ledger.queue_notification("new", "Order 118082 contains synthetic-known-bot-token")
+        ledger.queue_notification("old", "placeholder")
+        legacy = "Legacy message synthetic-known-bot-token"
+        ledger.db.execute("UPDATE notifications SET text=? WHERE event_key='old'", (legacy,))
+        ledger.db.commit()
+        pending = ledger.pending_notifications()
+        assert "synthetic-known-bot-token" not in json.dumps(pending)
+        assert "118082" in pending[0]["text"]
+        assert ledger.db.execute("SELECT text FROM notifications WHERE event_key='old'").fetchone()[0] == legacy
+    finally:
+        ledger.db.close()

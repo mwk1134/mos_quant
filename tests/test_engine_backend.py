@@ -555,6 +555,32 @@ def write_account_env(path, preset, key="fake-isolated-key", **overrides):
     return values
 
 
+def test_account_file_secrets_are_redacted_before_receipts_are_persisted(setup_backend, tmp_path, capsys):
+    engine, client, notifier, _ = setup_backend
+    key, secret = "isolated-key-never-public", "isolated-secret-never-public"
+    env_file = tmp_path / "account.env"
+    write_account_env(env_file, "KMW", key, MERITZ_APP_SECRET=secret)
+    engine.env_file = env_file
+    responses = [dict(receipt(1000 + index), rsp_msg=f"reflected {key} {secret}") for index in range(6)]
+    responses[0]["data"]["access_token"] = "synthetic-private-oauth"
+    client.submit_order.side_effect = responses
+
+    result = engine.execute(plan(), NOW)
+
+    assert result["state"] == "DIRECT_ACCEPTED"
+    assert [row["order_no"] for row in result["orders"]] == [str(1000 + index) for index in range(6)]
+    ledger = OrderLedger(engine.ledger_path)
+    try:
+        stored = "".join(row[0] for row in ledger.db.execute("SELECT response FROM orders") if row[0])
+    finally:
+        ledger.db.close()
+    rendered = json.dumps(result) + stored + capsys.readouterr().out + notifier.send.call_args.args[0]
+    for private in [key, secret, "synthetic-private-oauth"]:
+        assert private not in rendered
+    assert "[REDACTED]" in stored
+    assert client.submit_order.call_count == 6
+
+
 def test_each_account_uses_distinct_inert_default_configuration(tmp_path):
     first, second = KMWBackend(), KMWBackend(preset="KMW2")
     assert first.preset == "KMW" and second.preset == "KMW2"

@@ -17,11 +17,13 @@ import re
 import shlex
 import sqlite3
 import sys
+import tempfile
 import time
 from zoneinfo import ZoneInfo
 
 import requests
 
+from credential_redaction import environment_secret_values, redact_credentials
 from kmw_order_plan import build_kmw_plan
 from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
 from telegram_notify import TelegramNotificationError, TelegramNotifier, format_order_notification
@@ -300,9 +302,18 @@ def preflight(client, plan, now, fee_buffer, order_route="reserved", *, preset="
 
 class OrderLedger:
     """Reserve every batch identity transactionally before any order is sent."""
-    def __init__(self, path):
+    def __init__(self, path, *, secrets=()):
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
+        self._redaction_secrets = tuple(secrets) + environment_secret_values()
+        # SQLite otherwise inherits the caller's umask (often world-readable).
+        # Only creation is hardened here: existing receipts are never rewritten.
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
         self.db = sqlite3.connect(path, timeout=5)
         self.db.execute("""CREATE TABLE IF NOT EXISTS orders (
             identity TEXT PRIMARY KEY, account TEXT NOT NULL, order_date TEXT NOT NULL,
@@ -330,7 +341,8 @@ class OrderLedger:
                     raise OrderBlocked("This account/date/position was already attempted. Use --status; do not resend")
                 self.db.execute("INSERT INTO orders VALUES (?,?,?,?,?,?,?,?)",
                                 (identity, account, plan["order_date"], digest,
-                                 json.dumps(order, sort_keys=True), "PLANNED", None, datetime.now(KST).isoformat()))
+                                 json.dumps(redact_credentials(order, self._redaction_secrets), sort_keys=True),
+                                 "PLANNED", None, datetime.now(KST).isoformat()))
             self.db.commit()
         except Exception:
             self.db.rollback()
@@ -339,7 +351,8 @@ class OrderLedger:
 
     def update(self, identity, state, response=None):
         self.db.execute("UPDATE orders SET state=?, response=?, updated_at=? WHERE identity=?",
-                        (state, json.dumps(response) if response is not None else None,
+                        (state, json.dumps(redact_credentials(response, self._redaction_secrets))
+                         if response is not None else None,
                          datetime.now(KST).isoformat(), identity))
         self.db.commit()
 
@@ -352,13 +365,16 @@ class OrderLedger:
     def rows(self, account):
         rows = self.db.execute("SELECT order_date,payload,state,response,updated_at FROM orders WHERE account=? ORDER BY updated_at",
                                (account,)).fetchall()
-        return [{"order_date": d, "order": json.loads(p), "state": s,
-                 "response": json.loads(r) if r else None, "updated_at": u} for d, p, s, r, u in rows]
+        return redact_credentials(
+            [{"order_date": d, "order": json.loads(p), "state": s,
+              "response": json.loads(r) if r else None, "updated_at": u} for d, p, s, r, u in rows],
+            self._redaction_secrets)
 
     def queue_notification(self, event_key, text):
         stamp = datetime.now(KST).isoformat()
         cursor = self.db.execute("INSERT OR IGNORE INTO notifications VALUES (?,?,?,?,?,?,?)",
-                                 (event_key, text, "PENDING", None, None, stamp, stamp))
+                                 (event_key, redact_credentials(text, self._redaction_secrets),
+                                  "PENDING", None, None, stamp, stamp))
         self.db.commit()
         return cursor.rowcount == 1
 
@@ -377,7 +393,8 @@ class OrderLedger:
 
     def update_notification(self, event_key, state, message_id=None, error=None):
         self.db.execute("UPDATE notifications SET state=?,message_id=?,last_error=?,updated_at=? WHERE event_key=?",
-                        (state, message_id, error, datetime.now(KST).isoformat(), event_key))
+                        (state, message_id, redact_credentials(error, self._redaction_secrets),
+                         datetime.now(KST).isoformat(), event_key))
         self.db.commit()
 
     def pending_notifications(self):
@@ -385,7 +402,8 @@ class OrderLedger:
         rows = self.db.execute("""SELECT event_key,text FROM notifications
             WHERE state IN ('PENDING','FAILED','UNKNOWN') OR (state='SENDING' AND updated_at<?)
             ORDER BY created_at LIMIT 20""", (expired,)).fetchall()
-        return [{"event_key": key, "text": text} for key, text in rows]
+        return redact_credentials([{"event_key": key, "text": text} for key, text in rows],
+                                  self._redaction_secrets)
 
 
 def submit_plan(client, plan, ledger, account, exchange_code, notification_context=None, order_route="reserved", should_continue=None):
@@ -429,15 +447,52 @@ def submit_plan(client, plan, ledger, account, exchange_code, notification_conte
             if notification_context is not None:
                 notification_context.update(results=results, failed_order=order,
                                             failed_state=state, not_sent_count=len(identities) - index - 1)
-            print(json.dumps({"accepted_before_error": results, "stopped_order": order,
-                              "state": state, "broker_response": body if isinstance(body, dict) else None},
-                             ensure_ascii=False, indent=2))
+            print_plan({"accepted_before_error": results, "stopped_order": order,
+                        "state": state, "broker_response": body if isinstance(body, dict) else None},
+                       secrets=ledger._redaction_secrets)
             raise
     return results
 
 
-def print_plan(plan):
-    print(json.dumps(plan, ensure_ascii=False, indent=2))
+def print_plan(plan, *, secrets=()):
+    print(json.dumps(redact_credentials(plan, tuple(secrets) + environment_secret_values()),
+                     ensure_ascii=False, indent=2))
+
+
+def _write_private_plan(path: Path, plan, *, secrets=()):
+    """Atomically save a new plan without a publicly readable creation window."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=path.name + ".",
+                                         suffix=".tmp", encoding="utf-8", delete=False) as output:
+            temporary = Path(output.name)
+            os.fchmod(output.fileno(), 0o600)
+            json.dump(redact_credentials(plan, tuple(secrets) + environment_secret_values()),
+                      output, ensure_ascii=False, indent=2)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _cli_error_message(exc):
+    # These exact project-owned validation messages contain no request data.
+    # All arbitrary exception strings (including URLs, response bodies and
+    # reflected credentials) are replaced with a constant diagnostic.
+    public = {
+        "Order date does not match today's US trading session",
+        "Direct automated orders currently require a pre-open recommendation",
+        "The KMW credential file is missing",
+        "The KMW2 credential file is missing",
+        "--allow-stale-preview cannot be used with broker account commands",
+        "Status and Telegram-only commands are one-time commands",
+    }
+    if type(exc) is OrderBlocked and str(exc) in public:
+        return str(exc)
+    return "Execution could not be completed; check local configuration and broker order status before retrying"
 
 
 def account_id(preset="KMW", *, env=None):
@@ -537,17 +592,18 @@ def _run_once(args, notification_context=None):
     now = datetime.now(KST)
     preset = validate_preset(getattr(args, "preset", "KMW"))
     env = getattr(args, "credentials", None)
+    secrets = environment_secret_values(env)
     if args.status:
         account = account_id(preset, env=env)
         client = MeritzClient.from_env(env=env)
-        ledger = OrderLedger(args.ledger)
+        ledger = OrderLedger(args.ledger, secrets=secrets)
         try:
             start = (now.date() - timedelta(days=30)).strftime("%Y%m%d")
             end = now.strftime("%Y%m%d")
             print_plan({"preset": preset, "ledger": ledger.rows(account),
                         "reservations": [r for r in client.reserved_orders(start, end) if symbol(r) == "SOXL"],
                         "orders": [r for r in client.orders_history(start, end) if symbol(r) == "SOXL"],
-                        "holdings": [r for r in client.holdings() if symbol(r) == "SOXL"]})
+                        "holdings": [r for r in client.holdings() if symbol(r) == "SOXL"]}, secrets=secrets)
         finally:
             ledger.db.close()
         return
@@ -561,26 +617,25 @@ def _run_once(args, notification_context=None):
     if notification_context is not None:
         notification_context["plan"] = plan
         notification_context["order_route"] = order_route
-    print_plan(plan)
+    print_plan(plan, secrets=secrets)
     if plan.get("status") == "skipped":
         return
     if plan.get("preset") != preset:
         raise OrderBlocked(f"The recommendation does not match the {preset} account preset")
     plan_dir = ROOT / ".autotrade" / ("plans" if preset == "KMW" else "plans_kmw2")
-    plan_dir.mkdir(parents=True, exist_ok=True)
-    (plan_dir / f"{plan['order_date']}.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_private_plan(plan_dir / f"{plan['order_date']}.json", plan, secrets=secrets)
     if not args.submit and not args.check_account:
         return
     # A displayable next-session recommendation is not executable yet.
     validate_plan(plan, datetime.now(KST), order_route=order_route, preset=preset)
     account = account_id(preset, env=env)
     client = MeritzClient.from_env(env=env)
-    ledger = OrderLedger(args.ledger)
+    ledger = OrderLedger(args.ledger, secrets=secrets)
     try:
         ledger.unresolved(account)
         checked = preflight(client, plan, datetime.now(KST), decimal(args.fee_buffer), order_route=order_route,
                             preset=preset, env=env)
-        print_plan({"preflight": checked})
+        print_plan({"preflight": checked}, secrets=secrets)
         if args.submit and plan["orders"]:
             result = submit_plan(client, plan, ledger, account, checked["exchange_code"],
                                  notification_context=notification_context, order_route=order_route)
@@ -588,7 +643,7 @@ def _run_once(args, notification_context=None):
                 notification_context.update(results=result, completed=True)
             state = "DIRECT_ACCEPTED" if order_route == "direct" else "RESERVED"
             print_plan({"preset": preset, "state": state, "orders": result,
-                        "note": "Order accepted; fills must be checked separately with --status"})
+                        "note": "Order accepted; fills must be checked separately with --status"}, secrets=secrets)
     finally:
         ledger.db.close()
 
@@ -596,6 +651,7 @@ def _run_once(args, notification_context=None):
 def run_once(args):
     preset = validate_preset(getattr(args, "preset", "KMW"))
     env = getattr(args, "credentials", None)
+    secrets = environment_secret_values(env)
     notifier_kwargs = {} if env is None else {"env": env}
     if args.test_notification:
         notifier = configured_notifier(required=True, **notifier_kwargs)
@@ -604,7 +660,7 @@ def run_once(args):
         return
     if args.retry_notifications:
         notifier = configured_notifier(required=True, **notifier_kwargs)
-        ledger = OrderLedger(args.ledger)
+        ledger = OrderLedger(args.ledger, secrets=secrets)
         try:
             pending = ledger.pending_notifications()
             sent = sum(deliver_notification(ledger, row["event_key"], row["text"], notifier, retry=True)
@@ -619,7 +675,7 @@ def run_once(args):
         return _run_once(args)
     notifier = configured_notifier(**notifier_kwargs)
     context = {"preset": preset}
-    notification_ledger = OrderLedger(args.ledger)
+    notification_ledger = OrderLedger(args.ledger, secrets=secrets)
     try:
         _run_once(args, notification_context=context)
         if context.get("completed"):
@@ -693,14 +749,14 @@ def main(argv=None):
                     run_once(args)
                 except Exception as exc:
                     # No automatic same-day retry after an uncertain order result.
-                    print(f"{args.preset} run stopped: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+                    print(f"{args.preset} run stopped: {_cli_error_message(exc)}", file=sys.stderr, flush=True)
         else:
             run_once(args)
         return 0
     except KeyboardInterrupt:
         return 130
     except Exception as exc:
-        print(f"{args.preset} run stopped: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"{args.preset} run stopped: {_cli_error_message(exc)}", file=sys.stderr)
         return 1
 
 
