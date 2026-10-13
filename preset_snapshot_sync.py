@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+from threading import RLock
 from typing import Mapping
 from zoneinfo import ZoneInfo
 
@@ -38,6 +39,9 @@ CONTENTS_URL = f"https://api.github.com/repos/{SNAPSHOT_REPO}/contents/{SNAPSHOT
 SOURCE = f"github:{SNAPSHOT_REPO}/{SNAPSHOT_BRANCH}/{SNAPSHOT_PATH}"
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 MAX_CAS_ATTEMPTS = 3
+# stdout/stderr redirection and the original market-data cache are process
+# shared; serialize only calculations, leaving brokerage/GitHub I/O parallel.
+_MARKET_CALCULATION_LOCK = RLock()
 
 
 class SnapshotSyncBlocked(SnapshotRefreshBlocked):
@@ -239,7 +243,7 @@ def _historical_buy_rules(document, preset, days):
         order_day = _day(day_text)
         basis = previous_trading_date(order_day)
         historical_now = datetime.combine(order_day, time(8), tzinfo=ET)
-        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        with _MARKET_CALCULATION_LOCK, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             trader = _KMWPlanTrader(now=historical_now, expected_basis_date=basis,
                                     initial_capital=float(config["initial_capital"]))
             trader.set_profit_loss_compounding(enabled=True, profit_rate=0.70, loss_rate=0.20,
@@ -409,7 +413,7 @@ def _candidate(document, *, preset, basis, fills, quantity, unresolved, rules, n
                                         unresolved_orders=unresolved, buy_rules=rules)
     if not isinstance(candidate, dict) or {key: value for key, value in candidate.items() if key != preset} != {key: value for key, value in document.items() if key != preset}:
         _blocked("PRESET_MISMATCH", "A refresh attempted to change another preset.")
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+    with _MARKET_CALCULATION_LOCK, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         plan = build_kmw_plan(candidate, now=now, preset=preset)
     if plan.get("preset") != preset or plan.get("status") != "ready" or plan.get("snapshot_fresh") is not True or plan.get("basis_date") != basis.isoformat():
         _blocked("PLAN_VALIDATION_FAILED", "The refreshed original preset recommendation is not ready.")

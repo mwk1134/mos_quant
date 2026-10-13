@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from zoneinfo import ZoneInfo
 
 import requests
@@ -24,7 +25,17 @@ from us_market_calendar import is_us_equity_trading_day
 
 ET = ZoneInfo("America/New_York")
 ENGINE_PORTS = {"KMW": 8701, "KMW2": 8703, "JEH": 8704}
-REFRESH_LEAD = timedelta(minutes=3)
+REFRESH_LEAD = timedelta(minutes=10)
+MAX_REFRESH_ATTEMPTS = 4
+RETRY_BACKOFF_SECONDS = (15, 45, 120)
+# These failures prove that no candidate snapshot was saved by the attempt.
+# Unknown stages, ambiguous saves, malformed facts and configuration failures
+# remain terminal. Retrying always starts with new read-only broker/GitHub facts
+# and preserves the synchronizer's SHA CAS and verified write receipt.
+RETRYABLE_CODES = frozenset({
+    "SNAPSHOT_READ_FAILED", "LEDGER_READ_FAILED", "BUY_RULES_MISSING",
+    "HOLDINGS_MISMATCH", "UNRESOLVED_ORDER", "SNAPSHOT_CONFLICT", "SNAPSHOT_SAVE_FAILED",
+})
 PUBLIC_CODES = frozenset({
     "SNAPSHOT_REFRESH_BLOCKED", "INVALID_REFRESH_DATA", "UNRESOLVED_ORDER", "INVALID_BROKER_FACT",
     "INVALID_REFRESH_DATE", "CONFLICTING_EXECUTION", "CONFLICTING_LEDGER", "FILL_LEDGER_MISMATCH",
@@ -109,6 +120,10 @@ class PresetSnapshotService:
         self.refresh = refresh or refresh_and_load_snapshots
         self.status_reader = status_reader or read_engine_status
         self.attempted = {}
+        self._attempt_states = {}
+        self._lock = threading.RLock()
+        self._workers = {}
+        self._completed = []
         for preset in self.presets:
             path = self.state_dir / preset.lower() / "refresh_status.json"
             try:
@@ -117,17 +132,39 @@ class PresetSnapshotService:
                 if isinstance(target, str):
                     _stamp(datetime.fromisoformat(target))
                     self.attempted[preset] = target
+                    attempt = saved.get("attempt", 1)
+                    if type(attempt) is not int or not 1 <= attempt <= MAX_REFRESH_ATTEMPTS:
+                        attempt = MAX_REFRESH_ATTEMPTS
+                    retry = saved.get("retry_after")
+                    try:
+                        retry_at = _stamp(datetime.fromisoformat(retry)) if isinstance(retry, str) else None
+                    except (ValueError, TypeError):
+                        retry_at = None
+                    # REFRESHING on disk may have reached GitHub before a crash.
+                    # Only a recorded definite failure can resume after restart.
+                    retryable = (saved.get("status") == "BLOCKED"
+                                 and saved.get("code") in RETRYABLE_CODES
+                                 and saved.get("retryable") is True and retry_at is not None)
+                    self._attempt_states[preset] = {
+                        "target": target, "attempt": attempt,
+                        "retry_at": retry_at if retryable else None,
+                    }
             except (OSError, ValueError, TypeError):
                 pass
 
-    def _record(self, preset, now, *, status, code=None, target=None, basis_date=None):
+    def _record(self, preset, now, *, status, code=None, target=None, basis_date=None,
+                attempt=1, retry_after=None):
         record = {"version": 1, "preset": preset, "updated_at": _stamp(now).isoformat(), "status": status}
+        record["attempt"] = attempt
         if code is not None:
             record["code"] = code
         if target is not None:
             record["target"] = target
         if basis_date is not None:
             record["basis_date"] = basis_date
+        if retry_after is not None:
+            record["retryable"] = True
+            record["retry_after"] = _stamp(retry_after).isoformat()
         parent = self.state_dir / preset.lower()
         parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.state_dir, 0o700)
@@ -148,37 +185,108 @@ class PresetSnapshotService:
                 temporary.unlink()
         return record
 
-    def refresh_once(self, preset, *, now, target=None):
+    def refresh_once(self, preset, *, now, target=None, attempt=1):
         preset = validate_preset(preset)
         now = _stamp(now)
+        if type(attempt) is not int or not 1 <= attempt <= MAX_REFRESH_ATTEMPTS:
+            raise ValueError("A bounded refresh attempt is required")
+        started = time.monotonic()
         # Persist the attempt before any GitHub write. A service restart never
         # blindly repeats a possibly accepted write for the same target.
-        self._record(preset, now, status="REFRESHING", target=target)
+        self._record(preset, now, status="REFRESHING", target=target, attempt=attempt)
         if target is not None:
-            self.attempted[preset] = target
+            with self._lock:
+                self.attempted[preset] = target
+                self._attempt_states[preset] = {"target": target, "attempt": attempt, "retry_at": None}
         try:
             env = read_env(default_env_file(preset))
             document, _ = self.refresh(preset=preset, env=env, ledger_path=default_ledger_path(preset), now=now)
             basis = document[preset]["as_of_date"]
             if not isinstance(basis, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", basis):
                 raise ValueError
-            return self._record(preset, now, status="READY", target=target, basis_date=basis)
+            finished = now + timedelta(seconds=max(0, time.monotonic() - started))
+            return self._record(preset, finished, status="READY", target=target, basis_date=basis, attempt=attempt)
         except Exception as error:
-            return self._record(preset, now, status="BLOCKED", code=_code(error), target=target)
+            finished = now + timedelta(seconds=max(0, time.monotonic() - started))
+            code = _code(error)
+            retry_after = None
+            if target is not None and code in RETRYABLE_CODES and attempt < MAX_REFRESH_ATTEMPTS:
+                retry_at = finished + timedelta(seconds=RETRY_BACKOFF_SECONDS[attempt - 1])
+                if retry_at < _stamp(datetime.fromisoformat(target)):
+                    retry_after = retry_at
+            result = self._record(preset, finished, status="BLOCKED", code=code, target=target,
+                                  attempt=attempt, retry_after=retry_after)
+            if target is not None:
+                with self._lock:
+                    self._attempt_states[preset] = {"target": target, "attempt": attempt, "retry_at": retry_after}
+            return result
 
-    def poll(self, *, now=None):
+    def _run_refresh(self, preset, now, target, attempt):
+        try:
+            result = self.refresh_once(preset, now=now, target=target, attempt=attempt)
+        except Exception:
+            # A persistence/worker failure has no confirmed write outcome.
+            # Leave the reserved target terminal rather than retrying it.
+            result = {"version": 1, "preset": preset, "status": "BLOCKED",
+                      "code": "SNAPSHOT_REFRESH_FAILED", "target": target,
+                      "attempt": attempt, "updated_at": now.isoformat()}
+            with self._lock:
+                self._attempt_states[preset] = {"target": target, "attempt": attempt, "retry_at": None}
+        with self._lock:
+            self._completed.append(result)
+            self._workers.pop(preset, None)
+
+    def _drain(self):
+        with self._lock:
+            records, self._completed = self._completed, []
+        return records
+
+    def poll(self, *, now=None, wait=False):
+        """Start independent preset workers without waiting for slow accounts.
+
+        ``wait`` is for bounded offline checks; the production serve loop never
+        waits for a worker. One in-flight refresh per preset protects retries.
+        """
         now = _stamp(now if now is not None else datetime.now(timezone.utc))
-        records = []
+        started = time.monotonic()
+        records = self._drain()
+        launched = []
         for preset in self.presets:
             try:
                 state = self.status_reader(preset)
             except Exception:
                 continue  # A temporary disconnect never changes engine state.
-            target = refresh_due(state, preset=preset, now=now)
-            if target is None or self.attempted.get(preset) == target:
+            current = now + timedelta(seconds=max(0, time.monotonic() - started))
+            target = refresh_due(state, preset=preset, now=current)
+            if target is None:
                 continue
-            records.append(self.refresh_once(preset, now=now, target=target))
-        return records
+            with self._lock:
+                if preset in self._workers:
+                    continue
+                prior = self._attempt_states.get(preset)
+                attempt = 1
+                if prior is not None and prior["target"] == target:
+                    retry_at = prior["retry_at"]
+                    if retry_at is None or current < retry_at or prior["attempt"] >= MAX_REFRESH_ATTEMPTS:
+                        continue
+                    attempt = prior["attempt"] + 1
+                # Reserve before launching: concurrent polls cannot start the
+                # same account or retry while its write outcome is pending.
+                self.attempted[preset] = target
+                self._attempt_states[preset] = {"target": target, "attempt": attempt, "retry_at": None}
+                thread = threading.Thread(target=self._run_refresh,
+                    args=(preset, current, target, attempt), name=f"snapshot-refresh-{preset.lower()}", daemon=True)
+                self._workers[preset] = thread
+                try:
+                    thread.start()
+                except Exception:
+                    self._workers.pop(preset, None)
+                    continue
+                launched.append(thread)
+        if wait:
+            for thread in launched:
+                thread.join(timeout=5)
+        return records + self._drain()
 
     def serve(self, *, stop_event=None, poll_seconds=15):
         if poll_seconds <= 0 or poll_seconds > 60:

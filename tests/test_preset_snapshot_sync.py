@@ -1,9 +1,12 @@
 """Transport tests use fake brokerage/GitHub objects and synthetic credentials."""
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import json
 import os
 import sqlite3
+import sys
+import threading
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
@@ -445,3 +448,98 @@ def test_historical_rules_use_preopen_and_actual_active_configuration(monkeypatc
     assert constructor.call_args.kwargs["expected_basis_date"].isoformat() == "2026-10-09"
     trader.set_ma_alignment_switch.assert_called_once_with(True)
     trader.get_daily_recommendation.assert_called_once_with(skip_simulate=True, preserve_snapshot_shares=True)
+
+
+def test_parallel_plan_and_entry_calculations_serialize_and_restore_process_streams(monkeypatch, capsys):
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    planner_entered, release_planner = threading.Event(), threading.Event()
+    history_attempted, history_entered = threading.Event(), threading.Event()
+    counter_lock = threading.Lock()
+    active = maximum = 0
+    rules = {"mode": "AG", "buy_threshold": 3.6, "sell_threshold": 3.5,
+             "max_hold_days": 7, "strategy_name": "기본"}
+
+    def enter():
+        nonlocal active, maximum
+        with counter_lock:
+            active += 1
+            maximum = max(maximum, active)
+
+    def leave():
+        nonlocal active
+        with counter_lock:
+            active -= 1
+
+    def planning(*args, **kwargs):
+        enter()
+        try:
+            print("synthetic-plan-stdout")
+            print("synthetic-plan-stderr", file=sys.stderr)
+            planner_entered.set()
+            assert release_planner.wait(2), "test must release the serialized calculation"
+            return {"preset": "JEH", "status": "ready", "snapshot_fresh": True,
+                    "basis_date": "2026-10-12", "order_date": "2026-10-13", "mode": "AG",
+                    "buy_entry_rules": rules, "orders": [{"side": "BUY", "round": 7,
+                    "quantity": 20, "price": "132.15"}]}
+        finally:
+            leave()
+
+    trader = Mock()
+    trader._snapshot_to_positions_and_state.return_value = ([], None, None)
+    def recommendation(**kwargs):
+        enter()
+        try:
+            print("synthetic-entry-stdout")
+            print("synthetic-entry-stderr", file=sys.stderr)
+            return {"mode": "AG", "basis_date": "2026-10-09", "strategy_name": "기본",
+                    "active_config": rules}
+        finally:
+            leave()
+    trader.get_daily_recommendation.side_effect = recommendation
+    def constructor(**kwargs):
+        history_entered.set()
+        return trader
+    monkeypatch.setattr(sync, "_KMWPlanTrader", Mock(side_effect=constructor))
+    monkeypatch.setattr(sync, "_kmw_config", Mock(return_value={"initial_capital": 10000,
+        "session_start_date": "2025-10-30", "ma_alignment_switch_enabled": True, "seed_increases": []}))
+    monkeypatch.setattr(sync, "build_kmw_plan", planning)
+    monkeypatch.setattr(sync, "refresh_preset_snapshot", lambda doc, **facts: deepcopy(doc))
+    source = factual_document()
+    def history_calculation():
+        history_attempted.set()
+        return sync._historical_buy_rules(source, "JEH", {"2026-10-12"})
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(sync._candidate, source, preset="JEH", basis=sync._day("2026-10-12"),
+                                fills=[], quantity=100, unresolved=[], rules={}, now=NOW)
+        assert planner_entered.wait(2)
+        second = executor.submit(history_calculation)
+        try:
+            assert history_attempted.wait(2)
+            assert not history_entered.wait(0.05), "entry calculation must wait for the shared market lock"
+        finally:
+            release_planner.set()
+        assert first.result(timeout=2)["JEH"]["pending_buy"]["quantity"] == 20
+        assert second.result(timeout=2)["2026-10-12"]["mode"] == "AG"
+    assert maximum == 1
+    assert active == 0
+    assert sys.stdout is original_stdout
+    assert sys.stderr is original_stderr
+    captured = capsys.readouterr()
+    assert "synthetic-plan" not in captured.out + captured.err
+    assert "synthetic-entry" not in captured.out + captured.err
+
+
+def test_failed_quiet_calculation_restores_streams_and_releases_market_lock(monkeypatch):
+    original_stdout, original_stderr = sys.stdout, sys.stderr
+    monkeypatch.setattr(sync, "refresh_preset_snapshot", lambda doc, **facts: deepcopy(doc))
+    monkeypatch.setattr(sync, "build_kmw_plan", Mock(side_effect=RuntimeError("synthetic-market-failure")))
+    with pytest.raises(RuntimeError):
+        sync._candidate(factual_document(), preset="JEH", basis=sync._day("2026-10-12"),
+                        fills=[], quantity=100, unresolved=[], rules={}, now=NOW)
+    assert sys.stdout is original_stdout
+    assert sys.stderr is original_stderr
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        def subsequent_calculation():
+            with sync._MARKET_CALCULATION_LOCK:
+                return "lock released"
+        assert executor.submit(subsequent_calculation).result(timeout=2) == "lock released"

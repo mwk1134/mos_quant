@@ -23,10 +23,17 @@ def test_due_three_minutes_before_preopen_user_schedule():
     assert target == "2026-10-13T17:01:00+09:00"
 
 
+def test_due_ten_minutes_before_schedule_but_not_before_lead_window():
+    target = NOW + timedelta(minutes=10)
+    assert service.refresh_due(status(next_run=target.isoformat()), preset="JEH", now=NOW) == target.isoformat()
+    assert service.refresh_due(status(next_run=(target + timedelta(seconds=1)).isoformat()),
+                               preset="JEH", now=NOW) is None
+
+
 @pytest.mark.parametrize("changes", [
     {"enabled": False}, {"running": True}, {"preset": "KMW"}, {"preset": None},
     {"next_run": None}, {"next_run": "invalid"}, {"next_run": "2026-10-13T17:01:00"},
-    {"next_run": (NOW + timedelta(minutes=4)).isoformat()},
+    {"next_run": (NOW + timedelta(minutes=11)).isoformat()},
     {"next_run": (NOW - timedelta(seconds=1)).isoformat()},
 ])
 def test_inactive_running_wrong_account_or_invalid_schedule_does_not_trigger(changes):
@@ -55,7 +62,7 @@ def test_poll_only_refreshes_due_enabled_account_and_never_calls_engine_actions(
     parser = Mock(return_value=env)
     monkeypatch.setattr(service, "read_env", parser)
     worker = service.PresetSnapshotService(state_dir=tmp_path / "refresh", refresh=refresh, status_reader=reader)
-    records = worker.poll(now=NOW)
+    records = worker.poll(now=NOW, wait=True)
     assert len(records) == 1
     assert records[0]["preset"] == "JEH"
     assert records[0]["status"] == "READY"
@@ -70,7 +77,7 @@ def test_poll_only_refreshes_due_enabled_account_and_never_calls_engine_actions(
     assert stat.S_IMODE(state.stat().st_mode) == 0o600
     assert stat.S_IMODE(state.parent.stat().st_mode) == 0o700
     assert "synthetic-token" not in state.read_text()
-    worker.poll(now=NOW + timedelta(seconds=15))
+    worker.poll(now=NOW + timedelta(seconds=15), wait=True)
     assert refresh.call_count == 1
 
 
@@ -79,9 +86,9 @@ def test_restart_does_not_repeat_same_persisted_target(monkeypatch, tmp_path):
     refresh = Mock(return_value=({"JEH": {"as_of_date": "2026-10-12"}}, "test"))
     reader = Mock(return_value=status())
     first = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh, status_reader=reader)
-    first.poll(now=NOW)
+    first.poll(now=NOW, wait=True)
     second = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh, status_reader=reader)
-    assert second.poll(now=NOW) == []
+    assert second.poll(now=NOW, wait=True) == []
     assert refresh.call_count == 1
 
 
@@ -90,10 +97,10 @@ def test_ambiguous_refresh_records_safe_code_and_never_retries_same_target(monke
     refresh = Mock(side_effect=SnapshotSyncBlocked("fixed safe message", code="SNAPSHOT_SAVE_UNCONFIRMED"))
     worker = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh,
                                            status_reader=Mock(return_value=status()))
-    result = worker.poll(now=NOW)[0]
+    result = worker.poll(now=NOW, wait=True)[0]
     assert result["status"] == "BLOCKED"
     assert result["code"] == "SNAPSHOT_SAVE_UNCONFIRMED"
-    assert worker.poll(now=NOW + timedelta(seconds=15)) == []
+    assert worker.poll(now=NOW + timedelta(seconds=15), wait=True) == []
     assert refresh.call_count == 1
 
 
@@ -118,6 +125,121 @@ def test_engine_disconnect_does_not_refresh_or_change_engine_state(tmp_path):
     assert worker.poll(now=NOW) == []
     refresh.assert_not_called()
     assert not (tmp_path / "jeh" / "refresh_status.json").exists()
+
+
+def test_slow_account_does_not_block_another_account_or_duplicate_inflight_refresh(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "read_env", lambda path: {})
+    slow_started, release_slow, fast_finished = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+    def refreshed(*, preset, **kwargs):
+        calls.append(preset)
+        if preset == "KMW":
+            slow_started.set()
+            assert release_slow.wait(timeout=3)
+        else:
+            fast_finished.set()
+        return {preset: {"as_of_date": "2026-10-12"}}, "test"
+    worker = service.PresetSnapshotService(presets=("KMW", "KMW2"), state_dir=tmp_path,
+        refresh=refreshed, status_reader=lambda preset: status(preset))
+    try:
+        records = worker.poll(now=NOW)
+        assert slow_started.wait(timeout=1)
+        assert fast_finished.wait(timeout=1)
+        # KMW remains blocked while KMW2 reaches READY independently.
+        for thread in list(worker._workers.values()):
+            if thread.name.endswith("kmw2"):
+                thread.join(timeout=1)
+        records += worker.poll(now=NOW + timedelta(seconds=1))
+        assert any(record["preset"] == "KMW2" and record["status"] == "READY" for record in records)
+        assert calls.count("KMW") == 1 and calls.count("KMW2") == 1
+    finally:
+        release_slow.set()
+        for thread in list(worker._workers.values()):
+            thread.join(timeout=1)
+
+
+def test_definite_read_failure_retries_with_bounded_backoff_and_fresh_facts(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "read_env", Mock(return_value={}))
+    error = SnapshotSyncBlocked("fixed safe message", code="SNAPSHOT_READ_FAILED")
+    refresh = Mock(side_effect=[error, ({"JEH": {"as_of_date": "2026-10-12"}}, "test")])
+    worker = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh,
+        status_reader=Mock(return_value=status(next_run=(NOW + timedelta(minutes=10)).isoformat())))
+    first = worker.poll(now=NOW, wait=True)[0]
+    assert first["status"] == "BLOCKED" and first["retryable"] is True and first["attempt"] == 1
+    assert worker.poll(now=NOW + timedelta(seconds=14), wait=True) == []
+    second = worker.poll(now=NOW + timedelta(seconds=16), wait=True)[0]
+    assert second["status"] == "READY" and second["attempt"] == 2
+    assert refresh.call_count == 2
+    assert refresh.call_args_list[1].kwargs["now"] > refresh.call_args_list[0].kwargs["now"]
+    assert worker.poll(now=NOW + timedelta(minutes=1), wait=True) == []
+
+
+def test_retry_limit_is_persisted_and_not_reset_by_service_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "read_env", Mock(return_value={}))
+    refresh = Mock(side_effect=SnapshotSyncBlocked("fixed safe message", code="SNAPSHOT_READ_FAILED"))
+    reader = Mock(return_value=status(next_run=(NOW + timedelta(minutes=10)).isoformat()))
+    worker = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh, status_reader=reader)
+    for attempt, elapsed in enumerate((0, 16, 62, 183), start=1):
+        result = worker.poll(now=NOW + timedelta(seconds=elapsed), wait=True)[0]
+        assert result["attempt"] == attempt
+        worker = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path,
+                                               refresh=refresh, status_reader=reader)
+    assert worker.poll(now=NOW + timedelta(seconds=400), wait=True) == []
+    assert refresh.call_count == service.MAX_REFRESH_ATTEMPTS
+    saved = json.loads((tmp_path / "jeh" / "refresh_status.json").read_text())
+    assert saved["attempt"] == service.MAX_REFRESH_ATTEMPTS and "retry_after" not in saved
+
+
+@pytest.mark.parametrize("code", ["SNAPSHOT_SAVE_UNCONFIRMED", "SNAPSHOT_REFRESH_FAILED", "UNKNOWN",
+                                  "INVALID_BROKER_FACT", "BUY_LOT_MISMATCH", "SNAPSHOT_AUTH_MISSING"])
+def test_ambiguous_unknown_or_invalid_facts_never_retry_even_after_restart(monkeypatch, tmp_path, code):
+    monkeypatch.setattr(service, "read_env", Mock(return_value={}))
+    refresh = Mock(side_effect=SnapshotSyncBlocked("fixed safe message", code=code))
+    reader = Mock(return_value=status(next_run=(NOW + timedelta(minutes=10)).isoformat()))
+    first = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh, status_reader=reader)
+    blocked = first.poll(now=NOW, wait=True)[0]
+    assert blocked["status"] == "BLOCKED" and "retry_after" not in blocked
+    restored = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh, status_reader=reader)
+    assert restored.poll(now=NOW + timedelta(minutes=2), wait=True) == []
+    assert refresh.call_count == 1
+
+
+def test_crash_during_refreshing_does_not_blindly_retry_an_unconfirmed_write(tmp_path):
+    preset_dir = tmp_path / "jeh"
+    preset_dir.mkdir()
+    (preset_dir / "refresh_status.json").write_text(json.dumps({"preset": "JEH",
+        "target": status()["next_run"], "status": "REFRESHING", "attempt": 1}))
+    refresh = Mock()
+    worker = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path,
+                                           refresh=refresh, status_reader=Mock(return_value=status()))
+    assert worker.poll(now=NOW, wait=True) == []
+    refresh.assert_not_called()
+
+
+def test_corrupt_retry_timestamp_does_not_reset_recorded_attempt(tmp_path):
+    preset_dir = tmp_path / "jeh"
+    preset_dir.mkdir()
+    (preset_dir / "refresh_status.json").write_text(json.dumps({"preset": "JEH",
+        "target": status()["next_run"], "status": "BLOCKED", "attempt": 1,
+        "code": "SNAPSHOT_READ_FAILED", "retryable": True, "retry_after": "invalid"}))
+    refresh = Mock()
+    worker = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path,
+                                           refresh=refresh, status_reader=Mock(return_value=status()))
+    assert worker.poll(now=NOW, wait=True) == []
+    refresh.assert_not_called()
+
+
+def test_retry_does_not_start_after_target_or_after_user_disabled_engine(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "read_env", Mock(return_value={}))
+    refresh = Mock(side_effect=SnapshotSyncBlocked("fixed safe message", code="SNAPSHOT_READ_FAILED"))
+    reader = Mock(return_value=status())
+    worker = service.PresetSnapshotService(presets=("JEH",), state_dir=tmp_path, refresh=refresh, status_reader=reader)
+    worker.poll(now=NOW, wait=True)
+    reader.return_value = status(enabled=False)
+    assert worker.poll(now=NOW + timedelta(seconds=16), wait=True) == []
+    reader.return_value = status()
+    assert worker.poll(now=NOW + timedelta(minutes=4), wait=True) == []
+    assert refresh.call_count == 1
 
 
 def test_stop_event_ends_service_without_status_or_network_calls(tmp_path):
