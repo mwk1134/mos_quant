@@ -582,7 +582,8 @@ def test_account_file_secrets_are_redacted_before_receipts_are_persisted(setup_b
 
 
 def test_each_account_uses_distinct_inert_default_configuration(tmp_path):
-    first, second, third = KMWBackend(), KMWBackend(preset="KMW2"), KMWBackend(preset="JEH")
+    first, second, third, fourth = (KMWBackend(preset=preset)
+                                      for preset in ("KMW", "KMW2", "JEH", "JEH2"))
     assert first.preset == "KMW" and second.preset == "KMW2"
     assert first.env_file.name == ".env.meritz"
     assert second.env_file.name == ".env.meritz.kmw2"
@@ -591,11 +592,16 @@ def test_each_account_uses_distinct_inert_default_configuration(tmp_path):
     assert third.preset == "JEH"
     assert third.env_file.name == ".env.meritz.jeh"
     assert third.ledger_path.name == "orders_jeh.sqlite3"
+    assert fourth.preset == "JEH2"
+    assert fourth.env_file.name == ".env.meritz.jeh2"
+    assert fourth.ledger_path.name == "orders_jeh2.sqlite3"
+    assert len({engine.env_file for engine in (first, second, third, fourth)}) == 4
+    assert len({engine.ledger_path for engine in (first, second, third, fourth)}) == 4
     with pytest.raises(ValueError, match="KMW, KMW2, JEH"):
         KMWBackend(preset="UNREGISTERED")
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
 def test_kmw2_preview_selects_only_kmw2_and_remains_credential_free(tmp_path, monkeypatch, preset):
     snapshots = Mock(return_value=({"KMW": {}, preset: {}}, "test"))
     displayed = {**plan(), "preset": preset}
@@ -613,7 +619,7 @@ def test_kmw2_preview_selects_only_kmw2_and_remains_credential_free(tmp_path, mo
     assert not engine.ledger_path.exists()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
 def test_stale_preview_is_explicit_and_never_weakens_execution_checks(tmp_path, monkeypatch, preset):
     displayed = {**plan(), "preset": preset, "snapshot_date": "2026-10-08",
                  "snapshot_fresh": False, "warnings": ["Stale snapshot"]}
@@ -634,7 +640,7 @@ def test_stale_preview_is_explicit_and_never_weakens_execution_checks(tmp_path, 
     # cannot pass stale validation and instantiate or contact the broker.
 
 
-@pytest.mark.parametrize("preset,other", [(a, b) for a in ("KMW", "KMW2", "JEH") for b in ("KMW", "KMW2", "JEH") if a != b])
+@pytest.mark.parametrize("preset,other", [(a, b) for a in ("KMW", "KMW2", "JEH", "JEH2") for b in ("KMW", "KMW2", "JEH", "JEH2") if a != b])
 @pytest.mark.parametrize("status", ["ready", "skipped"])
 def test_other_account_plan_is_rejected_before_credentials_or_history(
         tmp_path, monkeypatch, preset, other, status):
@@ -650,7 +656,7 @@ def test_other_account_plan_is_rejected_before_credentials_or_history(
     assert not engine.ledger_path.exists()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
 def test_readiness_is_local_and_does_not_disclose_or_mutate_credentials(tmp_path, monkeypatch, preset):
     path = tmp_path / "second.env"
     credentials = write_account_env(path, preset)
@@ -668,7 +674,7 @@ def test_readiness_is_local_and_does_not_disclose_or_mutate_credentials(tmp_path
     assert not engine.ledger_path.exists()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
 @pytest.mark.parametrize("configuration", [
     "MERITZ_ACCOUNT_PRESET=KMW2\n",
     "MERITZ_ACCOUNT_PRESET=KMW\nMERITZ_APP_KEY=fake-key\nMERITZ_APP_SECRET=fake-secret\nMERITZ_MAC_ADDRESS=AABBCCDDEEFF\n",
@@ -696,7 +702,7 @@ def test_separate_account_backends_send_their_own_mapping_and_notification_label
     from kmw_autotrade import account_id
     clients, notifiers, captured = {}, {}, []
     engines = []
-    for preset in ("KMW", "KMW2", "JEH"):
+    for preset in ("KMW", "KMW2", "JEH", "JEH2"):
         path = tmp_path / f"{preset}.env"
         values = write_account_env(path, preset, key=f"fake-{preset}-key")
         engines.append((KMWBackend(preset=preset, env_file=path, ledger_path=tmp_path / f"{preset}.db",
@@ -715,7 +721,7 @@ def test_separate_account_backends_send_their_own_mapping_and_notification_label
     monkeypatch.setenv("MERITZ_ACCOUNT_PRESET", "KMW")
     for engine, values in engines:
         original = {**plan(), "preset": engine.preset}
-        if engine.preset == "JEH":
+        if engine.preset in {"JEH", "JEH2"}:
             original["orders"][4].update(order_type="MOC", price="0")
         before = deepcopy(original)
         result = engine.execute(original, NOW)
@@ -733,11 +739,11 @@ def test_separate_account_backends_send_their_own_mapping_and_notification_label
             assert ledger.rows(account_id("KMW", env={"MERITZ_ACCOUNT_PRESET": "KMW", "MERITZ_APP_KEY": "unrelated-fake-key"})) == []
         finally:
             ledger.db.close()
-    assert [value["MERITZ_ACCOUNT_PRESET"] for value in captured] == ["KMW", "KMW2", "JEH"]
+    assert [value["MERITZ_ACCOUNT_PRESET"] for value in captured] == ["KMW", "KMW2", "JEH", "JEH2"]
     assert __import__("os").environ["MERITZ_APP_KEY"] == "unrelated-fake-key"
 
 
-@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH"])
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2"])
 def test_refresh_preview_passes_only_its_account_mapping_and_returns_fresh_plan(tmp_path, monkeypatch, preset):
     import sys
     import types
@@ -768,18 +774,19 @@ def test_refresh_preview_passes_only_its_account_mapping_and_returns_fresh_plan(
     forbidden.assert_not_called()
 
 
+@pytest.mark.parametrize("preset", ["JEH", "JEH2"])
 @pytest.mark.parametrize("scenario", ["refresh_failed", "stale", "wrong_preset"])
-def test_refresh_failure_never_falls_back_to_stale_plan_or_exposes_credentials(tmp_path, monkeypatch, scenario):
+def test_refresh_failure_never_falls_back_to_stale_plan_or_exposes_credentials(tmp_path, monkeypatch, scenario, preset):
     import sys
     import types
 
-    path = tmp_path / "jeh.env"
-    write_account_env(path, "JEH", key="synthetic-private-key")
-    synchronizer = Mock(return_value=({"JEH": {}}, "github:test"))
+    path = tmp_path / (preset.lower() + ".env")
+    write_account_env(path, preset, key="synthetic-private-key")
+    synchronizer = Mock(return_value=({preset: {}}, "github:test"))
     module = types.ModuleType("preset_snapshot_sync")
     module.refresh_and_load_snapshots = synchronizer
     monkeypatch.setitem(sys.modules, "preset_snapshot_sync", module)
-    displayed = {**plan(), "preset": "JEH"}
+    displayed = {**plan(), "preset": preset}
     if scenario == "refresh_failed":
         synchronizer.side_effect = RuntimeError("https://synthetic-private-key.example/private-token")
     elif scenario == "stale":
@@ -791,7 +798,7 @@ def test_refresh_failure_never_falls_back_to_stale_plan_or_exposes_credentials(t
     monkeypatch.setattr(backend_module, "build_kmw_plan", planner)
     monkeypatch.setattr(backend_module, "load_snapshots", forbidden)
     monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
-    engine = KMWBackend(preset="JEH", env_file=path, ledger_path=tmp_path / "unused.db")
+    engine = KMWBackend(preset=preset, env_file=path, ledger_path=tmp_path / "unused.db")
     with pytest.raises(EngineBlocked) as caught:
         engine.refresh_preview(NOW)
     assert "synthetic-private-key" not in str(caught.value)

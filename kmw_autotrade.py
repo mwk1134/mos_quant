@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Account-isolated KMW/KMW2/JEH runner; default execution prints a plan."""
+"""Account-isolated KMW/KMW2/JEH/JEH2 runner; default execution prints a plan."""
 from __future__ import annotations
 
 import argparse
@@ -489,6 +489,7 @@ def _cli_error_message(exc):
         "The KMW credential file is missing",
         "The KMW2 credential file is missing",
         "The JEH credential file is missing",
+        "The JEH2 credential file is missing",
         "--allow-stale-preview cannot be used with broker account commands",
         "Status and Telegram-only commands are one-time commands",
     }
@@ -704,7 +705,7 @@ def next_run(now, at):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="KMW/KMW2/JEH SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
+    parser = argparse.ArgumentParser(description="KMW/KMW2/JEH/JEH2 SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--submit", action="store_true", help="Actually submit this account's planned orders")
     mode.add_argument("--check-account", action="store_true", help="Read broker account and validate without placing orders")

@@ -256,8 +256,10 @@ def test_auth_route_or_gateway_failure_blocks_followup_control_requests(status):
     assert result["result"]["disabled"]["enable"] is True
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
-@pytest.mark.parametrize("received", [None, "KMW", "OTHER"])
+@pytest.mark.parametrize("preset,received", [
+    (preset, received) for preset in ("KMW2", "JEH", "JEH2")
+    for received in (None, "KMW", "KMW2", "JEH", "JEH2", "OTHER") if preset != received
+])
 def test_additional_account_requires_matching_status_marker_before_controls(preset, received):
     status = dict(STATUS)
     if received is not None:
@@ -269,11 +271,12 @@ def test_additional_account_requires_matching_status_marker_before_controls(pres
     assert "선택한 프리셋" in result["result"]["error"]
 
 
-def test_jeh_matching_status_preserves_stale_preview_but_disables_live_submission():
-    status = {**STATUS, "preset": "JEH", "enabled": True, "review_id": "fake-jeh-review",
-              "plan": {"preset": "JEH", "status": "ready", "snapshot_fresh": False,
+@pytest.mark.parametrize("preset", ["JEH", "JEH2"])
+def test_account_matching_status_preserves_stale_preview_but_disables_live_submission(preset):
+    status = {**STATUS, "preset": preset, "enabled": True, "review_id": "fake-jeh-review",
+              "plan": {"preset": preset, "status": "ready", "snapshot_fresh": False,
                        "warnings": ["Preview only"], "orders": [{"side": "SELL", "quantity": 10}]}}
-    result = frontend(output(), initial_response={"json": status}, preset="JEH")
+    result = frontend(output(), initial_response={"json": status}, preset=preset)
     assert result["result"]["connectionReady"] is True
     assert result["result"]["disabled"]["preview"] is False
     assert result["result"]["disabled"]["run"] is True

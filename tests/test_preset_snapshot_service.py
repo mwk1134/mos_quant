@@ -72,7 +72,7 @@ def test_poll_only_refreshes_due_enabled_account_and_never_calls_engine_actions(
     assert refresh.call_args.kwargs["env"] == env
     assert refresh.call_args.kwargs["ledger_path"].name == "orders_jeh.sqlite3"
     assert parser.call_args.args[0].name == ".env.meritz.jeh"
-    assert [call.args[0] for call in reader.call_args_list] == ["KMW", "KMW2", "JEH"]
+    assert [call.args[0] for call in reader.call_args_list] == ["KMW", "KMW2", "JEH", "JEH2"]
     state = tmp_path / "refresh" / "jeh" / "refresh_status.json"
     assert stat.S_IMODE(state.stat().st_mode) == 0o600
     assert stat.S_IMODE(state.parent.stat().st_mode) == 0o700
@@ -251,18 +251,97 @@ def test_stop_event_ends_service_without_status_or_network_calls(tmp_path):
     reader.assert_not_called()
 
 
-def test_status_reader_uses_allowlisted_local_get_and_no_environment_proxy(monkeypatch):
+@pytest.mark.parametrize("preset,port", [("KMW", 8701), ("KMW2", 8703), ("JEH", 8704), ("JEH2", 8705)])
+def test_status_reader_uses_allowlisted_local_get_and_no_environment_proxy(monkeypatch, preset, port):
     session = Mock()
     response = Mock(status_code=200, content=b"{}", headers={"Content-Type": "application/json"})
-    response.json.return_value = status()
+    response.json.return_value = status(preset)
     session.get.return_value = response
     monkeypatch.setattr(service.requests, "Session", Mock(return_value=session))
-    assert service.read_engine_status("JEH") == status()
-    assert session.get.call_args.args == ("http://127.0.0.1:8704/api/status",)
+    assert service.read_engine_status(preset) == status(preset)
+    assert session.get.call_args.args == (f"http://127.0.0.1:{port}/api/status",)
     assert session.get.call_args.kwargs["allow_redirects"] is False
     assert session.get.call_args.kwargs["timeout"] == 5
     assert session.trust_env is False
     assert [call[0] for call in session.method_calls] == ["get", "close"]
+
+
+def test_jeh2_refresh_uses_only_its_env_ledger_and_private_status_path(monkeypatch, tmp_path):
+    env = {"MERITZ_ACCOUNT_PRESET": "JEH2", "GITHUB_TOKEN": "synthetic-jeh2-private-token"}
+    parser = Mock(return_value=env)
+    refresh = Mock(return_value=({"JEH2": {"as_of_date": "2026-10-12"}}, "test"))
+    reader = Mock(side_effect=lambda preset: status(preset, enabled=preset == "JEH2"))
+    monkeypatch.setattr(service, "read_env", parser)
+    worker = service.PresetSnapshotService(state_dir=tmp_path, refresh=refresh, status_reader=reader)
+    result = worker.poll(now=NOW, wait=True)
+    assert len(result) == 1 and result[0]["preset"] == "JEH2" and result[0]["status"] == "READY"
+    assert refresh.call_count == 1 and refresh.call_args.kwargs["preset"] == "JEH2"
+    assert refresh.call_args.kwargs["env"] == env
+    assert refresh.call_args.kwargs["ledger_path"].name == "orders_jeh2.sqlite3"
+    assert parser.call_args.args[0].name == ".env.meritz.jeh2"
+    assert [call.args[0] for call in reader.call_args_list] == ["KMW", "KMW2", "JEH", "JEH2"]
+    recorded = tmp_path / "jeh2" / "refresh_status.json"
+    assert stat.S_IMODE(recorded.stat().st_mode) == 0o600
+    assert stat.S_IMODE(recorded.parent.stat().st_mode) == 0o700
+    assert "synthetic-jeh2-private-token" not in recorded.read_text()
+    worker.poll(now=NOW + timedelta(seconds=15), wait=True)
+    assert refresh.call_count == 1
+
+
+@pytest.mark.parametrize("market_date", [(2026, 12, 25), (2026, 10, 17), (2026, 10, 18)])
+def test_jeh2_holiday_and_weekend_never_prepare_snapshot(monkeypatch, tmp_path, market_date):
+    instant = datetime(*market_date, 16, 58, tzinfo=ZoneInfo("Asia/Seoul"))
+    refresh = Mock()
+    reader = Mock(return_value=status("JEH2", next_run=(instant + timedelta(minutes=3)).isoformat()))
+    worker = service.PresetSnapshotService(presets=("JEH2",), state_dir=tmp_path,
+                                           refresh=refresh, status_reader=reader)
+    assert worker.poll(now=instant, wait=True) == []
+    refresh.assert_not_called()
+    assert not (tmp_path / "jeh2").exists()
+
+
+@pytest.mark.parametrize("marker", [None, "JEH", "KMW", "KMW2"])
+def test_jeh2_status_reader_rejects_other_account_or_missing_preset_marker(monkeypatch, marker):
+    session = Mock()
+    response = Mock(status_code=200, content=b"{}", headers={"Content-Type": "application/json"})
+    response.json.return_value = status(marker)
+    session.get.return_value = response
+    monkeypatch.setattr(service.requests, "Session", Mock(return_value=session))
+    with pytest.raises(ValueError, match="cannot be verified"):
+        service.read_engine_status("JEH2")
+    assert session.get.call_args.args == ("http://127.0.0.1:8705/api/status",)
+    session.close.assert_called_once()
+
+
+def test_slow_jeh_does_not_block_independent_jeh2_preparation(monkeypatch, tmp_path):
+    monkeypatch.setattr(service, "read_env", lambda path: {})
+    slow_started, release_slow, fast_finished = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+
+    def refreshed(*, preset, **kwargs):
+        calls.append(preset)
+        if preset == "JEH":
+            slow_started.set()
+            assert release_slow.wait(timeout=3)
+        else:
+            fast_finished.set()
+        return {preset: {"as_of_date": "2026-10-12"}}, "test"
+
+    worker = service.PresetSnapshotService(presets=("JEH", "JEH2"), state_dir=tmp_path,
+                                           refresh=refreshed, status_reader=lambda preset: status(preset))
+    try:
+        records = worker.poll(now=NOW)
+        assert slow_started.wait(timeout=1) and fast_finished.wait(timeout=1)
+        for thread in list(worker._workers.values()):
+            if thread.name.endswith("jeh2"):
+                thread.join(timeout=1)
+        records += worker.poll(now=NOW + timedelta(seconds=1))
+        assert any(record["preset"] == "JEH2" and record["status"] == "READY" for record in records)
+        assert calls.count("JEH") == 1 and calls.count("JEH2") == 1
+    finally:
+        release_slow.set()
+        for thread in list(worker._workers.values()):
+            thread.join(timeout=1)
 
 
 def test_one_time_cli_requires_explicit_registered_preset(monkeypatch):

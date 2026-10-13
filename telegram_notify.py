@@ -214,7 +214,7 @@ def format_order_notification(
     else:
         state = "주문 없음"
     preset = plan.get("preset")
-    preset = preset if isinstance(preset, str) and preset in {"KMW", "KMW2", "JEH"} else "KMW"
+    preset = preset if isinstance(preset, str) and preset in {"KMW", "KMW2", "JEH", "JEH2"} else "KMW"
     lines = [f"{preset} 자동매매 · SOXL", state,
              f"미국 주문일: {_order_day(plan)}",
              f"계산 시각(KST): {_generated_time(plan)}"]

@@ -153,6 +153,14 @@ class TelegramNotifierTests(unittest.TestCase):
 
 
 class OrderNotificationFormattingTests(unittest.TestCase):
+    def test_jeh2_notification_uses_its_account_label_and_exact_order_receipt(self):
+        result = {**RESULT, "state": "DIRECT_ACCEPTED", "response": {"data": {"oder_no": 3456}}}
+        text = format_order_notification({**PLAN, "preset": "JEH2", "order_route": "direct"}, [result])
+        self.assertTrue(text.startswith("JEH2 자동매매 · SOXL\n"))
+        self.assertIn("주문번호 3456", text)
+        self.assertIn("매수 1주 LOC $144.79", text)
+        self.assertIn("체결 완료 알림이 아닙니다", text)
+
     def test_jeh_notification_identifies_the_account_and_preserves_receipt(self):
         result = {**RESULT, "state": "DIRECT_ACCEPTED", "response": {"data": {"oder_no": 1234}}}
         text = format_order_notification({**PLAN, "preset": "JEH", "order_route": "direct"}, [result])

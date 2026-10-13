@@ -29,7 +29,7 @@ _POST_ROUTES = {"/api/" + action for action in _ACTIONS - {"status"}}
 _MAX_BODY = 16_384
 _MAX_RESPONSE = 2 * 1024 * 1024
 _ENGINE_PREFIX_FIELDS = (("", "engine_port"), ("/kmw2", "kmw2_engine_port"),
-                         ("/jeh", "jeh_engine_port"))
+                         ("/jeh", "jeh_engine_port"), ("/jeh2", "jeh2_engine_port"))
 _CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
         "connect-src 'self'; img-src 'none'; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'none'")
@@ -79,10 +79,10 @@ def _port(value: Any, *, allow_zero: bool = False) -> int:
 
 
 def _engine_targets(*, engine_port: Any = 8701, kmw2_engine_port: Any = None,
-                    jeh_engine_port: Any = None) -> dict[str, int]:
+                    jeh_engine_port: Any = None, jeh2_engine_port: Any = None) -> dict[str, int]:
     """Map fixed account prefixes to distinct, explicitly configured ports."""
     values = {"engine_port": engine_port, "kmw2_engine_port": kmw2_engine_port,
-              "jeh_engine_port": jeh_engine_port}
+              "jeh_engine_port": jeh_engine_port, "jeh2_engine_port": jeh2_engine_port}
     targets = {prefix: _port(values[field]) for prefix, field in _ENGINE_PREFIX_FIELDS
                if not prefix or values[field] is not None}
     if len(set(targets.values())) != len(targets):
@@ -97,6 +97,7 @@ class PhoneGatewayServer(ThreadingHTTPServer):
                  trusted_host: str | None = None, engine_port: int = 8701,
                  kmw2_engine_port: int | None = None,
                  jeh_engine_port: int | None = None,
+                 jeh2_engine_port: int | None = None,
                  host: str = "127.0.0.1", port: int = 8702,
                  allow_short_password: bool = False):
         if host != "127.0.0.1":
@@ -107,12 +108,14 @@ class PhoneGatewayServer(ThreadingHTTPServer):
         self.auth_failures: dict[str, list[float]] = {}
         self.engine_targets = _engine_targets(engine_port=engine_port,
                                              kmw2_engine_port=kmw2_engine_port,
-                                             jeh_engine_port=jeh_engine_port)
+                                             jeh_engine_port=jeh_engine_port,
+                                             jeh2_engine_port=jeh2_engine_port)
         self.engine_port = self.engine_targets[""]
         self.engine_host = f"127.0.0.1:{self.engine_port}"
         self.engine_origin = "http://" + self.engine_host
         self.kmw2_engine_port = self.engine_targets.get("/kmw2")
         self.jeh_engine_port = self.engine_targets.get("/jeh")
+        self.jeh2_engine_port = self.engine_targets.get("/jeh2")
         super().__init__((host, _port(port, allow_zero=True)), _Handler)
 
 
@@ -351,6 +354,7 @@ def load_config(path: str | Path) -> dict[str, Any]:
             raise ValueError("Gateway configuration is too large")
         values = json.loads(raw)
         allowed = {"public_origin", "username", "password", "engine_port", "kmw2_engine_port", "jeh_engine_port",
+                   "jeh2_engine_port",
                    "trusted_host", "port", "allow_short_password"}
         if not isinstance(values, dict) or set(values) - allowed or not {"public_origin", "username", "password"} <= set(values):
             raise ValueError("Gateway configuration fields are invalid")
@@ -358,7 +362,8 @@ def load_config(path: str | Path) -> dict[str, Any]:
         _credentials_digest(values["username"], values["password"], allow_short_password=values.get("allow_short_password", False))
         _engine_targets(engine_port=values.get("engine_port", 8701),
                         kmw2_engine_port=values.get("kmw2_engine_port"),
-                        jeh_engine_port=values.get("jeh_engine_port"))
+                        jeh_engine_port=values.get("jeh_engine_port"),
+                        jeh2_engine_port=values.get("jeh2_engine_port"))
         _port(values.get("port", 8702))
         return values
     finally:

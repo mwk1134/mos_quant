@@ -333,7 +333,7 @@ def main(argv=None):
     parser.add_argument("--ledger", type=Path)
     parser.add_argument("--port", type=int)
     args = parser.parse_args(argv)
-    args.port = args.port if args.port is not None else {"KMW": 8701, "KMW2": 8703, "JEH": 8704}[args.preset]
+    args.port = args.port if args.port is not None else {"KMW": 8701, "KMW2": 8703, "JEH": 8704, "JEH2": 8705}[args.preset]
     from kmw_engine_backend import KMWBackend
     backend_kwargs = {"preset": args.preset}
     if args.env_file is not None:

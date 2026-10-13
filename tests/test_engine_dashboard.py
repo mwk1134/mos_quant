@@ -99,7 +99,7 @@ def test_create_server_is_inert_and_rejects_external_bind():
         create_server(engine, host="0.0.0.0", port=0)
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
 def test_additional_account_dashboard_is_labeled_and_remains_inactive(preset):
     engine = FakeEngine()
     engine.preset = preset
@@ -118,6 +118,53 @@ def test_additional_account_dashboard_is_labeled_and_remains_inactive(preset):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_four_account_dashboards_keep_status_markers_and_csrf_tokens_isolated():
+    class AccountEngine(FakeEngine):
+        def __init__(self, preset):
+            super().__init__()
+            self.preset = preset
+            self.plan["preset"] = preset
+
+        def status(self):
+            return {**super().status(), "preset": self.preset}
+
+    dashboards = []
+    try:
+        for preset in ("KMW", "KMW2", "JEH", "JEH2"):
+            engine = AccountEngine(preset)
+            server = create_server(engine, port=0)
+            thread = threading.Thread(target=server.serve_forever,
+                                      kwargs={"poll_interval": 0.01}, daemon=True)
+            thread.start()
+            dashboards.append((server, engine, thread))
+        assert len({server.csrf_token for server, _, _ in dashboards}) == 4
+        for server, engine, _ in dashboards:
+            code, _, page = request(server, "/")
+            assert code == 200
+            assert f'<meta name="engine-preset" content="{engine.preset}">' in page
+            assert server.csrf_token in page
+            code, _, body = request(server)
+            status = json.loads(body)
+            assert code == 200 and status["preset"] == engine.preset
+            assert status["plan"]["preset"] == engine.preset
+            for other, _, _ in dashboards:
+                if other is server:
+                    continue
+                assert other.csrf_token not in page
+                code, _, _ = post(server, "/api/preview", headers={"X-CSRF-Token": other.csrf_token})
+                assert code == 403
+                code, _, _ = post(server, "/api/preview", headers={"Origin": other.origin})
+                assert code == 403
+            assert engine.calls == [] and engine.enabled is False
+            assert post(server, "/api/preview")[0] == 200
+            assert engine.calls == ["preview"] and engine.enabled is False
+    finally:
+        for server, _, thread in dashboards:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
 def test_read_status_and_ui_never_activate(dashboard):

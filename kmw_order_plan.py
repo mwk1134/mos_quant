@@ -50,11 +50,22 @@ DEFAULT_JEH_CONFIG = {
     "position_edits": {},
     "ma_alignment_switch_enabled": False,
 }
-SUPPORTED_PRESETS = ("KMW", "KMW2", "JEH")
+DEFAULT_JEH2_CONFIG = {
+    "initial_capital": 2704.0,
+    "session_start_date": "2025-12-22",
+    "seed_increases": [
+        {"date": "2026-01-15", "amount": 678.0},
+        {"date": "2026-06-16", "amount": 600.0},
+    ],
+    "position_edits": {},
+    "ma_alignment_switch_enabled": False,
+}
+SUPPORTED_PRESETS = ("KMW", "KMW2", "JEH", "JEH2")
 _DEFAULT_PRESET_CONFIGS = {
     "KMW": DEFAULT_KMW_CONFIG,
     "KMW2": DEFAULT_KMW2_CONFIG,
     "JEH": DEFAULT_JEH_CONFIG,
+    "JEH2": DEFAULT_JEH2_CONFIG,
 }
 
 
@@ -183,10 +194,13 @@ def _kmw_config(all_snapshots: dict, snapshot: dict, *, preset: str = "KMW") -> 
         _date(seed.get("date"), "seed increase date")
         _number(seed.get("amount"), "seed increase amount")
     # app.py's ensure_preset_seed_increase enforces this entry after loading.
-    mandatory_seed = {"date": "2026-06-21", "amount": 11293.0}
-    if preset == "KMW" and not any(
+    mandatory_seed = {
+        "KMW": {"date": "2026-06-21", "amount": 11293.0},
+        "JEH2": {"date": "2026-06-16", "amount": 600.0},
+    }.get(preset)
+    if mandatory_seed is not None and not any(
         seed["date"] == mandatory_seed["date"]
-        and Decimal(str(seed["amount"])) == Decimal("11293")
+        and Decimal(str(seed["amount"])) == Decimal(str(mandatory_seed["amount"]))
         for seed in config["seed_increases"]
     ):
         config["seed_increases"].append(mandatory_seed)
@@ -213,7 +227,8 @@ def build_kmw_plan(
     ``allow_stale_snapshot`` permits a preview using older factual holdings;
     the returned ``snapshot_fresh=False`` must prohibit broker submission.
     ``preset`` selects only that preset's snapshot and saved configuration;
-    KMW2 and JEH never inherit KMW holdings, seeds, or cash. Omission preserves KMW.
+    Accounts never inherit another preset's holdings, seeds, or cash.
+    Omission preserves KMW.
     """
     if not isinstance(preset, str) or preset not in SUPPORTED_PRESETS:
         raise ValueError(f"Unsupported preset: {preset!r}; expected one of {', '.join(SUPPORTED_PRESETS)}")
