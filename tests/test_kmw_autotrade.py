@@ -174,6 +174,39 @@ def test_preview_never_authenticates_or_submits(tmp_path):
         assert main(["--snapshot-file", str(path)]) == 0
 
 
+@pytest.mark.parametrize("current,order_date,error", [
+    (datetime(2026, 10, 13, 8, 41, tzinfo=NOW.tzinfo), "2026-10-13", "today's US trading session"),
+    (datetime(2026, 10, 12, 23, 1, tzinfo=NOW.tzinfo), "2026-10-12", "pre-open recommendation"),
+])
+@pytest.mark.parametrize("mode", ["--submit", "--check-account"])
+def test_cli_displayable_plan_outside_window_stops_before_broker_reads_or_orders(
+        tmp_path, monkeypatch, capsys, current, order_date, error, mode):
+    path = tmp_path / "snapshot.json"
+    path.write_text('{"KMW": {}}')
+    displayed = plan()
+    displayed["order_date"] = order_date
+    client = broker()
+    monkeypatch.setenv("MERITZ_ACCOUNT_PRESET", "KMW")
+    monkeypatch.setenv("MERITZ_APP_KEY", "fake-cli-key")
+    # Keep all plan and notification files isolated; no real account or network
+    # call is needed to prove the command rejects a currently visible plan.
+    monkeypatch.setattr("kmw_autotrade.ROOT", tmp_path)
+    monkeypatch.setattr("kmw_autotrade.MeritzClient.from_env", Mock(return_value=client))
+    monkeypatch.setattr("kmw_autotrade.configured_notifier", lambda: Mock())
+    with patch("kmw_autotrade.build_kmw_plan", return_value=displayed), \
+         patch("kmw_autotrade.datetime") as frozen_clock:
+        frozen_clock.now.side_effect = lambda tz=None: current.astimezone(tz) if tz else current
+        assert main([mode, "--snapshot-file", str(path), "--ledger", str(tmp_path / "orders.db")]) == 1
+    assert error in capsys.readouterr().err
+    assert client.mock_calls == []
+    ledger = OrderLedger(tmp_path / "orders.db")
+    try:
+        assert ledger.rows("account") == []
+        assert ledger.db.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
+    finally:
+        ledger.db.close()
+
+
 def test_stale_preview_cannot_be_combined_with_live_options():
     assert main(["--allow-stale-preview", "--submit"]) == 1
 

@@ -77,6 +77,23 @@ def previous_trading_date(day: date) -> date:
     return previous
 
 
+def next_trading_date(day: date) -> date:
+    following = day + timedelta(days=1)
+    while not is_us_equity_trading_day(following):
+        following += timedelta(days=1)
+    return following
+
+
+def completed_trading_date(et_now: datetime) -> date:
+    """Match the web app's latest completed session at its 16:00 ET cutoff."""
+    if (
+        is_us_equity_trading_day(et_now.date())
+        and et_now.time().replace(tzinfo=None) >= time(16)
+    ):
+        return et_now.date()
+    return previous_trading_date(et_now.date())
+
+
 class _KMWPlanTrader(SOXLQuantTrader):
     """Keep factual quantities/cash while reusing the app's recommendation."""
 
@@ -92,8 +109,9 @@ class _KMWPlanTrader(SOXLQuantTrader):
         data = super().get_stock_data(ticker, *args, **kwargs)
         if data is None or data.empty:
             raise ValueError(f"{ticker} market data is unavailable")
-        # Only completed daily candles can contribute to today's order plan.
-        data = data[data.index.date < self._plan_now.date()].copy()
+        # Include the same-day candle after the regular close, but never let a
+        # provider's partial order-day candle enter a recommendation.
+        data = data[data.index.date <= self._expected_basis_date].copy()
         if data.empty or data.index[-1].date() != self._expected_basis_date:
             last = data.index[-1].date().isoformat() if not data.empty else "none"
             raise ValueError(
@@ -154,12 +172,14 @@ def build_kmw_plan(
     *,
     allow_stale_snapshot: bool = False,
 ) -> dict:
-    """Return today's KMW plan, or raise for stale/incomplete portfolio data.
+    """Return the upcoming KMW plan, or raise for stale/incomplete holdings.
 
     ``all_snapshots`` has the same shape as ``data/positions_snapshots.json``.
-    ``now`` must carry a timezone; omitted means the current instant.  Plans
-    only run before 09:30 ET because recommendations use completed daily bars.
-    That also keeps early-close days outside any uncertain intraday cutoff.
+    ``now`` must carry a timezone; omitted means the current instant.  Like the
+    web app, recommendations use the latest completed regular session (16:00
+    ET cutoff) and are for the next trading day.  They remain visible during
+    the session, after close, and on weekends/holidays.  Submission timing is
+    checked separately by the order engine.
     ``allow_stale_snapshot`` permits a preview using older factual holdings;
     the returned ``snapshot_fresh=False`` must prohibit broker submission.
     """
@@ -167,8 +187,8 @@ def build_kmw_plan(
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be a timezone-aware datetime")
     et_now = now.astimezone(ET)
-    order_day = et_now.date()
-    basis_day = previous_trading_date(order_day)
+    basis_day = completed_trading_date(et_now)
+    order_day = next_trading_date(basis_day)
     plan = {
         "preset": "KMW",
         "status": "skipped",
@@ -179,12 +199,6 @@ def build_kmw_plan(
         "orders": [],
         "warnings": [],
     }
-    if not is_us_equity_trading_day(order_day):
-        plan["reason"] = "US market holiday or weekend"
-        return plan
-    if et_now.time().replace(tzinfo=None) >= time(9, 30):
-        plan["reason"] = "Recommendation window closed; run before 09:30 America/New_York"
-        return plan
     if not isinstance(all_snapshots, dict):
         raise ValueError("Snapshot document must be an object")
     snapshot = deepcopy(all_snapshots.get("KMW"))

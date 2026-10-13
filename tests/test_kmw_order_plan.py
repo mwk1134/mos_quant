@@ -42,7 +42,8 @@ def snapshots():
 def recommendation(self, **kwargs):
     assert kwargs == {"skip_simulate": True, "preserve_snapshot_shares": True}
     return {
-        "basis_date": "2026-10-09", "buy_order_date": "2026-10-12",
+        "basis_date": self._expected_basis_date.isoformat(),
+        "buy_order_date": self._get_next_trading_day(self._expected_basis_date.isoformat()),
         "mode": "AG", "strategy_name": "기본", "can_buy": True,
         "buy_price": 100.005, "next_buy_amount": 1000.05,
         "next_buy_round": self.current_round,
@@ -121,13 +122,47 @@ class KMWOrderPlanTests(unittest.TestCase):
                     build_kmw_plan(source, NOW)
             get_rec.assert_not_called()
 
-    def test_holiday_and_regular_session_skip_without_market_access(self):
-        with patch.object(_KMWPlanTrader, "get_daily_recommendation") as get_rec:
-            holiday = build_kmw_plan({}, datetime(2026, 11, 26, 17, 1, tzinfo=KST))
-            session = build_kmw_plan({}, datetime(2026, 10, 12, 23, 0, tzinfo=KST))
-        self.assertEqual(holiday["status"], "skipped")
-        self.assertEqual(session["status"], "skipped")
-        get_rec.assert_not_called()
+    def test_plan_remains_visible_using_completed_close_and_next_trading_day(self):
+        cases = (
+            # The reported Korean morning was already after Monday's US close.
+            (datetime(2026, 10, 13, 8, 41, tzinfo=KST), "2026-10-12", "2026-10-13"),
+            # Before and during Monday's session, Friday remains the basis.
+            (datetime(2026, 10, 12, 17, 1, tzinfo=KST), "2026-10-09", "2026-10-12"),
+            (datetime(2026, 10, 12, 23, 0, tzinfo=KST), "2026-10-09", "2026-10-12"),
+            (datetime(2026, 10, 13, 4, 59, tzinfo=KST), "2026-10-09", "2026-10-12"),
+            (datetime(2026, 10, 13, 5, 0, tzinfo=KST), "2026-10-12", "2026-10-13"),
+            # Weekend and full-day holiday previews target the next session.
+            (datetime(2026, 10, 18, 17, 1, tzinfo=KST), "2026-10-16", "2026-10-19"),
+            (datetime(2026, 11, 26, 17, 1, tzinfo=KST), "2026-11-25", "2026-11-27"),
+            # After DST ends, the 16:00 ET boundary moves to 06:00 KST.
+            (datetime(2026, 11, 3, 5, 59, tzinfo=KST), "2026-10-30", "2026-11-02"),
+            (datetime(2026, 11, 3, 6, 0, tzinfo=KST), "2026-11-02", "2026-11-03"),
+        )
+        for now, basis, order in cases:
+            source = snapshots()
+            source["KMW"]["as_of_date"] = basis
+            with self.subTest(now=now):
+                plan = self.build(source, now)
+                self.assertEqual(plan["status"], "ready")
+                self.assertEqual(plan["basis_date"], basis)
+                self.assertEqual(plan["order_date"], order)
+                self.assertTrue(plan["snapshot_fresh"])
+                self.assertEqual(len(plan["orders"]), 2)
+                buy = next(row for row in plan["orders"] if row["side"] == "BUY")
+                self.assertEqual(buy["position_key"], f"2_{order}")
+
+    def test_after_close_freshness_uses_the_newly_completed_session(self):
+        now = datetime(2026, 10, 13, 8, 41, tzinfo=KST)
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", recommendation):
+            with self.assertRaisesRegex(ValueError, "expected 2026-10-12"):
+                build_kmw_plan(snapshots(), now)
+            plan = build_kmw_plan(snapshots(), now, allow_stale_snapshot=True)
+        self.assertEqual(plan["basis_date"], "2026-10-12")
+        self.assertEqual(plan["order_date"], "2026-10-13")
+        self.assertFalse(plan["snapshot_fresh"])
+        self.assertEqual(plan["snapshot_positions"][0]["quantity"], 41)
+        self.assertEqual(plan["available_cash"], 10000)
+        self.assertTrue(any("Preview only" in warning for warning in plan["warnings"]))
 
     def test_naive_datetime_and_wrong_recommendation_date_are_rejected(self):
         with self.assertRaises(ValueError):
@@ -203,6 +238,17 @@ class KMWOrderPlanTests(unittest.TestCase):
 
 
 class KMWEngineIntegrationTests(unittest.TestCase):
+    def _build_with_market_data(self, source, data, now):
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            patch.object(SOXLQuantTrader, "get_stock_data", return_value=data),
+            patch.object(SOXLQuantTrader, "get_rsi_from_reference", return_value=60.0),
+            patch.object(SOXLQuantTrader, "_revalidate_position_modes"),
+            patch.object(SOXLQuantTrader, "update_mode", return_value="AG"),
+            patch.object(SOXLQuantTrader, "_calculate_week_mode_recursive_with_reference", return_value=("AG", True)),
+        ):
+            return build_kmw_plan(source, now)
+
     def test_real_recommendation_retains_holding_after_historical_target_hit(self):
         # Both auto-sale reconciliation and LOC-backtest pruning would erase
         # this confirmed holding in the unmodified strategy engine.
@@ -213,15 +259,7 @@ class KMWEngineIntegrationTests(unittest.TestCase):
         }, index=dates)
         # A provider's current-day partial candle must not change the LOC limit.
         data.loc[pd.Timestamp("2026-10-12")] = [999, 999, 999, 999, 1000000]
-        with (
-            contextlib.redirect_stdout(io.StringIO()),
-            patch.object(SOXLQuantTrader, "get_stock_data", return_value=data),
-            patch.object(SOXLQuantTrader, "get_rsi_from_reference", return_value=60.0),
-            patch.object(SOXLQuantTrader, "_revalidate_position_modes"),
-            patch.object(SOXLQuantTrader, "update_mode", return_value="AG"),
-            patch.object(SOXLQuantTrader, "_calculate_week_mode_recursive_with_reference", return_value=("AG", True)),
-        ):
-            plan = build_kmw_plan(snapshots(), NOW)
+        plan = self._build_with_market_data(snapshots(), data, NOW)
         sells = [order for order in plan["orders"] if order["side"] == "SELL"]
         self.assertEqual(len(sells), 1)
         self.assertEqual(sells[0]["quantity"], 41)
@@ -230,6 +268,47 @@ class KMWEngineIntegrationTests(unittest.TestCase):
         buys = [order for order in plan["orders"] if order["side"] == "BUY"]
         self.assertEqual(buys[0]["price"], "207.20")
         self.assertEqual(buys[0]["quantity"], int((20000 * 0.134) / 207.2))
+
+    def test_intraday_real_recommendation_excludes_partial_candle(self):
+        dates = pd.bdate_range("2026-04-01", "2026-10-09")
+        data = pd.DataFrame({
+            "Open": 200.0, "High": 200.0, "Low": 200.0,
+            "Close": 200.0, "Volume": 1000000,
+        }, index=dates)
+        data.loc[pd.Timestamp("2026-10-12")] = [999, 999, 999, 999, 1000000]
+        plan = self._build_with_market_data(
+            snapshots(), data, datetime(2026, 10, 13, 4, 59, tzinfo=KST)
+        )
+        self.assertEqual(plan["basis_date"], "2026-10-09")
+        self.assertEqual(plan["order_date"], "2026-10-12")
+        buy = next(row for row in plan["orders"] if row["side"] == "BUY")
+        self.assertEqual(buy["price"], "207.20")
+
+    def test_korean_morning_real_recommendation_includes_latest_completed_close(self):
+        dates = pd.bdate_range("2026-04-01", "2026-10-09")
+        data = pd.DataFrame({
+            "Open": 200.0, "High": 200.0, "Low": 200.0,
+            "Close": 200.0, "Volume": 1000000,
+        }, index=dates)
+        data.loc[pd.Timestamp("2026-10-12")] = [250, 250, 250, 250, 1000000]
+        # Even if a provider includes a future/partial next-day candle, it
+        # cannot override the latest confirmed close used by the web app.
+        data.loc[pd.Timestamp("2026-10-13")] = [999, 999, 999, 999, 1000000]
+        source = snapshots()
+        source["KMW"]["as_of_date"] = "2026-10-12"
+        original = deepcopy(source)
+        plan = self._build_with_market_data(
+            source, data, datetime(2026, 10, 13, 8, 41, tzinfo=KST)
+        )
+        self.assertEqual(plan["basis_date"], "2026-10-12")
+        self.assertEqual(plan["order_date"], "2026-10-13")
+        buy = next(row for row in plan["orders"] if row["side"] == "BUY")
+        self.assertEqual(buy["price"], "259.00")
+        self.assertEqual(buy["position_key"], "2_2026-10-13")
+        sell = next(row for row in plan["orders"] if row["side"] == "SELL")
+        self.assertEqual(sell["quantity"], 41)
+        self.assertEqual(plan["available_cash"], 10000)
+        self.assertEqual(source, original)
 
 
 if __name__ == "__main__":

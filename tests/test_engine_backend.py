@@ -127,6 +127,55 @@ def test_preview_uses_latest_webapp_source_and_never_loads_credentials(tmp_path,
     assert not engine.ledger_path.exists()
 
 
+@pytest.mark.parametrize("current,order_date", [
+    (datetime(2026, 10, 13, 8, 41, tzinfo=NOW.tzinfo), "2026-10-13"),
+    (datetime(2026, 10, 12, 23, 1, tzinfo=NOW.tzinfo), "2026-10-12"),
+])
+def test_visible_outside_window_recommendations_do_not_touch_broker_on_preview(
+        tmp_path, monkeypatch, current, order_date):
+    displayed = plan()
+    displayed.update(order_date=order_date, generated_at=current.isoformat())
+    monkeypatch.setattr(backend_module, "load_snapshots", Mock(return_value=({"KMW": {}}, "test")))
+    monkeypatch.setattr(backend_module, "build_kmw_plan", Mock(return_value=displayed))
+    forbidden = Mock(side_effect=AssertionError("Preview accessed credentials, notifications, or broker"))
+    monkeypatch.setattr(backend_module, "load_env", forbidden)
+    monkeypatch.setattr(backend_module, "configured_notifier", forbidden)
+    monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
+    engine = KMWBackend(env_file=tmp_path / "absent.env", ledger_path=tmp_path / "unused.db")
+
+    result = engine.preview(current)
+
+    assert result["status"] == "ready"
+    assert result["order_date"] == order_date
+    assert result["orders"] == displayed["orders"] and len(result["orders"]) == 6
+    forbidden.assert_not_called()
+    assert not engine.ledger_path.exists()
+
+
+@pytest.mark.parametrize("current,order_date,error_code", [
+    # At the screenshot's Korean morning, the next session may be displayed
+    # while New York is still on the previous session's evening.
+    (datetime(2026, 10, 13, 8, 41, tzinfo=NOW.tzinfo), "2026-10-13", "WRONG_SESSION"),
+    (datetime(2026, 10, 12, 22, 30, tzinfo=NOW.tzinfo), "2026-10-12", "OUTSIDE_ORDER_WINDOW"),
+    (datetime(2026, 10, 12, 23, 1, tzinfo=NOW.tzinfo), "2026-10-12", "OUTSIDE_ORDER_WINDOW"),
+])
+def test_displayed_plan_outside_execution_window_blocks_before_broker(
+        setup_backend, current, order_date, error_code):
+    engine, client, _, create_client = setup_backend
+    displayed = plan()
+    displayed.update(order_date=order_date, generated_at=current.isoformat())
+    unchanged = deepcopy(displayed)
+
+    result = engine.execute(displayed, current)
+
+    assert result["state"] == "BLOCKED"
+    assert result["error_code"] == error_code
+    assert result["orders"] == [] and result["preflight"] is None
+    create_client.assert_not_called()
+    assert client.mock_calls == []
+    assert displayed == unchanged
+
+
 def test_six_recommendations_send_six_separate_direct_calls_unchanged(setup_backend):
     engine, client, notifier, _ = setup_backend
     p = plan()

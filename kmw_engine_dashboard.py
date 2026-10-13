@@ -39,7 +39,7 @@ _HTML = r"""<!doctype html>
 <div id="message" class="notice info" role="status" hidden></div>
 <div id="block" class="notice error" role="alert" hidden></div>
 <p class="muted" style="margin-top:16px">추천 가격과 수량을 그대로 전송합니다. LOC는 종가 조건에 따라 체결되며, 주문 접수만으로 체결이 완료되지는 않습니다.</p>
-<p class="muted">현재 엔진은 미국 정규장 개장 전 추천을 사용합니다. 설정한 시각이 개장 이후이면 주문을 건너뜁니다.</p>
+<p class="muted">추천표는 최신 확정 종가를 기준으로 계산하며, 장 마감 후에는 다음 거래일 주문을 표시합니다. 실제 주문 전송은 해당 미국 거래일의 정규장 개장 전에만 가능합니다.</p>
 </section>
 <section class="card"><div class="row space"><h2>KMW 추천 주문표</h2><span id="plan-status" class="muted">추천을 새로고침하세요.</span></div><p id="basis" class="muted">기준일 — · 주문일 —</p><div class="table-wrap"><table><thead><tr><th>구분</th><th>종목</th><th class="num">회차</th><th class="num">수량</th><th>주문 방식</th><th class="num">가격 (USD)</th></tr></thead><tbody id="orders"><tr><td colspan="6" class="empty">아직 확인한 추천이 없습니다.</td></tr></tbody></table></div><div id="warnings" class="notice info" hidden></div></section>
 <section class="card"><h2>주문 접수 · 체결 상태</h2><p class="muted">접수 결과와 체결 내역은 다릅니다. 아래 체결 수량은 최근 API 조회 결과이며, 메리츠 앱에서도 확인할 수 있습니다.</p><p id="broker-checked" class="muted">최근 조회 —</p><div class="table-wrap"><table><thead><tr><th>주문번호</th><th>구분</th><th>종목</th><th class="num">주문 수량</th><th class="num">체결 수량</th><th>상태</th></tr></thead><tbody id="broker-orders"><tr><td colspan="6" class="empty">아직 조회한 주문이 없습니다.</td></tr></tbody></table></div><div id="receipt" hidden></div></section>
