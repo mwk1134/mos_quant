@@ -16,6 +16,7 @@ from typing import Callable
 
 from kmw_autotrade import ET, KST, ROOT, next_run
 from kmw_order_plan import SUPPORTED_PRESETS
+from us_market_calendar import is_us_equity_trading_day
 
 
 class EngineStateError(ValueError):
@@ -52,7 +53,7 @@ class KMWEngine:
         self.preset = preset
         self.backend = backend
         self.state_file = Path(state_file) if state_file is not None else ROOT / ".autotrade" / (
-            "engine.json" if preset == "KMW" else "engine_kmw2.json")
+            "engine.json" if preset == "KMW" else f"engine_{preset.lower()}.json")
         self.clock = clock or (lambda: datetime.now(KST))
         self._lock = threading.RLock()
         self._run_lock = threading.Lock()
@@ -114,7 +115,8 @@ class KMWEngine:
         at = datetime.strptime(self._state["at"], "%H:%M").time()
         target = next_run(now, at)
         # Retiming or restarting cannot repeat an automatic session already tried.
-        while target.astimezone(ET).date().isoformat() in self._state["scheduled_days"]:
+        while (not is_us_equity_trading_day(target.astimezone(ET).date())
+               or target.astimezone(ET).date().isoformat() in self._state["scheduled_days"]):
             target += timedelta(days=1)
         return target
 
@@ -168,14 +170,22 @@ class KMWEngine:
         if not self._run_lock.acquire(blocking=False):
             raise EngineBusyError("주문 처리 중입니다. 완료 후 추천을 새로고침하세요.")
         try:
-            plan = (self.backend.preview(now=self.clock(), allow_stale_snapshot=True)
-                    if self.preset == "KMW2" else self.backend.preview(now=self.clock()))
+            plan = self._latest_plan(now=self.clock(), display=True)
             self._validate_plan_preset(plan)
             with self._lock:
                 self._event(f"최신 웹앱 {self.preset} 저장 데이터로 추천을 새로 계산했습니다.", plan=plan)
             return self.status()
         finally:
             self._run_lock.release()
+
+    def _latest_plan(self, *, now, display=False):
+        # Concrete upgraded backends refresh factual fills before planning.
+        # Legacy/fake adapters retain their original credential-free interface.
+        if callable(getattr(type(self.backend), "refresh_preview", None)):
+            return self.backend.refresh_preview(now=now)
+        if display and self.preset != "KMW":
+            return self.backend.preview(now=now, allow_stale_snapshot=True)
+        return self.backend.preview(now=now)
 
     def _validate_plan_preset(self, plan):
         if not isinstance(plan, dict) or plan.get("preset", self.preset if plan.get("status") == "skipped" else None) != self.preset:
@@ -214,21 +224,25 @@ class KMWEngine:
                 generation = self._generation
             execute_started = False
             try:
-                plan = self.backend.preview(now=now)
-                self._validate_plan_preset(plan)
-                with self._lock:
-                    self._commit(plan=plan)
-                if expected_review_id is not None and review_id(plan) != expected_review_id:
-                    result = {"state": "BLOCKED", "error_code": "PLAN_CHANGED",
-                              "error": "확인한 주문표가 변경되었습니다. 최신 내역을 다시 확인하세요.", "orders": []}
-                elif not self._may_continue(generation):
-                    result = {"state": "STOPPED", "orders": [], "error": "사용자가 실행을 중지했습니다."}
-                elif plan.get("status") != "ready":
-                    result = {"state": "SKIPPED", "orders": [], "error": plan.get("reason", "오늘 주문 대상이 없습니다.")}
+                if not is_us_equity_trading_day(now.astimezone(ET).date()):
+                    result = {"state": "SKIPPED", "error_code": "MARKET_CLOSED", "orders": [],
+                              "error": "미국 증시 휴장일에는 주문을 전송하지 않습니다."}
                 else:
-                    execute_started = True
-                    result = self.backend.execute(plan, now=self.clock(),
-                                                  should_continue=lambda: self._may_continue(generation))
+                    plan = self._latest_plan(now=now)
+                    self._validate_plan_preset(plan)
+                    with self._lock:
+                        self._commit(plan=plan)
+                    if expected_review_id is not None and review_id(plan) != expected_review_id:
+                        result = {"state": "BLOCKED", "error_code": "PLAN_CHANGED",
+                                  "error": "확인한 주문표가 변경되었습니다. 최신 내역을 다시 확인하세요.", "orders": []}
+                    elif not self._may_continue(generation):
+                        result = {"state": "STOPPED", "orders": [], "error": "사용자가 실행을 중지했습니다."}
+                    elif plan.get("status") != "ready":
+                        result = {"state": "SKIPPED", "orders": [], "error": plan.get("reason", "오늘 주문 대상이 없습니다.")}
+                    else:
+                        execute_started = True
+                        result = self.backend.execute(plan, now=self.clock(),
+                                                      should_continue=lambda: self._may_continue(generation))
             except Exception:
                 # Raw HTTP errors may contain tokens/URLs: publish only a fixed message.
                 result = {"state": "UNKNOWN" if execute_started else "ERROR", "error_code": "RUN_FAILED", "orders": [],
@@ -319,7 +333,7 @@ def main(argv=None):
     parser.add_argument("--ledger", type=Path)
     parser.add_argument("--port", type=int)
     args = parser.parse_args(argv)
-    args.port = args.port if args.port is not None else (8701 if args.preset == "KMW" else 8703)
+    args.port = args.port if args.port is not None else {"KMW": 8701, "KMW2": 8703, "JEH": 8704}[args.preset]
     from kmw_engine_backend import KMWBackend
     backend_kwargs = {"preset": args.preset}
     if args.env_file is not None:

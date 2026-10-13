@@ -1,4 +1,4 @@
-"""Build KMW or KMW2 orders from that web app preset's persisted portfolio.
+"""Build account-isolated orders from a supported web app preset's portfolio.
 
 This module never submits orders or writes snapshots.  It uses the strategy
 engine, but disables its price-history-based simulated fills: a broker holding
@@ -40,10 +40,21 @@ DEFAULT_KMW2_CONFIG = {
     "position_edits": {},
     "ma_alignment_switch_enabled": False,
 }
-SUPPORTED_PRESETS = ("KMW", "KMW2")
+DEFAULT_JEH_CONFIG = {
+    "initial_capital": 2793.0,
+    "session_start_date": "2025-10-30",
+    "seed_increases": [
+        {"date": "2025-12-22", "amount": 13499.0},
+        {"date": "2026-01-15", "amount": 2035.0},
+    ],
+    "position_edits": {},
+    "ma_alignment_switch_enabled": False,
+}
+SUPPORTED_PRESETS = ("KMW", "KMW2", "JEH")
 _DEFAULT_PRESET_CONFIGS = {
     "KMW": DEFAULT_KMW_CONFIG,
     "KMW2": DEFAULT_KMW2_CONFIG,
+    "JEH": DEFAULT_JEH_CONFIG,
 }
 
 
@@ -116,6 +127,12 @@ class _KMWPlanTrader(SOXLQuantTrader):
 
     def get_us_eastern_now(self) -> datetime:
         return self._plan_now
+
+    def _required_cached_market_date(self, symbol: str):
+        # Historical entry-rule lookup can cache Friday's QQQ candles. A fresh
+        # plan still validates daily data through its exact completed session,
+        # so it must not accept the general UI's weekly-RSI cache threshold.
+        return self._expected_basis_date
 
     def get_stock_data(self, ticker: str, *args: Any, **kwargs: Any):
         data = super().get_stock_data(ticker, *args, **kwargs)
@@ -196,10 +213,10 @@ def build_kmw_plan(
     ``allow_stale_snapshot`` permits a preview using older factual holdings;
     the returned ``snapshot_fresh=False`` must prohibit broker submission.
     ``preset`` selects only that preset's snapshot and saved configuration;
-    KMW2 never inherits KMW holdings, seeds, or cash. Omission preserves KMW.
+    KMW2 and JEH never inherit KMW holdings, seeds, or cash. Omission preserves KMW.
     """
     if not isinstance(preset, str) or preset not in SUPPORTED_PRESETS:
-        raise ValueError(f"Unsupported preset: {preset!r}; expected KMW or KMW2")
+        raise ValueError(f"Unsupported preset: {preset!r}; expected one of {', '.join(SUPPORTED_PRESETS)}")
     now = now if now is not None else datetime.now(timezone.utc)
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be a timezone-aware datetime")
@@ -313,6 +330,13 @@ def build_kmw_plan(
         "buy_budget": float(recommendation.get("next_buy_amount", 0)),
         "snapshot_positions": [],
     })
+    active_config = recommendation.get("active_config")
+    entry_fields = ("buy_threshold", "sell_threshold", "max_hold_days")
+    if isinstance(active_config, dict) and all(field in active_config for field in entry_fields):
+        plan["buy_entry_rules"] = {
+            "mode": plan["mode"], "strategy_name": plan["strategy_name"],
+            **{field: deepcopy(active_config[field]) for field in entry_fields},
+        }
     # Place sell rows for every actual holding.  The UI's list hides historical
     # target hits, whereas actual broker holdings still need their sell order.
     order_midnight = datetime.combine(order_day, time.min)

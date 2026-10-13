@@ -8,6 +8,7 @@ import sys
 import io
 import html
 import hashlib
+from copy import deepcopy
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Optional
@@ -651,6 +652,10 @@ def _should_auto_save_snapshot(previous_snapshot: dict, current_snapshot: dict) 
     """거래일이거나 확정 종가 반영으로 스냅샷이 새 날짜까지 진행됐으면 자동 저장."""
     if not current_snapshot:
         return False
+    # The account refresher owns confirmed fills and compounding. A page view
+    # may calculate recommendations, but must not replace that checkpoint.
+    if "broker_sync" in (previous_snapshot or {}):
+        return False
     if current_snapshot == (previous_snapshot or {}):
         return False
     if _snapshot_max_mdd_percent(current_snapshot) > _snapshot_max_mdd_percent(previous_snapshot or {}):
@@ -752,6 +757,27 @@ def _serialize_compound_settlements(settlements: list) -> list:
         })
     return serialized
 
+
+def _preserve_broker_snapshot_metadata(snapshot: dict, previous_snapshot: dict) -> dict:
+    """Keep the actual-execution cursor and confirmed session checkpoint."""
+    if "broker_sync" not in (previous_snapshot or {}):
+        return snapshot
+    for key in ("broker_sync", "compound_trading_days", "as_of_date", "cash_snapshot_date"):
+        if key in previous_snapshot:
+            snapshot[key] = deepcopy(previous_snapshot[key])
+    return snapshot
+
+
+def _broker_snapshot_write_allowed(snapshot: dict, latest_snapshot: dict) -> bool:
+    """A stale page or a settings reset cannot erase newer confirmed fills."""
+    if "broker_sync" not in (latest_snapshot or {}):
+        return True
+    return (
+        isinstance(snapshot, dict) and bool(snapshot)
+        and snapshot.get("broker_sync") == latest_snapshot["broker_sync"]
+        and snapshot.get("as_of_date") == latest_snapshot.get("as_of_date")
+    )
+
 def _build_snapshot_from_positions(
     trader: SOXLQuantTrader,
     previous_snapshot: dict,
@@ -843,6 +869,7 @@ def _build_snapshot_from_positions(
         )
     )
     _merge_snapshot_max_mdd(current_snapshot, previous_snapshot or {})
+    _preserve_broker_snapshot_metadata(current_snapshot, previous_snapshot or {})
     return current_snapshot
 
 def _pending_buy_from_recommendation(
@@ -905,7 +932,9 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
     start_date = preset.get('session_start_date')
     effective_snapshot = dict(previous_snapshot or {})
     effective_snapshot[MA_ALIGNMENT_SWITCH_KEY] = ma_alignment_enabled
-    sim_result = temp_trader.simulate_from_snapshot_to_today(effective_snapshot, start_date, quiet=True)
+    sim_result = (temp_trader.restore_real_positions(effective_snapshot)
+                  if "broker_sync" in effective_snapshot
+                  else temp_trader.simulate_from_snapshot_to_today(effective_snapshot, start_date, quiet=True))
     if sim_result and "error" in sim_result:
         return None, sim_result["error"]
 
@@ -978,6 +1007,8 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         all_data = getattr(st.session_state, '_gh_snapshot_all', None) or {}
         sha = getattr(st.session_state, '_gh_snapshot_sha', None)
     previous_snapshot = (all_data or {}).get(preset_name, {})
+    if not _broker_snapshot_write_allowed(snapshot, previous_snapshot):
+        return False, "실제 체결 동기화 기록이 갱신되었습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
     if _is_manual_cash_locked_snapshot(previous_snapshot) and not _snapshot_has_positions(snapshot):
         return True, ""
     if snapshot:
@@ -987,6 +1018,8 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     if not ok and "GitHub API" in str(err) and "(409)" in str(err):
         latest_data, latest_sha = _gh_load_all_snapshots()
         latest_previous = (latest_data or {}).get(preset_name, {})
+        if not _broker_snapshot_write_allowed(snapshot, latest_previous):
+            return False, "실제 체결 동기화 기록이 갱신되었습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
         if _is_manual_cash_locked_snapshot(latest_previous) and not _snapshot_has_positions(snapshot):
             return True, ""
         if snapshot:
@@ -1286,6 +1319,7 @@ def save_preset_ma_alignment_setting(preset_name: str, enabled: bool) -> tuple:
             if (
                 isinstance(active_snapshot, dict)
                 and any(key != MA_ALIGNMENT_SWITCH_KEY for key in active_snapshot)
+                and _broker_snapshot_write_allowed(active_snapshot, snapshot)
             ):
                 snapshot = dict(active_snapshot)
         # The setting belongs to _preset_configs.  Mirror it into an existing
@@ -1501,6 +1535,8 @@ def render_seed_entry(seed: dict, index: int) -> None:
 
 def _deduplicate_positions_by_date(trader, snapshot: dict) -> None:
     """같은 매수일에 여러 포지션이 있으면 하나만 유지 (하루 1매수 원칙). 스냅샷에 있으면 그 값 사용."""
+    if "broker_sync" in (snapshot or {}):
+        return
     from collections import defaultdict
     by_date = defaultdict(list)
     for idx, pos in enumerate(trader.positions):
@@ -2432,7 +2468,9 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
         # 스냅샷이 없으면 기존처럼 처음부터 시뮬레이션
         snapshot = st.session_state.get('positions_snapshot', {})
         if snapshot:
-            sim_result = st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=True)
+            sim_result = (st.session_state.trader.restore_real_positions(snapshot)
+                          if "broker_sync" in snapshot
+                          else st.session_state.trader.simulate_from_snapshot_to_today(snapshot, start_date, quiet=True))
         else:
             sim_result = st.session_state.trader.simulate_from_start_to_today(start_date, quiet=True)
         if "error" in sim_result:
@@ -2559,6 +2597,7 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
             current_snapshot["pending_buy"] = pending_buy
         else:
             current_snapshot.pop("pending_buy", None)
+        _preserve_broker_snapshot_metadata(current_snapshot, snapshot or {})
         st.session_state.positions_snapshot = current_snapshot
         
         # 포지션이 있으면 GitHub에 영구 저장.
@@ -2970,7 +3009,10 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
                     pos_split_ratios = config.get("split_ratios", [])
                     pos_ratio_pct = pos_split_ratios[pos['round'] - 1] * 100 if pos['round'] <= len(pos_split_ratios) else 0
                     
-                    st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%): {sell_shares}주 (목표가 \\${target_sell_price:.2f}, 현재 \\${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
+                    if sell_info.get("order_type") == "MOC":
+                        st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%): {sell_shares}주 · MOC 종가 시장가")
+                    else:
+                        st.warning(f"📦 {pos['round']}회차(비중 {pos_ratio_pct:.1f}%): {sell_shares}주 (목표가 \\${target_sell_price:.2f}, 현재 \\${current_price:.2f}, 목표까지 {price_diff_pct:+.1f}%)")
                     
                     # 모드 색상 설정 (AG: 주황색, SF: 초록색)
                     mode_color = "#FF8C00" if mode == "AG" else "#28A745"  # 주황색 또는 초록색

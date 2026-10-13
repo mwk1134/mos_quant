@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from kmw_order_plan import _KMWPlanTrader, build_kmw_plan, order_price
+from kmw_order_plan import DEFAULT_JEH_CONFIG, _KMWPlanTrader, build_kmw_plan, order_price
 from soxl_quant_system import SOXLQuantTrader
 
 
@@ -52,6 +52,26 @@ def two_preset_snapshots():
         "compound_seed": 67612.0,
         "compound_reference_seed": 67612.0,
         "processed_seed_dates": [],
+    }
+    return source
+
+
+def three_preset_snapshots():
+    source = two_preset_snapshots()
+    source["JEH"] = {
+        "1_2026-09-28": {"round": 1, "shares": 3, "buy_price": 100.0,
+                         "amount": 300.0, "mode": "AG", "buy_threshold": 3.6,
+                         "sell_threshold": 3.5, "max_hold_days": 7},
+        "2_2026-10-09": {"round": 2, "shares": 11, "buy_price": 50.0,
+                         "amount": 550.0, "mode": "SF", "buy_threshold": 3.5,
+                         "sell_threshold": 1.1, "max_hold_days": 35},
+        "available_cash": 5432.0,
+        "as_of_date": "2026-10-09",
+        "compound_seed": 40000.0,
+        "compound_reference_seed": 40000.0,
+        "processed_seed_dates": ["2025-12-22", "2026-01-15"],
+        "pending_buy": {"round": 3, "quantity": 9876, "target_price": 0.01,
+                        "order_date": "2026-10-07", "basis_date": "2026-10-06"},
     }
     return source
 
@@ -369,7 +389,7 @@ class KMW2OrderPlanTests(unittest.TestCase):
                     source["KMW2"] = missing
                 with self.subTest(missing=missing), self.assertRaisesRegex(ValueError, "KMW2 portfolio"):
                     build_kmw_plan(source, NOW, preset="KMW2")
-            for preset in ("JEH", "kmw2", "", None, []):
+            for preset in ("UNREGISTERED", "kmw2", "", None, []):
                 with self.subTest(preset=preset), self.assertRaisesRegex(ValueError, "Unsupported preset"):
                     build_kmw_plan(two_preset_snapshots(), NOW, preset=preset)
             get_rec.assert_not_called()
@@ -492,6 +512,79 @@ class KMWEngineIntegrationTests(unittest.TestCase):
         self.assertEqual(sell["quantity"], 41)
         self.assertEqual(plan["available_cash"], 10000)
         self.assertEqual(source, original)
+
+
+class JEHOrderPlanTests(unittest.TestCase):
+    def build(self, source=None, *, now=NOW, allow_stale_snapshot=False):
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", recommendation):
+            return build_kmw_plan(source if source is not None else three_preset_snapshots(),
+                                  now, preset="JEH", allow_stale_snapshot=allow_stale_snapshot)
+
+    def test_jeh_preserves_its_rows_prices_cash_and_source_without_other_accounts(self):
+        source = three_preset_snapshots()
+        # Other preset configuration cannot affect the selected account.
+        source["_preset_configs"]["KMW"] = "not a selected account config"
+        source["_preset_configs"]["KMW2"] = "not a selected account config"
+        original = deepcopy(source)
+        plan = self.build(source)
+        self.assertEqual(plan["preset"], "JEH")
+        self.assertEqual(plan["available_cash"], 5432)
+        self.assertEqual([(row["side"], row["quantity"], row["price"], row["order_type"])
+                          for row in plan["orders"]],
+                         [("SELL", 3, "0", "MOC"), ("SELL", 11, "50.55", "LOC"),
+                          ("BUY", 10, "100.00", "LOC")])
+        self.assertEqual([row["position_key"] for row in plan["snapshot_positions"]],
+                         ["1_2026-09-28", "2_2026-10-09"])
+        self.assertEqual(source, original)
+
+    def test_jeh_defaults_and_saved_seed_configuration_match_webapp(self):
+        self.assertEqual(DEFAULT_JEH_CONFIG, {
+            "initial_capital": 2793.0, "session_start_date": "2025-10-30",
+            "seed_increases": [{"date": "2025-12-22", "amount": 13499.0},
+                               {"date": "2026-01-15", "amount": 2035.0}],
+            "position_edits": {}, "ma_alignment_switch_enabled": False,
+        })
+        source = three_preset_snapshots()
+        seeds = deepcopy(DEFAULT_JEH_CONFIG["seed_increases"]) + [{"date": "2026-10-04", "amount": 7068.0}]
+        source["_preset_configs"]["JEH"] = {"seed_increases": seeds,
+                                            "ma_alignment_switch_enabled": True,
+                                            "position_edits": {"2_2026-10-09": {"shares": 12, "buy_price": 51}}}
+        source["JEH"]["processed_seed_dates"].append("2026-10-04")
+        captured = {}
+
+        def capture(trader, **kwargs):
+            captured.update(capital=trader.initial_capital, start=trader.session_start_date,
+                            seeds=[{"date": seed["date"], "amount": seed["amount"]}
+                                   for seed in trader.seed_increases],
+                            alignment=trader.ma_alignment_switch_enabled)
+            return recommendation(trader, **kwargs)
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
+            plan = build_kmw_plan(source, NOW, preset="JEH")
+        self.assertEqual(captured, {"capital": 2793, "start": "2025-10-30",
+                                    "seeds": seeds, "alignment": True})
+        self.assertNotIn("2026-06-21", [seed["date"] for seed in captured["seeds"]])
+        self.assertEqual(plan["orders"][1]["quantity"], 12)
+        self.assertEqual(plan["orders"][1]["price"], "51.56")
+
+    def test_jeh_unprocessed_saved_seed_blocks_even_display(self):
+        source = three_preset_snapshots()
+        source["_preset_configs"]["JEH"] = {"seed_increases": [{"date": "2026-10-04", "amount": 7068.0}]}
+        with self.assertRaisesRegex(ValueError, "seed increase 2026-10-04"):
+            self.build(source)
+
+    def test_jeh_missing_snapshot_never_falls_back_to_kmw_accounts(self):
+        with self.assertRaisesRegex(ValueError, "JEH portfolio"):
+            self.build(two_preset_snapshots())
+
+    def test_jeh_stale_snapshot_is_display_only(self):
+        source = three_preset_snapshots()
+        source["JEH"]["as_of_date"] = "2026-10-08"
+        with self.assertRaisesRegex(ValueError, "Stale JEH snapshot"):
+            self.build(source)
+        plan = self.build(source, allow_stale_snapshot=True)
+        self.assertFalse(plan["snapshot_fresh"])
+        self.assertIn("Preview only; submission is prohibited", plan["warnings"][0])
 
 
 if __name__ == "__main__":

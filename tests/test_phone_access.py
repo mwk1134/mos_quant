@@ -61,6 +61,42 @@ def test_tunnel_restart_keeps_both_accounts_loopback_ports(tmp_path):
     assert gateway.load_config(path) == renewed
 
 
+def test_tunnel_restart_preserves_three_distinct_account_ports_and_private_login(tmp_path):
+    path = tmp_path / "phone_gateway.json"
+    previous = access.write_phone_config(path, ORIGIN)
+    previous.update(engine_port=8701, kmw2_engine_port=8703, jeh_engine_port=8704)
+    path.write_text(json.dumps(previous))
+    renewed = access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert {field: renewed[field] for field in ["engine_port", "kmw2_engine_port", "jeh_engine_port"]} == {
+        "engine_port": 8701, "kmw2_engine_port": 8703, "jeh_engine_port": 8704}
+    assert renewed["username"] == previous["username"] and renewed["password"] == previous["password"]
+    assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+    assert gateway.load_config(path) == renewed
+
+
+def test_jeh_can_be_configured_without_kmw2_and_is_kept_when_origin_changes(tmp_path):
+    path = tmp_path / "phone_gateway.json"
+    previous = access.write_phone_config(path, ORIGIN)
+    previous["jeh_engine_port"] = 8704
+    path.write_text(json.dumps(previous))
+    renewed = access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert renewed["engine_port"] == 8701 and renewed["jeh_engine_port"] == 8704
+    assert "kmw2_engine_port" not in renewed
+    assert gateway.load_config(path) == renewed
+
+
+@pytest.mark.parametrize("third_port", [8701, 8703, True, False, 0, -1, 65536, "8704", 8704.0, []])
+def test_invalid_or_colliding_jeh_port_never_rewrites_the_existing_config(tmp_path, third_port):
+    path = tmp_path / "phone_gateway.json"
+    config = access.write_phone_config(path, ORIGIN)
+    config.update(kmw2_engine_port=8703, jeh_engine_port=third_port)
+    path.write_text(json.dumps(config))
+    original = path.read_text()
+    with pytest.raises(ValueError, match="engine ports"):
+        access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert path.read_text() == original
+
+
 @pytest.mark.parametrize("second_port", [8701, True, 0, 65536, "8703"])
 def test_invalid_second_account_port_is_not_saved(tmp_path, second_port):
     path = tmp_path / "phone_gateway.json"

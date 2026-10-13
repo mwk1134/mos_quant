@@ -144,60 +144,66 @@ class SeparateAccountBackend:
         return {"ready": self.ready, "preset": self.preset}
 
 
-def test_second_account_activation_and_schedule_do_not_change_first_account(tmp_path):
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_second_account_activation_and_schedule_do_not_change_first_account(tmp_path, preset):
     first = KMWEngine(SeparateAccountBackend("KMW"), tmp_path / "first.json", clock=lambda: NOW)
-    second_backend = SeparateAccountBackend("KMW2")
-    second = KMWEngine(second_backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    second_backend = SeparateAccountBackend(preset)
+    second = KMWEngine(second_backend, tmp_path / "second.json", clock=lambda: NOW, preset=preset)
     second.configure("18:07")
     second.enable()
     assert first.status()["preset"] == "KMW" and first.status()["enabled"] is False
     assert first.status()["at"] == "17:01"
-    assert second.status()["preset"] == "KMW2" and second.status()["enabled"] is True
+    assert second.status()["preset"] == preset and second.status()["enabled"] is True
     assert second.status()["at"] == "18:07"
-    assert json.loads(second.state_file.read_text())["preset"] == "KMW2"
+    assert json.loads(second.state_file.read_text())["preset"] == preset
     second_backend.execute.assert_not_called()
 
 
-def test_second_account_cannot_restore_first_accounts_activation_file(tmp_path):
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_second_account_cannot_restore_first_accounts_activation_file(tmp_path, preset):
     first = KMWEngine(SeparateAccountBackend("KMW"), tmp_path / "shared.json", clock=lambda: NOW)
     first.enable()
     with pytest.raises(EngineStateError, match="설정 파일"):
-        KMWEngine(SeparateAccountBackend("KMW2"), first.state_file, clock=lambda: NOW, preset="KMW2")
+        KMWEngine(SeparateAccountBackend(preset), first.state_file, clock=lambda: NOW, preset=preset)
 
 
-def test_unconfigured_account_cannot_be_activated(tmp_path):
-    second = KMWEngine(SeparateAccountBackend("KMW2", ready=False), tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_unconfigured_account_cannot_be_activated(tmp_path, preset):
+    second = KMWEngine(SeparateAccountBackend(preset, ready=False), tmp_path / "second.json", clock=lambda: NOW, preset=preset)
     assert second.status()["account_ready"] is False
-    with pytest.raises(EngineStateError, match="KMW2 계좌"):
+    with pytest.raises(EngineStateError, match=f"{preset} 계좌"):
         second.enable()
     assert second.status()["enabled"] is False
     second.backend.execute.assert_not_called()
 
 
-def test_second_account_preview_rejects_first_accounts_recommendation(tmp_path):
-    backend = SeparateAccountBackend("KMW2")
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_second_account_preview_rejects_first_accounts_recommendation(tmp_path, preset):
+    backend = SeparateAccountBackend(preset)
     backend.preview.return_value = plan()
-    second = KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    second = KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset=preset)
     with pytest.raises(EngineStateError, match="프리셋"):
         second.preview()
     assert second.status()["plan"] is None
     backend.execute.assert_not_called()
 
 
-def test_second_account_can_display_marked_stale_preview_without_activation(tmp_path):
-    backend = SeparateAccountBackend("KMW2")
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_second_account_can_display_marked_stale_preview_without_activation(tmp_path, preset):
+    backend = SeparateAccountBackend(preset)
     backend.preview.return_value["snapshot_fresh"] = False
-    second = KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+    second = KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset=preset)
     state = second.preview()
     backend.preview.assert_called_once_with(now=NOW, allow_stale_snapshot=True)
     assert state["plan"]["snapshot_fresh"] is False and state["enabled"] is False
     backend.execute.assert_not_called()
 
 
-def test_mismatched_backend_preset_is_rejected_before_any_action(tmp_path):
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_mismatched_backend_preset_is_rejected_before_any_action(tmp_path, preset):
     backend = SeparateAccountBackend("KMW")
     with pytest.raises(EngineStateError, match="계좌 연결"):
-        KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset="KMW2")
+        KMWEngine(backend, tmp_path / "second.json", clock=lambda: NOW, preset=preset)
     backend.preview.assert_not_called()
     backend.execute.assert_not_called()
 
@@ -330,3 +336,101 @@ def test_corrupted_saved_activation_fails_closed(tmp_path):
     with pytest.raises(EngineStateError):
         KMWEngine(backend, path)
     backend.execute.assert_not_called()
+
+
+def test_jeh_default_state_is_distinct_and_inactive(tmp_path, monkeypatch):
+    monkeypatch.setattr("kmw_engine.ROOT", tmp_path)
+    states = [KMWEngine(SeparateAccountBackend(preset), clock=lambda: NOW, preset=preset)
+              for preset in ("KMW", "KMW2", "JEH")]
+    assert [engine.state_file.name for engine in states] == ["engine.json", "engine_kmw2.json", "engine_jeh.json"]
+    for engine in states:
+        assert engine.status()["enabled"] is False
+        assert engine.status()["next_run"] is None
+        assert not engine.state_file.exists()
+        engine.backend.preview.assert_not_called()
+        engine.backend.execute.assert_not_called()
+
+
+def test_jeh_serve_defaults_to_port_8704_without_activation(tmp_path, monkeypatch):
+    from kmw_engine import main
+    import kmw_engine_backend
+    import kmw_engine_dashboard
+
+    backend = SeparateAccountBackend("JEH")
+    constructor = Mock(return_value=backend)
+    server = Mock()
+    server.server_address = ("127.0.0.1", 8704)
+    server.serve_forever.side_effect = KeyboardInterrupt
+    create = Mock(return_value=server)
+    monkeypatch.setattr("kmw_engine.ROOT", tmp_path)
+    monkeypatch.setattr(kmw_engine_backend, "KMWBackend", constructor)
+    monkeypatch.setattr(kmw_engine_dashboard, "create_server", create)
+    monkeypatch.setattr(KMWEngine, "start_worker", lambda self: None)
+    assert main(["serve", "--preset", "JEH"]) == 0
+    constructor.assert_called_once_with(preset="JEH")
+    assert create.call_args.kwargs == {"host": "127.0.0.1", "port": 8704}
+    assert create.call_args.args[0].status()["enabled"] is False
+    backend.execute.assert_not_called()
+
+
+class RefreshingAccountBackend(SeparateAccountBackend):
+    def __init__(self, preset):
+        super().__init__(preset)
+        self.refresh = Mock(return_value=deepcopy(self.preview.return_value))
+
+    def refresh_preview(self, *, now):
+        return self.refresh(now=now)
+
+
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH"])
+def test_user_preview_refreshes_original_snapshot_before_display_and_keeps_inactive(tmp_path, preset):
+    backend = RefreshingAccountBackend(preset)
+    engine = KMWEngine(backend, tmp_path / "preview.json", clock=lambda: NOW, preset=preset)
+    state = engine.preview()
+    backend.refresh.assert_called_once_with(now=NOW)
+    backend.preview.assert_not_called()
+    backend.execute.assert_not_called()
+    assert state["plan"]["preset"] == preset and state["enabled"] is False
+
+
+def test_scheduler_refreshes_before_execute_and_uses_exact_new_recommendation(tmp_path):
+    backend = RefreshingAccountBackend("JEH")
+    moment = [NOW]
+    sequence = []
+    refreshed = deepcopy(backend.refresh.return_value)
+    refreshed["orders"][0]["quantity"] = 17
+    backend.refresh.side_effect = lambda **kwargs: sequence.append("refresh") or deepcopy(refreshed)
+    backend.execute.side_effect = lambda *args, **kwargs: sequence.append("execute") or {"state": "DIRECT_ACCEPTED", "orders": []}
+    engine = KMWEngine(backend, tmp_path / "scheduled.json", clock=lambda: moment[0], preset="JEH")
+    engine.enable()
+    moment[0] = NOW + timedelta(minutes=1)
+    assert engine.tick()["state"] == "DIRECT_ACCEPTED"
+    assert sequence == ["refresh", "execute"]
+    assert backend.execute.call_args.args[0] == refreshed
+    backend.preview.assert_not_called()
+
+
+def test_manual_review_changed_by_snapshot_refresh_blocks_submission(tmp_path):
+    backend = RefreshingAccountBackend("JEH")
+    engine = KMWEngine(backend, tmp_path / "manual.json", clock=lambda: NOW, preset="JEH")
+    reviewed = engine.preview()["review_id"]
+    engine.enable()
+    backend.refresh.return_value["orders"][0]["quantity"] += 1
+    result = engine.run_now(expected_review_id=reviewed)
+    assert result["state"] == "BLOCKED" and result["error_code"] == "PLAN_CHANGED"
+    assert backend.refresh.call_count == 2
+    backend.execute.assert_not_called()
+
+
+def test_refresh_error_stops_before_order_execution_without_stale_fallback(tmp_path):
+    backend = RefreshingAccountBackend("JEH")
+    backend.refresh.side_effect = RuntimeError("synthetic-private-refresh-token")
+    moment = [NOW]
+    engine = KMWEngine(backend, tmp_path / "failed.json", clock=lambda: moment[0], preset="JEH")
+    engine.enable()
+    moment[0] = NOW + timedelta(minutes=1)
+    result = engine.tick()
+    assert result["state"] == "ERROR" and result["error_code"] == "RUN_FAILED"
+    assert "synthetic-private-refresh-token" not in json.dumps(engine.status())
+    backend.execute.assert_not_called()
+    backend.preview.assert_not_called()

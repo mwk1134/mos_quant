@@ -59,19 +59,23 @@ def write_phone_config(path: Path, origin: str, *, port: int = 8702) -> dict:
             raise ValueError("Invalid existing phone credentials")
         engine_port = previous.get("engine_port", 8701)
         kmw2_engine_port = previous.get("kmw2_engine_port")
-        if (type(engine_port) is not int or not 1 <= engine_port <= 65535
-                or (kmw2_engine_port is not None and
-                    (type(kmw2_engine_port) is not int or not 1 <= kmw2_engine_port <= 65535
-                     or kmw2_engine_port == engine_port))):
-            raise ValueError("Invalid existing engine ports")
+        jeh_engine_port = previous.get("jeh_engine_port")
+        from kmw_phone_gateway import _engine_targets
+        try:
+            _engine_targets(engine_port=engine_port, kmw2_engine_port=kmw2_engine_port,
+                            jeh_engine_port=jeh_engine_port)
+        except ValueError:
+            raise ValueError("Invalid existing engine ports") from None
     else:
         username, password = "kmw", secrets.token_urlsafe(32)
         allow_short_password = False
-        engine_port, kmw2_engine_port = 8701, None
+        engine_port, kmw2_engine_port, jeh_engine_port = 8701, None, None
     config = {"public_origin": origin, "username": username, "password": password,
               "engine_port": engine_port, "port": port}
     if kmw2_engine_port is not None:
         config["kmw2_engine_port"] = kmw2_engine_port
+    if jeh_engine_port is not None:
+        config["jeh_engine_port"] = jeh_engine_port
     if allow_short_password:
         config["allow_short_password"] = True
     path.parent.mkdir(parents=True, exist_ok=True)

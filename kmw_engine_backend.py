@@ -215,7 +215,7 @@ class KMWBackend:
         return code, re.sub(r"KMW(?!2)", self.preset, message) if self.preset != "KMW" else message
 
     def preview(self, now: datetime | None = None, *, allow_stale_snapshot: bool = False) -> dict:
-        """Fetch the same persisted KMW portfolio as the web app; no broker calls."""
+        """Fetch this preset's persisted web app portfolio; no broker calls."""
         current = _now(now)
         try:
             snapshots, source = load_snapshots(preset=self.preset)
@@ -227,6 +227,35 @@ class KMWBackend:
             plan = json.loads(json.dumps(plan, ensure_ascii=False, allow_nan=False))
             if plan.get("preset") != self.preset:
                 raise EngineBlocked(f"{self.preset} 프리셋의 추천 주문표가 필요합니다.", code="PRESET_MISMATCH")
+            plan["order_route"] = "direct"
+            plan["snapshot_source"] = source
+            return plan
+        except Exception as exc:
+            code, message = self._failure(exc)
+            raise EngineBlocked(message, code=code) from None
+
+    def refresh_preview(self, now: datetime | None = None) -> dict:
+        """Reconcile actual fills, save this web app preset, then build a fresh plan.
+
+        Refreshing uses read-only brokerage methods and the isolated account
+        mapping. It never submits orders. The synchronizer preserves unrelated
+        presets and validates a fresh factual snapshot before saving it.
+        """
+        current = _now(now)
+        try:
+            from preset_snapshot_sync import refresh_and_load_snapshots
+
+            credentials = self._load_credentials()
+            validate_account_configuration(self.preset, env=credentials)
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                snapshots, source = refresh_and_load_snapshots(
+                    preset=self.preset, env=credentials, ledger_path=self.ledger_path, now=current)
+                plan = build_kmw_plan(snapshots, now=current, preset=self.preset)
+            plan = json.loads(json.dumps(plan, ensure_ascii=False, allow_nan=False))
+            if plan.get("preset") != self.preset:
+                raise EngineBlocked(f"{self.preset} 프리셋의 추천 주문표가 필요합니다.", code="PRESET_MISMATCH")
+            if plan.get("snapshot_fresh") is not True:
+                raise EngineBlocked(f"{self.preset} 보유 데이터 갱신을 확인할 수 없습니다.", code="STALE_SNAPSHOT")
             plan["order_route"] = "direct"
             plan["snapshot_source"] = source
             return plan

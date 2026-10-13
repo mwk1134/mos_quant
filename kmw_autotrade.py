@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Account-isolated KMW/KMW2 Meritz runner; default execution prints a plan."""
+"""Account-isolated KMW/KMW2/JEH runner; default execution prints a plan."""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from credential_redaction import environment_secret_values, redact_credentials
-from kmw_order_plan import build_kmw_plan
+from kmw_order_plan import SUPPORTED_PRESETS, build_kmw_plan
 from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
 from telegram_notify import TelegramNotificationError, TelegramNotifier, format_order_notification
 from us_market_calendar import is_us_equity_trading_day
@@ -34,7 +34,6 @@ ET = ZoneInfo("America/New_York")
 ROOT = Path(__file__).resolve().parent
 SNAPSHOT_REPO = "mwk1134/mos_quant"
 SNAPSHOT_PATH = "data/positions_snapshots.json"
-SUPPORTED_PRESETS = ("KMW", "KMW2")
 
 
 class OrderBlocked(ValueError):
@@ -43,16 +42,18 @@ class OrderBlocked(ValueError):
 
 def validate_preset(preset):
     if not isinstance(preset, str) or preset not in SUPPORTED_PRESETS:
-        raise OrderBlocked("Only KMW and KMW2 account presets are supported")
+        raise OrderBlocked(f"Only {', '.join(SUPPORTED_PRESETS)} account presets are supported")
     return preset
 
 
 def default_env_file(preset="KMW"):
-    return ROOT / (".env.meritz" if validate_preset(preset) == "KMW" else ".env.meritz.kmw2")
+    preset = validate_preset(preset)
+    return ROOT / (".env.meritz" if preset == "KMW" else f".env.meritz.{preset.lower()}")
 
 
 def default_ledger_path(preset="KMW"):
-    name = "orders.sqlite3" if validate_preset(preset) == "KMW" else "orders_kmw2.sqlite3"
+    preset = validate_preset(preset)
+    name = "orders.sqlite3" if preset == "KMW" else f"orders_{preset.lower()}.sqlite3"
     return ROOT / ".autotrade" / name
 
 
@@ -487,6 +488,7 @@ def _cli_error_message(exc):
         "Direct automated orders currently require a pre-open recommendation",
         "The KMW credential file is missing",
         "The KMW2 credential file is missing",
+        "The JEH credential file is missing",
         "--allow-stale-preview cannot be used with broker account commands",
         "Status and Telegram-only commands are one-time commands",
     }
@@ -622,7 +624,7 @@ def _run_once(args, notification_context=None):
         return
     if plan.get("preset") != preset:
         raise OrderBlocked(f"The recommendation does not match the {preset} account preset")
-    plan_dir = ROOT / ".autotrade" / ("plans" if preset == "KMW" else "plans_kmw2")
+    plan_dir = ROOT / ".autotrade" / ("plans" if preset == "KMW" else f"plans_{preset.lower()}")
     _write_private_plan(plan_dir / f"{plan['order_date']}.json", plan, secrets=secrets)
     if not args.submit and not args.check_account:
         return
@@ -694,18 +696,22 @@ def next_run(now, at):
     target = datetime.combine(local.date(), at, tzinfo=KST)
     if target <= local:
         target += timedelta(days=1)
+    # Keep the configured Korean time, but classify the actual US session.
+    # Korea may already be on the next calendar day; ET also changes with DST.
+    while not is_us_equity_trading_day(target.astimezone(ET).date()):
+        target += timedelta(days=1)
     return target
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="KMW/KMW2 SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
+    parser = argparse.ArgumentParser(description="KMW/KMW2/JEH SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--submit", action="store_true", help="Actually submit this account's planned orders")
     mode.add_argument("--check-account", action="store_true", help="Read broker account and validate without placing orders")
     mode.add_argument("--status", action="store_true", help="Read reservation/fill status; does not change webapp snapshots")
     mode.add_argument("--test-notification", action="store_true", help="Send a Telegram test message without any broker calls")
     mode.add_argument("--retry-notifications", action="store_true", help="Retry saved Telegram messages without submitting orders")
-    parser.add_argument("--preset", choices=SUPPORTED_PRESETS, default="KMW", help="Account preset; KMW2 has separate credentials and ledger")
+    parser.add_argument("--preset", choices=SUPPORTED_PRESETS, default="KMW", help="Account preset; each has separate credentials and ledger")
     parser.add_argument("--env-file", type=Path, help="Local literal KEY=value credential file")
     parser.add_argument("--snapshot-file", type=Path, help="Use this snapshot instead of fetching GitHub main")
     parser.add_argument("--quantity-cap", type=int, help="Cap EACH order's quantity for a small live test")
@@ -714,7 +720,7 @@ def main(argv=None):
                         help="Direct LOC/MOC orders by default; reserved must be selected explicitly")
     parser.add_argument("--allow-stale-preview", action="store_true", help="Inspect a stale snapshot's plan; submission is disabled")
     parser.add_argument("--fee-buffer", default="0.005", help="Buy cash reserve fraction; default 0.5%%")
-    parser.add_argument("--ledger", type=Path, help="Account ledger; defaults to separate KMW/KMW2 paths")
+    parser.add_argument("--ledger", type=Path, help="Account ledger; defaults to separate paths for each preset")
     parser.add_argument("--schedule", action="store_true", help="Keep running daily at --at in Asia/Seoul")
     parser.add_argument("--at", default="17:01", help="Daily KST run time (default 17:01)")
     args = parser.parse_args(argv)
@@ -723,7 +729,7 @@ def main(argv=None):
             args.ledger = default_ledger_path(args.preset)
         if args.allow_stale_preview and (args.submit or args.check_account or args.status):
             raise OrderBlocked("--allow-stale-preview cannot be used with broker account commands")
-        if args.env_file is None and args.preset == "KMW2":
+        if args.env_file is None and args.preset != "KMW":
             args.env_file = default_env_file(args.preset)
         if args.env_file is not None:
             if args.env_file.exists():
@@ -732,7 +738,7 @@ def main(argv=None):
                 raise OrderBlocked(f"The {args.preset} credential file is missing")
             else:
                 # Preview needs no broker credentials. Never inherit another
-                # account's keys while waiting for the KMW2 credential file.
+                # account's keys while waiting for this preset's credential file.
                 args.credentials = {}
         else:
             args.credentials = None

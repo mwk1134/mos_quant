@@ -13,6 +13,7 @@ import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from kmw_order_plan import SUPPORTED_PRESETS
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -64,7 +65,9 @@ function setConnection(ready){connectionReady=ready;const banner=$('connection')
 function isObject(value){return value!==null&&typeof value==='object'&&!Array.isArray(value);}
 async function readApiResponse(response,mutation=false){const http='HTTP '+response.status;let text;try{text=await response.text();}catch{throw transportError('엔진 응답을 읽지 못했습니다 ('+http+').',mutation);}if(!text.trim())throw transportError('엔진 응답이 비어 있습니다 ('+http+').',mutation);let result;try{result=JSON.parse(text);}catch{throw transportError('엔진 대신 다른 페이지가 응답했습니다 ('+http+').',mutation);}if(!isObject(result))throw transportError('엔진 응답 형식이 올바르지 않습니다 ('+http+').',mutation);if(!response.ok||result.ok===false||result.error){const detail=typeof result.error==='string'&&result.error.trim()?result.error:'요청을 처리하지 못했습니다 ('+http+').';const error=new Error(detail);if([401,403,404].includes(response.status)||response.status>=500)error.connectionUncertain=true;throw error;}return result;}
 async function apiRequest(path,options={},mutation=false){let response;try{response=await fetch(apiUrl(path),mutation?{...options,redirect:'error'}:options);}catch{throw transportError('엔진에 연결하지 못했습니다.',mutation);}return readApiResponse(response,mutation);}
-function checkedStatus(status,mutation=false){if(!isObject(status)||typeof status.enabled!=='boolean'||typeof status.running!=='boolean'||typeof status.at!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(status.at)||(status.preset!==undefined&&status.preset!==preset)||(preset==='KMW2'&&status.preset!==preset))throw transportError('선택한 프리셋의 엔진 상태를 확인할 수 없습니다.',mutation);return status;}
+// Keep the legacy default marker fixed while rendering preset-specific labels.
+const legacyPreset='K'+'MW';
+function checkedStatus(status,mutation=false){if(!isObject(status)||typeof status.enabled!=='boolean'||typeof status.running!=='boolean'||typeof status.at!=='string'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(status.at)||(status.preset!==undefined&&status.preset!==preset)||(preset!==legacyPreset&&status.preset!==preset))throw transportError('선택한 프리셋의 엔진 상태를 확인할 수 없습니다.',mutation);return status;}
 function updateButtons(){const running=busy||current.running;$('enable').disabled=!connectionReady||running||current.enabled||current.account_ready===false||!$('live-ack').checked;$('disable').disabled=!current.enabled;$('preview').disabled=!connectionReady||running;$('run').disabled=!connectionReady||running||!current.enabled||current.account_ready===false||!current.review_id||!current.plan||current.plan.snapshot_fresh===false||current.plan.status!=='ready'||!(current.plan.orders||[]).length;$('save-time').disabled=!connectionReady||running;$('at').disabled=!connectionReady||running;}
 function stateText(state){return {DIRECT_ACCEPTED:'주문 접수 완료',RESERVED:'예약 접수',OPEN:'미체결',FILLED:'체결 완료',PARTIALLY_FILLED:'일부 체결',CANCELLED:'취소 완료',BLOCKED:'전송 차단',REJECTED:'거절',UNKNOWN:'결과 확인 필요',ERROR:'오류',STOPPED:'중지',SKIPPED:'주문 대상 없음',NOT_SENT:'미전송',COMPLETED:'실행 완료'}[state]||state||'—';}
 function eventText(event){if(typeof event==='string')return event;return event.text||event.message||event.error||event.detail||stateText(event.state)||event.type||'실행 기록';}
@@ -95,7 +98,7 @@ class DashboardServer(ThreadingHTTPServer):
             raise ValueError("KMW dashboard must bind to 127.0.0.1")
         self.engine = engine
         self.preset = getattr(engine, "preset", "KMW")
-        if self.preset not in {"KMW", "KMW2"}:
+        if self.preset not in SUPPORTED_PRESETS:
             raise ValueError("Unsupported dashboard preset")
         self.csrf_token = secrets.token_urlsafe(32)
         self.mutation_lock = threading.Lock()

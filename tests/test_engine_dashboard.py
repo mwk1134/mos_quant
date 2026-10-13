@@ -99,6 +99,27 @@ def test_create_server_is_inert_and_rejects_external_bind():
         create_server(engine, host="0.0.0.0", port=0)
 
 
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_additional_account_dashboard_is_labeled_and_remains_inactive(preset):
+    engine = FakeEngine()
+    engine.preset = preset
+    server = create_server(engine, port=0)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+    thread.start()
+    try:
+        status, _, page = request(server, "/")
+        assert status == 200
+        assert f'<meta name="engine-preset" content="{preset}">' in page
+        assert f"{preset} 추천 주문표" in page
+        assert f"다음 {preset} 주문" in page
+        assert f"지정한 시간에 {preset} 추천 주문" in page
+        assert engine.calls == [] and engine.enabled is False
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
 def test_read_status_and_ui_never_activate(dashboard):
     server, engine = dashboard
     code, headers, body = request(server)

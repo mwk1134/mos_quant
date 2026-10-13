@@ -32,7 +32,7 @@ const response=spec=>({status:spec.status??200,ok:(spec.status??200)>=200&&(spec
   text:async()=>{reads++;if(spec.readError)throw Error('secret read error');return spec.text??JSON.stringify(spec.json);}});
 const context={console,URL,Date,Set,Error,JSON,Number,String,Array,Object,
   window:{location:{href:input.url||'http://127.0.0.1:8701/'}},
-  document:{getElementById:node,querySelector:()=>({content:'fake-csrf'}),createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
+  document:{getElementById:node,querySelector:selector=>({content:selector.includes('engine-preset')?(input.preset||'KMW'):'fake-csrf'}),createElement:()=>new Element(),createTextNode:text=>({textContent:text})},
   setInterval:fn=>{context.poll=fn;},confirm:()=>false,pending,
   fetch:async(url,options={})=>{calls.push({url,method:options.method||'GET',body:options.body,redirect:options.redirect});
     const spec=queue.shift();if(!spec)throw Error('unexpected request');
@@ -52,10 +52,10 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 """
 
 
-def frontend(code, responses=(), *, url=None, initial_response=None):
+def frontend(code, responses=(), *, url=None, initial_response=None, preset="KMW"):
     script = re.search(r"<script>(.*?)</script>", _HTML, flags=re.S).group(1)
     payload = {"script": script, "initial": STATUS, "responses": list(responses),
-               "code": code, "url": url, "initialResponse": initial_response}
+               "code": code, "url": url, "initialResponse": initial_response, "preset": preset}
     result = subprocess.run([NODE, "-e", HARNESS], input=json.dumps(payload),
                             text=True, capture_output=True, timeout=5)
     assert result.returncode == 0, result.stderr
@@ -254,3 +254,27 @@ def test_auth_route_or_gateway_failure_blocks_followup_control_requests(status):
     assert [call["method"] for call in result["calls"]] == ["POST"]
     assert result["result"]["connectionReady"] is False
     assert result["result"]["disabled"]["enable"] is True
+
+
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+@pytest.mark.parametrize("received", [None, "KMW", "OTHER"])
+def test_additional_account_requires_matching_status_marker_before_controls(preset, received):
+    status = dict(STATUS)
+    if received is not None:
+        status["preset"] = received
+    result = frontend(output(), initial_response={"json": status}, preset=preset)
+    assert result["calls"] == []
+    assert result["result"]["connectionReady"] is False
+    assert result["result"]["disabled"]["enable"] is True
+    assert "선택한 프리셋" in result["result"]["error"]
+
+
+def test_jeh_matching_status_preserves_stale_preview_but_disables_live_submission():
+    status = {**STATUS, "preset": "JEH", "enabled": True, "review_id": "fake-jeh-review",
+              "plan": {"preset": "JEH", "status": "ready", "snapshot_fresh": False,
+                       "warnings": ["Preview only"], "orders": [{"side": "SELL", "quantity": 10}]}}
+    result = frontend(output(), initial_response={"json": status}, preset="JEH")
+    assert result["result"]["connectionReady"] is True
+    assert result["result"]["disabled"]["preview"] is False
+    assert result["result"]["disabled"]["run"] is True
+    assert result["calls"] == []

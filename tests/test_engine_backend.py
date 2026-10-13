@@ -582,45 +582,50 @@ def test_account_file_secrets_are_redacted_before_receipts_are_persisted(setup_b
 
 
 def test_each_account_uses_distinct_inert_default_configuration(tmp_path):
-    first, second = KMWBackend(), KMWBackend(preset="KMW2")
+    first, second, third = KMWBackend(), KMWBackend(preset="KMW2"), KMWBackend(preset="JEH")
     assert first.preset == "KMW" and second.preset == "KMW2"
     assert first.env_file.name == ".env.meritz"
     assert second.env_file.name == ".env.meritz.kmw2"
     assert first.ledger_path.name == "orders.sqlite3"
     assert second.ledger_path.name == "orders_kmw2.sqlite3"
-    with pytest.raises(ValueError, match="KMW and KMW2"):
-        KMWBackend(preset="JEH")
+    assert third.preset == "JEH"
+    assert third.env_file.name == ".env.meritz.jeh"
+    assert third.ledger_path.name == "orders_jeh.sqlite3"
+    with pytest.raises(ValueError, match="KMW, KMW2, JEH"):
+        KMWBackend(preset="UNREGISTERED")
 
 
-def test_kmw2_preview_selects_only_kmw2_and_remains_credential_free(tmp_path, monkeypatch):
-    snapshots = Mock(return_value=({"KMW": {}, "KMW2": {}}, "test"))
-    displayed = {**plan(), "preset": "KMW2"}
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_kmw2_preview_selects_only_kmw2_and_remains_credential_free(tmp_path, monkeypatch, preset):
+    snapshots = Mock(return_value=({"KMW": {}, preset: {}}, "test"))
+    displayed = {**plan(), "preset": preset}
     planner = Mock(return_value=displayed)
     forbidden = Mock(side_effect=AssertionError("Preview touched account credentials"))
     monkeypatch.setattr(backend_module, "load_snapshots", snapshots)
     monkeypatch.setattr(backend_module, "build_kmw_plan", planner)
     monkeypatch.setattr(backend_module, "read_env", forbidden)
     monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
-    engine = KMWBackend(preset="KMW2", env_file=tmp_path / "absent", ledger_path=tmp_path / "unused.db")
-    assert engine.preview(NOW)["preset"] == "KMW2"
-    snapshots.assert_called_once_with(preset="KMW2")
-    planner.assert_called_once_with({"KMW": {}, "KMW2": {}}, now=NOW, preset="KMW2")
+    engine = KMWBackend(preset=preset, env_file=tmp_path / "absent", ledger_path=tmp_path / "unused.db")
+    assert engine.preview(NOW)["preset"] == preset
+    snapshots.assert_called_once_with(preset=preset)
+    planner.assert_called_once_with({"KMW": {}, preset: {}}, now=NOW, preset=preset)
     forbidden.assert_not_called()
     assert not engine.ledger_path.exists()
 
 
-def test_stale_preview_is_explicit_and_never_weakens_execution_checks(tmp_path, monkeypatch):
-    displayed = {**plan(), "preset": "KMW2", "snapshot_date": "2026-10-08",
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_stale_preview_is_explicit_and_never_weakens_execution_checks(tmp_path, monkeypatch, preset):
+    displayed = {**plan(), "preset": preset, "snapshot_date": "2026-10-08",
                  "snapshot_fresh": False, "warnings": ["Stale snapshot"]}
-    monkeypatch.setattr(backend_module, "load_snapshots", Mock(return_value=({"KMW2": {}}, "test")))
+    monkeypatch.setattr(backend_module, "load_snapshots", Mock(return_value=({preset: {}}, "test")))
     planner = Mock(return_value=displayed)
     monkeypatch.setattr(backend_module, "build_kmw_plan", planner)
     forbidden = Mock(side_effect=AssertionError("Stale recommendation reached account credentials"))
     monkeypatch.setattr(backend_module, "read_env", forbidden)
     monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
-    engine = KMWBackend(preset="KMW2", env_file=tmp_path / "absent", ledger_path=tmp_path / "unused.db")
+    engine = KMWBackend(preset=preset, env_file=tmp_path / "absent", ledger_path=tmp_path / "unused.db")
     preview = engine.preview(NOW, allow_stale_snapshot=True)
-    planner.assert_called_once_with({"KMW2": {}}, now=NOW, preset="KMW2", allow_stale_snapshot=True)
+    planner.assert_called_once_with({preset: {}}, now=NOW, preset=preset, allow_stale_snapshot=True)
     assert preview["snapshot_fresh"] is False and preview["warnings"] == ["Stale snapshot"]
     outcome = engine.execute(preview, NOW)
     assert outcome["error_code"] == "STALE_SNAPSHOT" and outcome["orders"] == []
@@ -629,7 +634,7 @@ def test_stale_preview_is_explicit_and_never_weakens_execution_checks(tmp_path, 
     # cannot pass stale validation and instantiate or contact the broker.
 
 
-@pytest.mark.parametrize("preset,other", [("KMW", "KMW2"), ("KMW2", "KMW")])
+@pytest.mark.parametrize("preset,other", [(a, b) for a in ("KMW", "KMW2", "JEH") for b in ("KMW", "KMW2", "JEH") if a != b])
 @pytest.mark.parametrize("status", ["ready", "skipped"])
 def test_other_account_plan_is_rejected_before_credentials_or_history(
         tmp_path, monkeypatch, preset, other, status):
@@ -645,16 +650,17 @@ def test_other_account_plan_is_rejected_before_credentials_or_history(
     assert not engine.ledger_path.exists()
 
 
-def test_readiness_is_local_and_does_not_disclose_or_mutate_credentials(tmp_path, monkeypatch):
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_readiness_is_local_and_does_not_disclose_or_mutate_credentials(tmp_path, monkeypatch, preset):
     path = tmp_path / "second.env"
-    credentials = write_account_env(path, "KMW2")
+    credentials = write_account_env(path, preset)
     monkeypatch.setenv("MERITZ_APP_KEY", "fake-existing-kmw-key")
     monkeypatch.setenv("MERITZ_ACCOUNT_PRESET", "KMW")
     forbidden = Mock(side_effect=AssertionError("Readiness made an external call"))
     monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
     monkeypatch.setattr(backend_module, "configured_notifier", forbidden)
-    engine = KMWBackend(preset="KMW2", env_file=path, ledger_path=tmp_path / "unused.db")
-    assert engine.validate_account_configuration() == {"ready": True, "preset": "KMW2"}
+    engine = KMWBackend(preset=preset, env_file=path, ledger_path=tmp_path / "unused.db")
+    assert engine.validate_account_configuration() == {"ready": True, "preset": preset}
     assert __import__("os").environ["MERITZ_APP_KEY"] == "fake-existing-kmw-key"
     assert __import__("os").environ["MERITZ_ACCOUNT_PRESET"] == "KMW"
     assert engine._load_credentials() == credentials
@@ -662,24 +668,25 @@ def test_readiness_is_local_and_does_not_disclose_or_mutate_credentials(tmp_path
     assert not engine.ledger_path.exists()
 
 
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
 @pytest.mark.parametrize("configuration", [
     "MERITZ_ACCOUNT_PRESET=KMW2\n",
     "MERITZ_ACCOUNT_PRESET=KMW\nMERITZ_APP_KEY=fake-key\nMERITZ_APP_SECRET=fake-secret\nMERITZ_MAC_ADDRESS=AABBCCDDEEFF\n",
     "MERITZ_ACCOUNT_PRESET=KMW2\nMERITZ_APP_KEY=fake-key\nMERITZ_APP_SECRET=fake-secret\nMERITZ_MAC_ADDRESS=bad-secret-mac\n",
 ])
 def test_kmw2_partial_or_wrong_account_file_cannot_inherit_kmw_credentials(
-        tmp_path, monkeypatch, configuration):
+        tmp_path, monkeypatch, configuration, preset):
     path = tmp_path / "second.env"
-    path.write_text(configuration)
+    path.write_text(configuration.replace("=KMW2", "=" + preset))
     for name, value in {"MERITZ_ACCOUNT_PRESET": "KMW", "MERITZ_APP_KEY": "inherited-fake-key",
                         "MERITZ_APP_SECRET": "inherited-fake-secret", "MERITZ_MAC_ADDRESS": "AABBCCDDEEFF"}.items():
         monkeypatch.setenv(name, value)
     forbidden = Mock(side_effect=AssertionError("Configuration check touched broker"))
     monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
-    engine = KMWBackend(preset="KMW2", env_file=path, ledger_path=tmp_path / "unused.db")
+    engine = KMWBackend(preset=preset, env_file=path, ledger_path=tmp_path / "unused.db")
     with pytest.raises(EngineBlocked) as caught:
         engine.validate_account_configuration()
-    assert caught.value.code == "CONFIGURATION" and "KMW2" in str(caught.value)
+    assert caught.value.code == "CONFIGURATION" and preset in str(caught.value)
     assert "fake-key" not in str(caught.value) and "bad-secret" not in str(caught.value)
     forbidden.assert_not_called()
     assert not engine.ledger_path.exists()
@@ -689,7 +696,7 @@ def test_separate_account_backends_send_their_own_mapping_and_notification_label
     from kmw_autotrade import account_id
     clients, notifiers, captured = {}, {}, []
     engines = []
-    for preset in ("KMW", "KMW2"):
+    for preset in ("KMW", "KMW2", "JEH"):
         path = tmp_path / f"{preset}.env"
         values = write_account_env(path, preset, key=f"fake-{preset}-key")
         engines.append((KMWBackend(preset=preset, env_file=path, ledger_path=tmp_path / f"{preset}.db",
@@ -708,9 +715,17 @@ def test_separate_account_backends_send_their_own_mapping_and_notification_label
     monkeypatch.setenv("MERITZ_ACCOUNT_PRESET", "KMW")
     for engine, values in engines:
         original = {**plan(), "preset": engine.preset}
+        if engine.preset == "JEH":
+            original["orders"][4].update(order_type="MOC", price="0")
+        before = deepcopy(original)
         result = engine.execute(original, NOW)
         assert result["state"] == "DIRECT_ACCEPTED" and len(result["orders"]) == 6
         assert clients[engine.preset].submit_order.call_count == 6
+        for call, row in zip(clients[engine.preset].submit_order.call_args_list, original["orders"]):
+            assert (call.kwargs["side"], call.kwargs["quantity"], call.kwargs["price"],
+                    call.kwargs["order_type"]) == (row["side"].lower(), row["quantity"],
+                                                  row["price"], row["order_type"])
+        assert original == before
         assert notifiers[engine.preset].send.call_args.args[0].startswith(f"{engine.preset} 자동매매 · SOXL\n")
         ledger = OrderLedger(engine.ledger_path)
         try:
@@ -718,5 +733,72 @@ def test_separate_account_backends_send_their_own_mapping_and_notification_label
             assert ledger.rows(account_id("KMW", env={"MERITZ_ACCOUNT_PRESET": "KMW", "MERITZ_APP_KEY": "unrelated-fake-key"})) == []
         finally:
             ledger.db.close()
-    assert [value["MERITZ_ACCOUNT_PRESET"] for value in captured] == ["KMW", "KMW2"]
+    assert [value["MERITZ_ACCOUNT_PRESET"] for value in captured] == ["KMW", "KMW2", "JEH"]
     assert __import__("os").environ["MERITZ_APP_KEY"] == "unrelated-fake-key"
+
+
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH"])
+def test_refresh_preview_passes_only_its_account_mapping_and_returns_fresh_plan(tmp_path, monkeypatch, preset):
+    import sys
+    import types
+
+    path = tmp_path / "account.env"
+    values = write_account_env(path, preset, key=f"synthetic-{preset}-key", GITHUB_TOKEN="synthetic-account-source-token")
+    document = {preset: {"available_cash": 1000}}
+    synchronizer = Mock(return_value=(document, "github:current/main/positions_snapshots.json"))
+    module = types.ModuleType("preset_snapshot_sync")
+    module.refresh_and_load_snapshots = synchronizer
+    monkeypatch.setitem(sys.modules, "preset_snapshot_sync", module)
+    generated = {**plan(), "preset": preset}
+    planner = Mock(return_value=generated)
+    forbidden = Mock(side_effect=AssertionError("Refresh preview reached a submission or legacy source path"))
+    monkeypatch.setattr(backend_module, "load_snapshots", forbidden)
+    monkeypatch.setattr(backend_module, "build_kmw_plan", planner)
+    monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-unrelated-source-token")
+    engine = KMWBackend(preset=preset, env_file=path, ledger_path=tmp_path / "unused.db")
+    result = engine.refresh_preview(NOW)
+    synchronizer.assert_called_once_with(preset=preset, env=values, ledger_path=engine.ledger_path, now=NOW)
+    planner.assert_called_once_with(document, now=NOW, preset=preset)
+    assert result["preset"] == preset and result["snapshot_fresh"] is True
+    assert result["snapshot_source"] == "github:current/main/positions_snapshots.json"
+    assert result["orders"] == generated["orders"] and result["order_route"] == "direct"
+    assert __import__("os").environ["GITHUB_TOKEN"] == "synthetic-unrelated-source-token"
+    assert not engine.ledger_path.exists()
+    forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize("scenario", ["refresh_failed", "stale", "wrong_preset"])
+def test_refresh_failure_never_falls_back_to_stale_plan_or_exposes_credentials(tmp_path, monkeypatch, scenario):
+    import sys
+    import types
+
+    path = tmp_path / "jeh.env"
+    write_account_env(path, "JEH", key="synthetic-private-key")
+    synchronizer = Mock(return_value=({"JEH": {}}, "github:test"))
+    module = types.ModuleType("preset_snapshot_sync")
+    module.refresh_and_load_snapshots = synchronizer
+    monkeypatch.setitem(sys.modules, "preset_snapshot_sync", module)
+    displayed = {**plan(), "preset": "JEH"}
+    if scenario == "refresh_failed":
+        synchronizer.side_effect = RuntimeError("https://synthetic-private-key.example/private-token")
+    elif scenario == "stale":
+        displayed["snapshot_fresh"] = False
+    else:
+        displayed["preset"] = "KMW"
+    planner = Mock(return_value=displayed)
+    forbidden = Mock(side_effect=AssertionError("Refresh failure fell back or sent an order"))
+    monkeypatch.setattr(backend_module, "build_kmw_plan", planner)
+    monkeypatch.setattr(backend_module, "load_snapshots", forbidden)
+    monkeypatch.setattr(backend_module.MeritzClient, "from_env", forbidden)
+    engine = KMWBackend(preset="JEH", env_file=path, ledger_path=tmp_path / "unused.db")
+    with pytest.raises(EngineBlocked) as caught:
+        engine.refresh_preview(NOW)
+    assert "synthetic-private-key" not in str(caught.value)
+    assert "private-token" not in str(caught.value)
+    if scenario == "stale":
+        assert caught.value.code == "STALE_SNAPSHOT"
+    elif scenario == "wrong_preset":
+        assert caught.value.code == "PRESET_MISMATCH"
+    assert not engine.ledger_path.exists()
+    forbidden.assert_not_called()

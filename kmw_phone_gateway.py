@@ -28,6 +28,8 @@ _ACTIONS = {"status", "preview", "configure", "enable", "disable", "run"}
 _POST_ROUTES = {"/api/" + action for action in _ACTIONS - {"status"}}
 _MAX_BODY = 16_384
 _MAX_RESPONSE = 2 * 1024 * 1024
+_ENGINE_PREFIX_FIELDS = (("", "engine_port"), ("/kmw2", "kmw2_engine_port"),
+                         ("/jeh", "jeh_engine_port"))
 _CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
         "connect-src 'self'; img-src 'none'; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'none'")
@@ -76,12 +78,25 @@ def _port(value: Any, *, allow_zero: bool = False) -> int:
     return value
 
 
+def _engine_targets(*, engine_port: Any = 8701, kmw2_engine_port: Any = None,
+                    jeh_engine_port: Any = None) -> dict[str, int]:
+    """Map fixed account prefixes to distinct, explicitly configured ports."""
+    values = {"engine_port": engine_port, "kmw2_engine_port": kmw2_engine_port,
+              "jeh_engine_port": jeh_engine_port}
+    targets = {prefix: _port(values[field]) for prefix, field in _ENGINE_PREFIX_FIELDS
+               if not prefix or values[field] is not None}
+    if len(set(targets.values())) != len(targets):
+        raise ValueError("Preset engines must use separate loopback ports")
+    return targets
+
+
 class PhoneGatewayServer(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, *, public_origin: str, username: str, password: str,
                  trusted_host: str | None = None, engine_port: int = 8701,
                  kmw2_engine_port: int | None = None,
+                 jeh_engine_port: int | None = None,
                  host: str = "127.0.0.1", port: int = 8702,
                  allow_short_password: bool = False):
         if host != "127.0.0.1":
@@ -90,12 +105,14 @@ class PhoneGatewayServer(ThreadingHTTPServer):
         self.auth_digest = _credentials_digest(username, password, allow_short_password=allow_short_password)
         self.auth_lock = threading.Lock()
         self.auth_failures: dict[str, list[float]] = {}
-        self.engine_port = _port(engine_port)
+        self.engine_targets = _engine_targets(engine_port=engine_port,
+                                             kmw2_engine_port=kmw2_engine_port,
+                                             jeh_engine_port=jeh_engine_port)
+        self.engine_port = self.engine_targets[""]
         self.engine_host = f"127.0.0.1:{self.engine_port}"
         self.engine_origin = "http://" + self.engine_host
-        self.kmw2_engine_port = _port(kmw2_engine_port) if kmw2_engine_port is not None else None
-        if self.kmw2_engine_port == self.engine_port:
-            raise ValueError("KMW and KMW2 engines must use separate loopback ports")
+        self.kmw2_engine_port = self.engine_targets.get("/kmw2")
+        self.jeh_engine_port = self.engine_targets.get("/jeh")
         super().__init__((host, _port(port, allow_zero=True)), _Handler)
 
 
@@ -205,14 +222,16 @@ class _Handler(BaseHTTPRequestHandler):
                 return None
             # Prefixes select only preconfigured loopback engines. They never
             # supply a target host/port or relax the route allowlist.
-            if parsed.path.startswith("/kmw2/"):
-                if self.server.kmw2_engine_port is None:
-                    return None
-                engine_port = self.server.kmw2_engine_port
-                path = parsed.path[len("/kmw2"):]
-            else:
-                engine_port = self.server.engine_port
-                path = parsed.path
+            engine_port = self.server.engine_port
+            path = parsed.path
+            for prefix, _field in _ENGINE_PREFIX_FIELDS:
+                if prefix and parsed.path.startswith(prefix + "/"):
+                    configured_port = self.server.engine_targets.get(prefix)
+                    if configured_port is None:
+                        return None
+                    engine_port = configured_port
+                    path = parsed.path[len(prefix):]
+                    break
             if parsed.query:
                 query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
                 values = query.get("kmw_api", [])
@@ -331,17 +350,15 @@ def load_config(path: str | Path) -> dict[str, Any]:
         if len(raw) > 65_536:
             raise ValueError("Gateway configuration is too large")
         values = json.loads(raw)
-        allowed = {"public_origin", "username", "password", "engine_port", "kmw2_engine_port",
+        allowed = {"public_origin", "username", "password", "engine_port", "kmw2_engine_port", "jeh_engine_port",
                    "trusted_host", "port", "allow_short_password"}
         if not isinstance(values, dict) or set(values) - allowed or not {"public_origin", "username", "password"} <= set(values):
             raise ValueError("Gateway configuration fields are invalid")
         _public_address(values["public_origin"], values.get("trusted_host"))
         _credentials_digest(values["username"], values["password"], allow_short_password=values.get("allow_short_password", False))
-        _port(values.get("engine_port", 8701))
-        if values.get("kmw2_engine_port") is not None:
-            kmw2_port = _port(values["kmw2_engine_port"])
-            if kmw2_port == values.get("engine_port", 8701):
-                raise ValueError("KMW and KMW2 engines must use separate loopback ports")
+        _engine_targets(engine_port=values.get("engine_port", 8701),
+                        kmw2_engine_port=values.get("kmw2_engine_port"),
+                        jeh_engine_port=values.get("jeh_engine_port"))
         _port(values.get("port", 8702))
         return values
     finally:

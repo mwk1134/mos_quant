@@ -249,8 +249,11 @@ def test_legacy_order_identity_is_exact_and_kmw2_has_a_distinct_identity():
     assert OrderLedger.identity("account", original, order) == legacy
     second = {**original, "preset": "KMW2"}
     assert OrderLedger.identity("account", second, order) != legacy
-    with pytest.raises(OrderBlocked, match="KMW and KMW2"):
-        OrderLedger.identity("account", {**original, "preset": "JEH"}, order)
+    third = {**original, "preset": "JEH"}
+    assert len({legacy, OrderLedger.identity("account", second, order),
+                OrderLedger.identity("account", third, order)}) == 3
+    with pytest.raises(OrderBlocked, match="KMW, KMW2, JEH"):
+        OrderLedger.identity("account", {**original, "preset": "UNREGISTERED"}, order)
 
 
 def test_account_marker_must_match_the_selected_plan_without_exposing_key():
@@ -268,6 +271,27 @@ def test_kmw2_plan_requires_explicit_preset_selection():
     validate_plan(second, NOW, preset="KMW2")
     with pytest.raises(OrderBlocked, match="ready KMW2"):
         validate_plan(plan(), NOW, preset="KMW2")
+
+
+def test_jeh_plan_requires_its_own_selection_and_account_marker():
+    third = {**plan(), "preset": "JEH"}
+    validate_plan(third, NOW, preset="JEH")
+    with pytest.raises(OrderBlocked, match="ready KMW"):
+        validate_plan(third, NOW)
+    with pytest.raises(OrderBlocked, match="ready JEH"):
+        validate_plan(plan(), NOW, preset="JEH")
+    credentials = {"MERITZ_ACCOUNT_PRESET": "JEH", "MERITZ_APP_KEY": "fake-third-account-key"}
+    assert account_id("JEH", env=credentials)
+    for wrong in ("KMW", "KMW2"):
+        with pytest.raises(OrderBlocked, match=f"MERITZ_ACCOUNT_PRESET={wrong}") as caught:
+            account_id(wrong, env=credentials)
+        assert "fake-third-account-key" not in str(caught.value)
+
+
+def test_jeh_stale_display_plan_cannot_pass_order_validation():
+    third = {**plan(), "preset": "JEH", "snapshot_fresh": False}
+    with pytest.raises(OrderBlocked, match="JEH snapshot is stale"):
+        validate_plan(third, NOW, preset="JEH")
 
 
 def test_snapshot_loader_never_substitutes_the_other_account(tmp_path):
@@ -302,42 +326,44 @@ def test_notification_events_are_preset_scoped_even_when_no_orders(tmp_path, mon
     import hashlib
     ledger = OrderLedger(tmp_path / "outbox.db")
     source = {"MERITZ_APP_KEY": "fake-shared-key"}
-    for preset in ("KMW", "KMW2"):
+    for preset in ("KMW", "KMW2", "JEH"):
         empty = {**plan(), "preset": preset, "orders": []}
         notify_order_result(ledger, None, {"plan": empty}, error=ValueError("blocked"), env=source)
     account = hashlib.sha256(source["MERITZ_APP_KEY"].encode()).hexdigest()
     legacy_event = [account, plan()["order_date"], [], "BLOCKED"]
     legacy = hashlib.sha256(json.dumps(legacy_event, sort_keys=True).encode()).hexdigest()
     rows = ledger.db.execute("SELECT event_key,text FROM notifications ORDER BY created_at").fetchall()
-    assert len(rows) == 2 and rows[0][0] == legacy
-    assert rows[0][1].startswith("KMW 자동매매") and rows[1][1].startswith("KMW2 자동매매")
+    assert len(rows) == 3 and rows[0][0] == legacy
+    assert rows[0][1].startswith("KMW 자동매매") and rows[1][1].startswith("KMW2 자동매매") and rows[2][1].startswith("JEH 자동매매")
     ledger.db.close()
 
 
-def test_kmw2_cli_preview_needs_no_credentials_and_selects_its_own_snapshot(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_kmw2_cli_preview_needs_no_credentials_and_selects_its_own_snapshot(tmp_path, monkeypatch, capsys, preset):
     path = tmp_path / "snapshot.json"
-    path.write_text('{"KMW": {}, "KMW2": {}}')
+    path.write_text(json.dumps({"KMW": {}, preset: {}}))
     monkeypatch.setattr("kmw_autotrade.ROOT", tmp_path)
     monkeypatch.setenv("MERITZ_APP_KEY", "fake-first-account-key")
-    second = {**plan(), "preset": "KMW2", "warnings": []}
+    second = {**plan(), "preset": preset, "warnings": []}
     with patch("kmw_autotrade.build_kmw_plan", return_value=second) as planner, \
          patch("kmw_autotrade.MeritzClient.from_env", side_effect=AssertionError("broker called")):
-        assert main(["--preset", "KMW2", "--snapshot-file", str(path)]) == 0
-    assert planner.call_args.kwargs["preset"] == "KMW2"
-    assert '"preset": "KMW2"' in capsys.readouterr().out
+        assert main(["--preset", preset, "--snapshot-file", str(path)]) == 0
+    assert planner.call_args.kwargs["preset"] == preset
+    assert f'"preset": "{preset}"' in capsys.readouterr().out
     assert __import__("os").environ["MERITZ_APP_KEY"] == "fake-first-account-key"
-    assert (tmp_path / ".autotrade/plans_kmw2/2026-10-12.json").exists()
+    assert (tmp_path / f".autotrade/plans_{preset.lower()}/2026-10-12.json").exists()
     assert not (tmp_path / ".autotrade/plans/2026-10-12.json").exists()
 
 
-def test_kmw2_cli_missing_credentials_cannot_use_inherited_first_account(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("preset", ["KMW2", "JEH"])
+def test_kmw2_cli_missing_credentials_cannot_use_inherited_first_account(tmp_path, monkeypatch, capsys, preset):
     monkeypatch.setattr("kmw_autotrade.ROOT", tmp_path)
     monkeypatch.setenv("MERITZ_ACCOUNT_PRESET", "KMW")
     monkeypatch.setenv("MERITZ_APP_KEY", "fake-first-account-key")
     forbidden = Mock(side_effect=AssertionError("Missing KMW2 credentials reached a broker"))
     monkeypatch.setattr("kmw_autotrade.MeritzClient.from_env", forbidden)
-    assert main(["--preset", "KMW2", "--check-account"]) == 1
-    assert "KMW2 credential file is missing" in capsys.readouterr().err
+    assert main(["--preset", preset, "--check-account"]) == 1
+    assert f"{preset} credential file is missing" in capsys.readouterr().err
     forbidden.assert_not_called()
 
 

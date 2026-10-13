@@ -3,6 +3,7 @@ import json
 import time
 import math
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from copy import deepcopy
 from threading import RLock
 from datetime import datetime, timedelta, timezone
 import pandas as pd
@@ -437,6 +438,8 @@ class SOXLQuantTrader:
         self.compound_settlements = []
         self._compound_processed_dates = set()
         self._pending_buy_recommendation = None
+        self._broker_confirmed_positions = False
+        self._broker_sync_metadata = None
 
         # Per-preset/user opt-in.  False preserves every existing caller's
         # behavior.  The explicit flag prevents an older snapshot from
@@ -562,6 +565,11 @@ class SOXLQuantTrader:
             })
         self.compound_settlements = restored_settlements
         self._compound_processed_dates = set()
+        if "compound_trading_days" in snapshot:
+            count = snapshot["compound_trading_days"]
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ValueError("Invalid confirmed compounding trading-day count")
+            self.trading_days_count = count
 
     def _add_compounding_seed(self, amount: float) -> None:
         if not getattr(self, "profit_loss_compounding_enabled", False):
@@ -574,6 +582,10 @@ class SOXLQuantTrader:
         self.compound_reference_seed += value
 
     def _process_compounding_for_date(self, current_date: datetime) -> None:
+        # Confirmed account state is settled by the broker snapshot refresher;
+        # reading a recommendation must not advance it to a future session.
+        if getattr(self, "_broker_confirmed_positions", False):
+            return
         if not getattr(self, "profit_loss_compounding_enabled", False):
             return
         if isinstance(current_date, pd.Timestamp):
@@ -840,6 +852,12 @@ class SOXLQuantTrader:
         available_cash: (초기+시드-현재포지션투자금)로 초기값 계산. 실제 값은
         simulate_from_snapshot_to_today에서 시뮬레이션으로 매도 수익 반영하여 보정.
         """
+        sync = snapshot.get("broker_sync") if isinstance(snapshot, dict) else None
+        self._broker_confirmed_positions = (
+            isinstance(sync, dict) and type(sync.get("version")) is int
+            and sync["version"] == 1 and isinstance(sync.get("executions"), dict)
+        )
+        self._broker_sync_metadata = deepcopy(sync) if self._broker_confirmed_positions else None
         if not snapshot:
             return [], "", self.initial_capital
         snapshot_cash = self._snapshot_available_cash(snapshot)
@@ -906,7 +924,7 @@ class SOXLQuantTrader:
                 position["max_hold_days"] = int(val.get("max_hold_days"))
             if val.get("strategy_name"):
                 position["strategy_name"] = str(val.get("strategy_name"))
-            if stored_mode in ("SF", "AG"):
+            if stored_mode in ("SF", "AG") and not self._broker_confirmed_positions:
                 self._correct_position_mode(position, position["mode"])
             positions.append(position)
         if not positions:
@@ -926,6 +944,32 @@ class SOXLQuantTrader:
         available_cash = self.initial_capital + seed_before - total_invested
         available_cash = max(0.0, available_cash)
         return positions, max_snap_date, available_cash
+
+    def restore_real_positions(self, snapshot: dict) -> Dict:
+        """Restore a broker-confirmed portfolio without simulating executions."""
+        sync = snapshot.get("broker_sync") if isinstance(snapshot, dict) else None
+        if (not isinstance(sync, dict) or type(sync.get("version")) is not int
+                or sync["version"] != 1 or not isinstance(sync.get("executions"), dict)):
+            return {"error": "실제 체결 스냅샷의 동기화 기록을 확인할 수 없습니다."}
+        try:
+            baseline = datetime.strptime(sync["baseline_date"], "%Y-%m-%d")
+            checkpoint = datetime.strptime(snapshot["as_of_date"], "%Y-%m-%d")
+            if baseline > checkpoint or self._snapshot_available_cash(snapshot) is None:
+                raise ValueError
+            self.restore_ma_alignment_switch_from_snapshot(snapshot)
+            positions, checkpoint_date, available_cash = self._snapshot_to_positions_and_state(snapshot)
+            self.positions = positions
+            self.available_cash = available_cash
+            self.current_round = len(positions) + 1
+            self.processed_seed_dates = self._snapshot_processed_seed_dates(snapshot) or set()
+            self.current_week_friday = None
+            self._pending_buy_recommendation = None
+            self.current_investment_capital = available_cash + sum(p["amount"] for p in positions)
+            self._restore_compounding_from_snapshot(snapshot)
+            return {"from_snapshot": True, "broker_confirmed": True,
+                    "max_snap_date": checkpoint_date, "cash_only": not bool(positions)}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return {"error": "실제 체결 스냅샷의 보유 수량·예수금·기준일을 확인할 수 없습니다."}
 
     def _compute_available_cash_from_simulation(self, original_start_date: str, max_snap_date: str, snapshot_total_invested: float, quiet: bool) -> float:
         """
@@ -954,6 +998,8 @@ class SOXLQuantTrader:
         rsi_ref_data: Optional[dict] = None,
     ) -> None:
         """Recheck each lot's entry week before evaluating any sell conditions."""
+        if getattr(self, "_broker_confirmed_positions", False):
+            return
         if not positions:
             return
         if rsi_ref_data is None:
@@ -1002,6 +1048,8 @@ class SOXLQuantTrader:
         """
         if not isinstance(snapshot, dict) or not snapshot:
             return {"error": "기존 스냅샷이 비어 있어 전체 재시뮬레이션을 중단했습니다."}
+        if "broker_sync" in snapshot:
+            return self.restore_real_positions(snapshot)
 
         # A just-made UI choice wins over persisted metadata; otherwise restore
         # the per-preset opt-in value when resuming in a new process/session.
@@ -2713,6 +2761,8 @@ class SOXLQuantTrader:
         Args:
             soxl_data (DataFrame): 최근 SOXL 일별 데이터 (Close 필수)
         """
+        if getattr(self, "_broker_confirmed_positions", False):
+            return
         if not self.positions or soxl_data is None or len(soxl_data) == 0:
             return
 
@@ -3043,6 +3093,8 @@ class SOXLQuantTrader:
         (예: 3/23의 전일이 3/19가 되어 LOC가 잘못 충족)하는 경우를 완화한다.
         manual_corrections와 함께 사용.
         """
+        if getattr(self, "_broker_confirmed_positions", False):
+            return
         if soxl_data is None or len(soxl_data) == 0 or not self.positions:
             return
         try:
@@ -3099,7 +3151,7 @@ class SOXLQuantTrader:
         print("=" * 60)
         
         # 현재 상태를 최신으로 업데이트 (시작일부터 현재까지 시뮬레이션)
-        if not skip_simulate and self.session_start_date:
+        if not skip_simulate and self.session_start_date and not self._broker_confirmed_positions:
             print("🔄 트레이더 상태를 최신으로 업데이트 중...")
             sim_result = self.simulate_from_start_to_today(self.session_start_date, quiet=True)
             if "error" in sim_result:
@@ -3183,7 +3235,7 @@ class SOXLQuantTrader:
                 continue
             
             # 12/29일 매수 포지션인지 확인
-            if buy_date_dt.date() == target_date.date():
+            if buy_date_dt.date() == target_date.date() and not self._broker_confirmed_positions:
                 # 모드를 안전모드로 강제 변경
                 self._correct_position_mode(pos, 'SF')
                 
@@ -3566,9 +3618,18 @@ class SOXLQuantTrader:
         # current_date는 오늘 날짜로 설정하여 손절예정일 체크가 올바르게 작동하도록 함
         today_datetime = datetime.combine(today_date, datetime.min.time())
         all_sell_recommendations, sell_debug_info = self.check_sell_conditions(check_sell_row, today_datetime, prev_close, return_debug_info=True)
+        if self._broker_confirmed_positions:
+            for sell_info in all_sell_recommendations:
+                position = sell_info["position"]
+                rules = self.get_position_config(position)
+                expiry = self.get_trading_date_after(position["buy_date"], rules["max_hold_days"])
+                expired = proposed_buy_order_dt >= expiry
+                sell_info["order_type"] = "MOC" if expired else "LOC"
+                sell_info["order_price"] = "0" if expired else f"{self.calculate_position_sell_price(position):.2f}"
         
         # 매도 추천 리스트: 손절예정일 당일까지 표시, 다음날부터 미표시. 목표가 도달 시 즉시 미표시
-        sell_recommendations = [s for s in all_sell_recommendations if s.get('show_in_recommendation_list', True)]
+        sell_recommendations = [s for s in all_sell_recommendations
+                                if self._broker_confirmed_positions or s.get('show_in_recommendation_list', True)]
         
         # 8. 매수 조건 확인
         can_buy = self.can_buy_next_round(active_config)
@@ -3760,6 +3821,8 @@ class SOXLQuantTrader:
         self.positions = []
         self.current_round = 1
         self.available_cash = self.initial_capital
+        self._broker_confirmed_positions = False
+        self._broker_sync_metadata = None
 
         
         # 투자원금 관리 초기화
@@ -3938,6 +4001,10 @@ class SOXLQuantTrader:
         Returns:
             Dict: 백테스팅 결과
         """
+        # An explicit backtest uses simulated executions even if this instance
+        # previously displayed a broker-confirmed portfolio.
+        self._broker_confirmed_positions = False
+        self._broker_sync_metadata = None
         from_snapshot = bool(initial_positions is not None and initial_cash is not None and snapshot_max_date)
 
         print(f"🔄 백테스팅 시작: {start_date} ~ {end_date or '오늘'}" + (" (스냅샷 기반)" if from_snapshot else ""))
