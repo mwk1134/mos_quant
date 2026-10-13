@@ -28,6 +28,26 @@ if str(CURRENT_DIR) not in sys.path:
 # 기존 SOXLQuantTrader 클래스 import
 from soxl_quant_system import SOXLQuantTrader, calculate_cash_limited_order
 
+
+def _ensure_current_strategy_class():
+    """Refresh an imported pre-deployment strategy only when it lacks support."""
+    global SOXLQuantTrader, calculate_cash_limited_order
+    if not callable(getattr(SOXLQuantTrader, "restore_real_positions", None)):
+        import importlib
+        import soxl_quant_system as strategy
+
+        importlib.invalidate_caches()
+        strategy = importlib.reload(strategy)
+        current_class = strategy.SOXLQuantTrader
+        if not callable(getattr(current_class, "restore_real_positions", None)):
+            raise RuntimeError("최신 계좌 복원 기능을 불러오지 못했습니다.")
+        SOXLQuantTrader = current_class
+        calculate_cash_limited_order = strategy.calculate_cash_limited_order
+    return SOXLQuantTrader
+
+
+_ensure_current_strategy_class()
+
 APP_COMPOUNDING_ENABLED = True
 APP_PROFIT_COMPOUNDING_RATE = 0.70
 APP_LOSS_COMPOUNDING_RATE = 0.20
@@ -55,6 +75,35 @@ def configure_app_trader(
     if hasattr(trader, "set_ma_alignment_switch"):
         trader.set_ma_alignment_switch(bool(ma_alignment_enabled))
     return trader
+
+
+def _upgrade_session_trader():
+    """Keep user state while replacing a trader retained across deployments."""
+    current_class = _ensure_current_strategy_class()
+    previous = st.session_state.get("trader")
+    if previous is None:
+        return None
+    if (type(previous) is current_class
+            and callable(getattr(previous, "restore_real_positions", None))
+            and hasattr(previous, "_broker_confirmed_positions")
+            and hasattr(previous, "_broker_sync_metadata")):
+        return previous
+
+    upgraded = current_class(
+        initial_capital=st.session_state.initial_capital,
+        sf_config=st.session_state.get("sf_config"),
+        ag_config=st.session_state.get("ag_config"),
+        auto_update_rsi=False,
+    )
+    # Fresh initialization supplies newly introduced fields. Retain the user's
+    # portfolio and settings; the recommendation then restores its saved facts.
+    previous_state = deepcopy(vars(previous))
+    previous_state.pop("restore_real_positions", None)
+    upgraded.__dict__.update(previous_state)
+    configure_app_trader(upgraded)
+    upgraded.clear_cache()
+    st.session_state.trader = upgraded
+    return upgraded
 
 # 페이지 설정
 st.set_page_config(
@@ -1753,6 +1802,12 @@ def login_page():
 
 def initialize_trader():
     """트레이더 초기화 - 오류 처리 강화"""
+    try:
+        _upgrade_session_trader()
+    except Exception:
+        st.session_state.trader = None
+        st.error("계산 기능을 갱신하지 못했습니다. 페이지를 새로고침해 다시 시도해주세요.")
+        return
     if st.session_state.trader is None:
         try:
             with st.spinner('MOS 퀀트투자 시스템 초기화 중...'):
