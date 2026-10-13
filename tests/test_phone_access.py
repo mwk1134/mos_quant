@@ -238,12 +238,24 @@ def test_cli_without_start_flag_opens_no_socket_or_process(monkeypatch, capsys):
     assert "--start" in capsys.readouterr().out
 
 
-def test_occupied_destination_fails_before_tunnel_or_gateway_start(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure_stage", ["bind", "listen"])
+def test_occupied_destination_fails_before_tunnel_or_gateway_start(tmp_path, monkeypatch, failure_stage):
     events = []
 
     class OccupiedSocket:
+        def setsockopt(self, level, option, value):
+            assert (level, option, value) == (access.socket.SOL_SOCKET, access.socket.SO_REUSEADDR, 1)
+            events.append(("reuse_address",))
+
         def bind(self, address):
             events.append(("bind", address))
+            if failure_stage == "bind":
+                raise OSError("Address already in use")
+
+        def listen(self, backlog):
+            # Some platforms allow a reused address to bind, but reject a
+            # second listener. Both failures must precede a public tunnel.
+            events.append(("listen", backlog))
             raise OSError("Address already in use")
 
         def close(self):
@@ -258,14 +270,25 @@ def test_occupied_destination_fails_before_tunnel_or_gateway_start(tmp_path, mon
     monkeypatch.setattr(gateway, "create_server", forbidden)
     with pytest.raises(OSError, match="already in use"):
         access.start_phone_access(tmp_path / ".autotrade" / "phone_gateway.json")
-    assert events == [("bind", ("127.0.0.1", 8702)), ("close",)]
+    expected = [("reuse_address",), ("bind", ("127.0.0.1", 8702))]
+    if failure_stage == "listen":
+        expected.append(("listen", 128))
+    assert events == [*expected, ("close",)]
 
 
 def test_gateway_thread_failure_does_not_shutdown_an_unstarted_server(tmp_path, monkeypatch):
     events = []
 
     class FakeSocket:
+        reuse_address = False
+
+        def setsockopt(self, level, option, value):
+            assert (level, option, value) == (access.socket.SOL_SOCKET, access.socket.SO_REUSEADDR, 1)
+            self.reuse_address = True
+            events.append("reuse_address")
+
         def bind(self, address):
+            assert self.reuse_address  # Simulate a destination still in TIME_WAIT.
             events.append("bound")
 
         def listen(self, _backlog):
@@ -313,7 +336,7 @@ def test_gateway_thread_failure_does_not_shutdown_an_unstarted_server(tmp_path, 
                 raise RuntimeError("cannot start gateway thread")
 
     def popen(*_args, **_kwargs):
-        assert events[:2] == ["bound", "listening"]
+        assert events[:3] == ["reuse_address", "bound", "listening"]
         events.append("tunnel_started")
         return FakeProcess()
 
@@ -332,3 +355,40 @@ def test_gateway_thread_failure_does_not_shutdown_an_unstarted_server(tmp_path, 
         access.start_phone_access(tmp_path / "phone_gateway.json")
     assert "unsafe_shutdown" not in events
     assert "tunnel_terminated" in events
+
+
+def test_tunnel_restart_keeps_all_five_account_ports_and_private_credentials(tmp_path):
+    path = tmp_path / "phone_gateway.json"
+    previous = access.write_phone_config(path, ORIGIN)
+    ports = {"engine_port": 8701, "kmw2_engine_port": 8703,
+             "jeh_engine_port": 8704, "jeh2_engine_port": 8705, "khw_engine_port": 8706}
+    previous.update(ports)
+    path.write_text(json.dumps(previous))
+    renewed = access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert {field: renewed[field] for field in ports} == ports
+    assert renewed["username"] == previous["username"] and renewed["password"] == previous["password"]
+    assert stat.S_IMODE(path.lstat().st_mode) == 0o600
+    assert gateway.load_config(path) == renewed
+
+
+def test_khw_without_other_optional_accounts_is_preserved_when_origin_changes(tmp_path):
+    path = tmp_path / "phone_gateway.json"
+    previous = access.write_phone_config(path, ORIGIN)
+    previous["khw_engine_port"] = 8706
+    path.write_text(json.dumps(previous))
+    renewed = access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert renewed["engine_port"] == 8701 and renewed["khw_engine_port"] == 8706
+    assert not {"kmw2_engine_port", "jeh_engine_port", "jeh2_engine_port"} & renewed.keys()
+    assert gateway.load_config(path) == renewed
+
+
+@pytest.mark.parametrize("fifth_port", [8701, 8703, 8704, 8705, True, False, 0, -1, 65536, "8706", 8706.0, []])
+def test_invalid_or_colliding_khw_port_does_not_rewrite_config(tmp_path, fifth_port):
+    path = tmp_path / "phone_gateway.json"
+    config = access.write_phone_config(path, ORIGIN)
+    config.update(kmw2_engine_port=8703, jeh_engine_port=8704, jeh2_engine_port=8705, khw_engine_port=fifth_port)
+    path.write_text(json.dumps(config))
+    original = path.read_text()
+    with pytest.raises(ValueError, match="engine ports"):
+        access.write_phone_config(path, "https://second-test.trycloudflare.com")
+    assert path.read_text() == original

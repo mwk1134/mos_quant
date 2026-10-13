@@ -99,7 +99,7 @@ def test_create_server_is_inert_and_rejects_external_bind():
         create_server(engine, host="0.0.0.0", port=0)
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_additional_account_dashboard_is_labeled_and_remains_inactive(preset):
     engine = FakeEngine()
     engine.preset = preset
@@ -120,7 +120,7 @@ def test_additional_account_dashboard_is_labeled_and_remains_inactive(preset):
         thread.join(timeout=2)
 
 
-def test_four_account_dashboards_keep_status_markers_and_csrf_tokens_isolated():
+def test_five_account_dashboards_keep_status_markers_and_csrf_tokens_isolated():
     class AccountEngine(FakeEngine):
         def __init__(self, preset):
             super().__init__()
@@ -132,14 +132,14 @@ def test_four_account_dashboards_keep_status_markers_and_csrf_tokens_isolated():
 
     dashboards = []
     try:
-        for preset in ("KMW", "KMW2", "JEH", "JEH2"):
+        for preset in ("KMW", "KMW2", "JEH", "JEH2", "KHW"):
             engine = AccountEngine(preset)
             server = create_server(engine, port=0)
             thread = threading.Thread(target=server.serve_forever,
                                       kwargs={"poll_interval": 0.01}, daemon=True)
             thread.start()
             dashboards.append((server, engine, thread))
-        assert len({server.csrf_token for server, _, _ in dashboards}) == 4
+        assert len({server.csrf_token for server, _, _ in dashboards}) == 5
         for server, engine, _ in dashboards:
             code, _, page = request(server, "/")
             assert code == 200

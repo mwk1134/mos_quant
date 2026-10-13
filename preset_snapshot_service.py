@@ -24,7 +24,7 @@ from preset_snapshot_sync import SnapshotRefreshBlocked, refresh_and_load_snapsh
 from us_market_calendar import is_us_equity_trading_day
 
 ET = ZoneInfo("America/New_York")
-ENGINE_PORTS = {"KMW": 8701, "KMW2": 8703, "JEH": 8704, "JEH2": 8705}
+ENGINE_PORTS = {"KMW": 8701, "KMW2": 8703, "JEH": 8704, "JEH2": 8705, "KHW": 8706}
 REFRESH_LEAD = timedelta(minutes=10)
 MAX_REFRESH_ATTEMPTS = 4
 RETRY_BACKOFF_SECONDS = (15, 45, 120)

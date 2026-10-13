@@ -60,12 +60,20 @@ DEFAULT_JEH2_CONFIG = {
     "position_edits": {},
     "ma_alignment_switch_enabled": False,
 }
-SUPPORTED_PRESETS = ("KMW", "KMW2", "JEH", "JEH2")
+DEFAULT_KHW_CONFIG = {
+    "initial_capital": 21199.0,
+    "session_start_date": "2026-08-17",
+    "seed_increases": [],
+    "position_edits": {},
+    "ma_alignment_switch_enabled": False,
+}
+SUPPORTED_PRESETS = ("KMW", "KMW2", "JEH", "JEH2", "KHW")
 _DEFAULT_PRESET_CONFIGS = {
     "KMW": DEFAULT_KMW_CONFIG,
     "KMW2": DEFAULT_KMW2_CONFIG,
     "JEH": DEFAULT_JEH_CONFIG,
     "JEH2": DEFAULT_JEH2_CONFIG,
+    "KHW": DEFAULT_KHW_CONFIG,
 }
 
 

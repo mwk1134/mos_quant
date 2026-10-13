@@ -153,6 +153,18 @@ class TelegramNotifierTests(unittest.TestCase):
 
 
 class OrderNotificationFormattingTests(unittest.TestCase):
+    def test_khw_notification_keeps_its_account_label_and_loc_moc_order_receipts(self):
+        buy = {**RESULT, "state": "DIRECT_ACCEPTED", "response": {"data": {"oder_no": 4567}}}
+        sell = {**RESULT, "order": {**ORDER, "side": "SELL", "order_type": "MOC", "price": "0"},
+                "state": "DIRECT_ACCEPTED", "response": {"data": {"oder_no": 4568}}}
+        text = format_order_notification({**PLAN, "preset": "KHW", "order_route": "direct"}, [buy, sell])
+        self.assertTrue(text.startswith("KHW 자동매매 · SOXL\n"))
+        self.assertIn("주문번호 4567", text)
+        self.assertIn("주문번호 4568", text)
+        self.assertIn("매수 1주 LOC $144.79", text)
+        self.assertIn("매도 1주 MOC 종가 시장가", text)
+        self.assertIn("체결 완료 알림이 아닙니다", text)
+
     def test_jeh2_notification_uses_its_account_label_and_exact_order_receipt(self):
         result = {**RESULT, "state": "DIRECT_ACCEPTED", "response": {"data": {"oder_no": 3456}}}
         text = format_order_notification({**PLAN, "preset": "JEH2", "order_route": "direct"}, [result])

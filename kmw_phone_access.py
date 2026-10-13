@@ -61,16 +61,18 @@ def write_phone_config(path: Path, origin: str, *, port: int = 8702) -> dict:
         kmw2_engine_port = previous.get("kmw2_engine_port")
         jeh_engine_port = previous.get("jeh_engine_port")
         jeh2_engine_port = previous.get("jeh2_engine_port")
+        khw_engine_port = previous.get("khw_engine_port")
         from kmw_phone_gateway import _engine_targets
         try:
             _engine_targets(engine_port=engine_port, kmw2_engine_port=kmw2_engine_port,
-                            jeh_engine_port=jeh_engine_port, jeh2_engine_port=jeh2_engine_port)
+                            jeh_engine_port=jeh_engine_port, jeh2_engine_port=jeh2_engine_port,
+                            khw_engine_port=khw_engine_port)
         except ValueError:
             raise ValueError("Invalid existing engine ports") from None
     else:
         username, password = "kmw", secrets.token_urlsafe(32)
         allow_short_password = False
-        engine_port, kmw2_engine_port, jeh_engine_port, jeh2_engine_port = 8701, None, None, None
+        engine_port, kmw2_engine_port, jeh_engine_port, jeh2_engine_port, khw_engine_port = 8701, None, None, None, None
     config = {"public_origin": origin, "username": username, "password": password,
               "engine_port": engine_port, "port": port}
     if kmw2_engine_port is not None:
@@ -79,6 +81,8 @@ def write_phone_config(path: Path, origin: str, *, port: int = 8702) -> dict:
         config["jeh_engine_port"] = jeh_engine_port
     if jeh2_engine_port is not None:
         config["jeh2_engine_port"] = jeh2_engine_port
+    if khw_engine_port is not None:
+        config["khw_engine_port"] = khw_engine_port
     if allow_short_password:
         config["allow_short_password"] = True
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +124,9 @@ def start_phone_access(config_path: Path = DEFAULT_CONFIG, *, port: int = 8702) 
     try:
         # Own the destination before creating any public tunnel. An occupied
         # port must fail here rather than expose a different local service.
+        # Reuse a just-closed listener's TIME_WAIT address on metadata restart;
+        # SO_REUSEPORT is deliberately absent, so an active listener still wins.
+        reserved_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         reserved_socket.bind(("127.0.0.1", port))
         reserved_socket.listen(128)
         for signum in (signal.SIGINT, signal.SIGTERM):

@@ -1,7 +1,7 @@
 """Transport tests use fake brokerage/GitHub objects and synthetic credentials."""
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import date, datetime
 import json
 import os
 import sqlite3
@@ -277,6 +277,114 @@ def test_open_current_soxl_order_blocks_save(monkeypatch, tmp_path):
     with pytest.raises(sync.SnapshotRefreshBlocked) as caught:
         run(tmp_path)
     assert caught.value.code == "UNRESOLVED_ORDER"
+    git.save.assert_not_called()
+
+
+def today_order(**changes):
+    return {"iscd": "SOXL.AX", "oder_no": "77", "oder_date": "20261012",
+            "aspr_type_code": "5", "odqt": 31, "cntg_qty": 0,
+            "cncl_cnfr_qty": 0, "rctf_cnfr_qty": 0,
+            "ncnt_qty": 0, "oder_able_qty": 0,
+            "ovrs_stck_oder_stat_cls_code": "0", **changes}
+
+
+def test_fully_filled_today_uses_its_actual_cntg_qty_not_history_field():
+    row = today_order(cntg_qty=31, cntg_dqty=0, aspr_type_code="2")
+    assert sync._open_orders([row]) == []
+
+
+@pytest.mark.parametrize("aspr_type", ["4", "5", "6", "7"])
+@pytest.mark.parametrize("order_day", ["20261009", "20261012"])
+@pytest.mark.parametrize("filled", [0, 12])
+def test_completed_session_auction_is_excluded_only_from_current_open_classification(aspr_type, order_day, filled):
+    row = today_order(aspr_type_code=aspr_type, oder_date=order_day, cntg_qty=filled)
+    original = deepcopy(row)
+    assert sync._open_orders([row], completed_basis=date(2026, 10, 12)) == []
+    assert row == original  # It is never relabelled cancelled or filled.
+    assert sync._open_orders([row]) == [{"order_id": "77", "state": "OPEN"}]
+
+
+@pytest.mark.parametrize("aspr_type", ["4", "5", "6", "7"])
+@pytest.mark.parametrize("order_day", ["20261013", "20261014"])
+def test_current_or_future_session_auction_blocks_even_with_zero_remaining_api_fields(aspr_type, order_day):
+    row = today_order(aspr_type_code=aspr_type, oder_date=order_day)
+    assert sync._open_orders([row], completed_basis=date(2026, 10, 12)) == [{"order_id": "77", "state": "OPEN"}]
+
+
+@pytest.mark.parametrize("aspr_type", ["1", "2", "8", "9", "A", "B", "GTC", "unknown", None, 5, []])
+def test_ordinary_gtc_or_unknown_type_remains_open_on_old_date(aspr_type):
+    row = today_order(aspr_type_code=aspr_type)
+    assert sync._open_orders([row], completed_basis=date(2026, 10, 12)) == [{"order_id": "77", "state": "OPEN"}]
+
+
+@pytest.mark.parametrize("order_day", [None, "", "2026-10-12", "20261032", "20261011", "20261225", 20261012])
+def test_missing_malformed_or_closed_market_date_cannot_expire_auction(order_day):
+    row = today_order(oder_date=order_day)
+    assert sync._open_orders([row], completed_basis=date(2026, 12, 28)) == [{"order_id": "77", "state": "OPEN"}]
+
+
+@pytest.mark.parametrize("filled", [None, "", -1, "1.5", True, "nan", 32])
+def test_malformed_today_filled_quantity_blocks_even_for_completed_auction(filled):
+    with pytest.raises(sync.SnapshotRefreshBlocked) as caught:
+        sync._open_orders([today_order(cntg_qty=filled)], completed_basis=date(2026, 10, 12))
+    assert caught.value.code == "INVALID_BROKER_FACT"
+
+
+def test_missing_today_cntg_qty_cannot_fall_back_to_history_or_remaining_fields():
+    row = today_order(cntg_dqty=31)
+    row.pop("cntg_qty")
+    with pytest.raises(sync.SnapshotRefreshBlocked) as caught:
+        sync._open_orders([row], completed_basis=date(2026, 10, 12))
+    assert caught.value.code == "INVALID_BROKER_FACT"
+
+
+@pytest.mark.parametrize("state", [None, "", "3", "unknown"])
+def test_completed_auction_does_not_relax_unknown_broker_state(state):
+    with pytest.raises(sync.SnapshotRefreshBlocked) as caught:
+        sync._open_orders([today_order(ovrs_stck_oder_stat_cls_code=state)], completed_basis=date(2026, 10, 12))
+    assert caught.value.code == "UNRESOLVED_ORDER"
+
+
+@pytest.mark.parametrize("basis", ["2026-10-12", datetime(2026, 10, 12), date(2026, 10, 11), date(2026, 12, 25), True])
+def test_open_order_classifier_requires_valid_completed_trading_basis(basis):
+    with pytest.raises(sync.SnapshotRefreshBlocked) as caught:
+        sync._open_orders([], completed_basis=basis)
+    assert caught.value.code == "INVALID_REFRESH_DATE"
+    assert sync._completed_auction_order(today_order(), basis) is False
+
+
+def test_completed_auction_helper_requires_a_row_and_does_not_modify_it():
+    assert sync._completed_auction_order(None, date(2026, 10, 12)) is False
+    row = today_order(aspr_type_code="4")
+    before = deepcopy(row)
+    assert sync._completed_auction_order(row, date(2026, 10, 12)) is True
+    assert row == before
+
+
+def test_completed_auction_today_does_not_block_save_or_invent_fill(monkeypatch, tmp_path):
+    git, client, _, _, refresher, *_ = setup(monkeypatch)
+    client.orders_today.return_value = [today_order(cntg_qty=31), today_order(oder_no="78")]
+    original = deepcopy(client.orders_today.return_value)
+    saved, _ = run(tmp_path)
+    assert saved["JEH"]["factual_quantity"] == 217
+    assert refresher.call_args.kwargs["broker_quantity"] == 217
+    assert refresher.call_args.kwargs["fills"] == [{"order_id": "196695", "trade_date": "2026-10-12",
+        "side": "BUY", "quantity": 56, "price": "128.4", "notional": "7190.4"}]
+    assert refresher.call_args.kwargs["unresolved_orders"] == []
+    assert client.orders_today.return_value == original
+    git.save.assert_called_once()
+
+
+@pytest.mark.parametrize("changes", [
+    {"oder_date": "20261013"}, {"aspr_type_code": "2"}, {"oder_date": None}, {"aspr_type_code": "GTC"},
+])
+def test_future_auction_ordinary_or_unverified_today_row_blocks_before_snapshot_save(monkeypatch, tmp_path, changes):
+    git, client, _, _, refresher, *_ = setup(monkeypatch)
+    client.orders_today.return_value = [today_order(**changes)]
+    with pytest.raises(sync.SnapshotRefreshBlocked) as caught:
+        run(tmp_path)
+    assert caught.value.code == "UNRESOLVED_ORDER"
+    refresher.assert_not_called()
     git.save.assert_not_called()
 
 

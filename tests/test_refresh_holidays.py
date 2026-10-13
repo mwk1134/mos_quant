@@ -91,7 +91,7 @@ def test_restart_skips_an_attempted_session_then_rechecks_holiday_and_weekend(tm
     backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2", "KHW"])
 def test_a_due_run_delayed_until_a_us_holiday_skips_every_backend_call(tmp_path, preset):
     engine, backend, moment = fake_engine(tmp_path, kst("2026-11-25"), preset=preset)
     engine.enable()
@@ -105,7 +105,7 @@ def test_a_due_run_delayed_until_a_us_holiday_skips_every_backend_call(tmp_path,
     backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2", "KHW"])
 def test_manual_run_on_a_us_holiday_preserves_future_display_without_dispatch(tmp_path, preset):
     engine, backend, _ = fake_engine(tmp_path, kst("2026-11-26", 17, 1), preset=preset)
     display = {"preset": preset, "status": "ready", "orders": [],

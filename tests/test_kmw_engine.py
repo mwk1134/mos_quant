@@ -144,7 +144,7 @@ class SeparateAccountBackend:
         return {"ready": self.ready, "preset": self.preset}
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_second_account_activation_and_schedule_do_not_change_first_account(tmp_path, preset):
     first = KMWEngine(SeparateAccountBackend("KMW"), tmp_path / "first.json", clock=lambda: NOW)
     second_backend = SeparateAccountBackend(preset)
@@ -159,7 +159,7 @@ def test_second_account_activation_and_schedule_do_not_change_first_account(tmp_
     second_backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_second_account_cannot_restore_first_accounts_activation_file(tmp_path, preset):
     first = KMWEngine(SeparateAccountBackend("KMW"), tmp_path / "shared.json", clock=lambda: NOW)
     first.enable()
@@ -167,7 +167,7 @@ def test_second_account_cannot_restore_first_accounts_activation_file(tmp_path, 
         KMWEngine(SeparateAccountBackend(preset), first.state_file, clock=lambda: NOW, preset=preset)
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_unconfigured_account_cannot_be_activated(tmp_path, preset):
     second = KMWEngine(SeparateAccountBackend(preset, ready=False), tmp_path / "second.json", clock=lambda: NOW, preset=preset)
     assert second.status()["account_ready"] is False
@@ -177,7 +177,7 @@ def test_unconfigured_account_cannot_be_activated(tmp_path, preset):
     second.backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_second_account_preview_rejects_first_accounts_recommendation(tmp_path, preset):
     backend = SeparateAccountBackend(preset)
     backend.preview.return_value = plan()
@@ -188,7 +188,7 @@ def test_second_account_preview_rejects_first_accounts_recommendation(tmp_path, 
     backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_second_account_can_display_marked_stale_preview_without_activation(tmp_path, preset):
     backend = SeparateAccountBackend(preset)
     backend.preview.return_value["snapshot_fresh"] = False
@@ -199,7 +199,7 @@ def test_second_account_can_display_marked_stale_preview_without_activation(tmp_
     backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_mismatched_backend_preset_is_rejected_before_any_action(tmp_path, preset):
     backend = SeparateAccountBackend("KMW")
     with pytest.raises(EngineStateError, match="계좌 연결"):
@@ -341,8 +341,8 @@ def test_corrupted_saved_activation_fails_closed(tmp_path):
 def test_jeh_default_state_is_distinct_and_inactive(tmp_path, monkeypatch):
     monkeypatch.setattr("kmw_engine.ROOT", tmp_path)
     states = [KMWEngine(SeparateAccountBackend(preset), clock=lambda: NOW, preset=preset)
-              for preset in ("KMW", "KMW2", "JEH", "JEH2")]
-    assert [engine.state_file.name for engine in states] == ["engine.json", "engine_kmw2.json", "engine_jeh.json", "engine_jeh2.json"]
+              for preset in ("KMW", "KMW2", "JEH", "JEH2", "KHW")]
+    assert [engine.state_file.name for engine in states] == ["engine.json", "engine_kmw2.json", "engine_jeh.json", "engine_jeh2.json", "engine_khw.json"]
     for engine in states:
         assert engine.status()["enabled"] is False
         assert engine.status()["next_run"] is None
@@ -351,7 +351,7 @@ def test_jeh_default_state_is_distinct_and_inactive(tmp_path, monkeypatch):
         engine.backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset,port", [("JEH", 8704), ("JEH2", 8705)])
+@pytest.mark.parametrize("preset,port", [("JEH", 8704), ("JEH2", 8705), ("KHW", 8706)])
 def test_separate_account_serve_defaults_to_its_port_without_activation(tmp_path, monkeypatch, preset, port):
     from kmw_engine import main
     import kmw_engine_backend
@@ -383,7 +383,7 @@ class RefreshingAccountBackend(SeparateAccountBackend):
         return self.refresh(now=now)
 
 
-@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2", "KHW"])
 def test_user_preview_refreshes_original_snapshot_before_display_and_keeps_inactive(tmp_path, preset):
     backend = RefreshingAccountBackend(preset)
     engine = KMWEngine(backend, tmp_path / "preview.json", clock=lambda: NOW, preset=preset)
@@ -395,10 +395,11 @@ def test_user_preview_refreshes_original_snapshot_before_display_and_keeps_inact
 
 
 @pytest.mark.parametrize("day", [(2026, 11, 26), (2026, 10, 17)])
-def test_jeh2_market_holiday_or_weekend_skips_before_snapshot_refresh_and_orders(tmp_path, day):
+@pytest.mark.parametrize("preset", ["JEH2", "KHW"])
+def test_market_holiday_or_weekend_skips_before_snapshot_refresh_and_orders(tmp_path, day, preset):
     now = datetime(*day, 17, 1, tzinfo=NOW.tzinfo)
-    backend = RefreshingAccountBackend("JEH2")
-    engine = KMWEngine(backend, tmp_path / "closed.json", clock=lambda: now, preset="JEH2")
+    backend = RefreshingAccountBackend(preset)
+    engine = KMWEngine(backend, tmp_path / "closed.json", clock=lambda: now, preset=preset)
     engine.enable()
     result = engine.run_now(expected_review_id="reviewed-plan")
     assert result["state"] == "SKIPPED" and result["error_code"] == "MARKET_CLOSED"
@@ -408,7 +409,7 @@ def test_jeh2_market_holiday_or_weekend_skips_before_snapshot_refresh_and_orders
     backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["JEH", "JEH2", "KHW"])
 def test_scheduler_refreshes_before_execute_and_uses_exact_new_recommendation(tmp_path, preset):
     backend = RefreshingAccountBackend(preset)
     moment = [NOW]
@@ -426,7 +427,7 @@ def test_scheduler_refreshes_before_execute_and_uses_exact_new_recommendation(tm
     backend.preview.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["JEH", "JEH2", "KHW"])
 def test_manual_review_changed_by_snapshot_refresh_blocks_submission(tmp_path, preset):
     backend = RefreshingAccountBackend(preset)
     engine = KMWEngine(backend, tmp_path / "manual.json", clock=lambda: NOW, preset=preset)
@@ -439,7 +440,7 @@ def test_manual_review_changed_by_snapshot_refresh_blocks_submission(tmp_path, p
     backend.execute.assert_not_called()
 
 
-@pytest.mark.parametrize("preset", ["JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["JEH", "JEH2", "KHW"])
 def test_refresh_error_stops_before_order_execution_without_stale_fallback(tmp_path, preset):
     backend = RefreshingAccountBackend(preset)
     backend.refresh.side_effect = RuntimeError("synthetic-private-refresh-token")

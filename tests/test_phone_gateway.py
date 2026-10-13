@@ -150,6 +150,33 @@ def phone_quad():
             thread.join(timeout=2)
 
 
+@pytest.fixture
+def phone_quint():
+    engines = [FakeEngine() for _ in range(5)]
+    for engine, at in zip(engines, ["17:01", "18:02", "19:03", "20:04", "21:05"]):
+        engine.at = at
+    dashboards = [create_dashboard(engine, port=0) for engine in engines]
+    gateway = create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD,
+                            engine_port=dashboards[0].server_port,
+                            kmw2_engine_port=dashboards[1].server_port,
+                            jeh_engine_port=dashboards[2].server_port,
+                            jeh2_engine_port=dashboards[3].server_port,
+                            khw_engine_port=dashboards[4].server_port, port=0)
+    servers = [*dashboards, gateway]
+    threads = [threading.Thread(target=s.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+               for s in servers]
+    for thread in threads:
+        thread.start()
+    try:
+        yield [(gateway, dashboard, engine) for dashboard, engine in zip(dashboards, engines)]
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
 def request(phone, path="/api/status", *, method="GET", body=None, headers=None, authenticate=True):
     gateway, dashboard, _ = phone
     values = {"Host": HOST, "X-Forwarded-Proto": "https"}
@@ -1046,3 +1073,157 @@ def test_unavailable_jeh2_never_retries_or_falls_back_to_jeh(phone_quad, monkeyp
     assert b"private-jeh2-transport-detail" not in body
     assert forwarded == [("127.0.0.1", fourth[1].server_port)]
     assert all(phone[2].calls == [] and phone[2].status_calls == 0 for phone in phone_quad)
+
+
+def test_khw_constructor_and_config_register_five_fixed_separate_targets(tmp_path):
+    ports = {"engine_port": 8701, "kmw2_engine_port": 8703,
+             "jeh_engine_port": 8704, "jeh2_engine_port": 8705, "khw_engine_port": 8706}
+    server = create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD, port=0, **ports)
+    try:
+        assert server.engine_targets == {"": 8701, "/kmw2": 8703, "/jeh": 8704, "/jeh2": 8705, "/khw": 8706}
+        assert server.khw_engine_port == 8706
+        assert server.server_address[0] == "127.0.0.1"
+    finally:
+        server.server_close()
+    assert load_config(config_file(tmp_path, **ports))["khw_engine_port"] == 8706
+    assert load_config(config_file(tmp_path, khw_engine_port=None))["khw_engine_port"] is None
+
+
+@pytest.mark.parametrize("first,second", list(combinations(
+    ["engine_port", "kmw2_engine_port", "jeh_engine_port", "jeh2_engine_port", "khw_engine_port"], 2)))
+def test_five_accounts_reject_every_pairwise_port_collision(tmp_path, first, second):
+    ports = {"engine_port": 8701, "kmw2_engine_port": 8703,
+             "jeh_engine_port": 8704, "jeh2_engine_port": 8705, "khw_engine_port": 8706}
+    ports[second] = ports[first]
+    with pytest.raises(ValueError, match="separate"):
+        create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD, port=0, **ports)
+    with pytest.raises(ValueError, match="separate"):
+        load_config(config_file(tmp_path, **ports))
+
+
+@pytest.mark.parametrize("port", [True, False, 0, -1, 65536, "8706", 8706.0, []])
+def test_khw_target_requires_valid_integer_port(tmp_path, port):
+    with pytest.raises(ValueError):
+        create_server(public_origin=ORIGIN, username=USERNAME, password=PASSWORD,
+                      khw_engine_port=port, port=0)
+    with pytest.raises(ValueError):
+        load_config(config_file(tmp_path, khw_engine_port=port))
+
+
+@pytest.mark.parametrize("path", ["/khw/", "/khw/api/status", "/khw/?kmw_api=status"])
+def test_unconfigured_khw_never_routes_to_existing_accounts(phone_quad, path):
+    assert request(phone_quad[0], path)[0] == 404
+    assert request(phone_quad[0], "/khw/api/enable", method="POST", body={"confirm_live": True})[0] == 404
+    assert all(phone[2].calls == [] and phone[2].status_calls == 0 for phone in phone_quad)
+
+
+def test_five_ui_and_status_routes_keep_every_account_separate(phone_quint):
+    tokens = [phone[1].csrf_token for phone in phone_quint]
+    assert len(set(tokens)) == 5
+    for phone, prefix, expected_time in zip(phone_quint, ["", "/kmw2", "/jeh", "/jeh2", "/khw"],
+                                           ["17:01", "18:02", "19:03", "20:04", "21:05"]):
+        code, _, html = request(phone, prefix + "/")
+        assert code == 200 and phone[1].csrf_token.encode() in html
+        assert all(token.encode() not in html for token in tokens if token != phone[1].csrf_token)
+        for path in [prefix + "/api/status", prefix + "/?kmw_api=status"]:
+            code, _, body = request(phone, path)
+            assert code == 200 and json.loads(body)["at"] == expected_time
+    assert all(phone[2].calls == [] and phone[2].status_calls == 2 for phone in phone_quint)
+
+
+@pytest.mark.parametrize("alias", [False, True])
+@pytest.mark.parametrize("action,body,expected_call", [
+    ("configure", {"at": "21:15"}, ("configure", "21:15")),
+    ("preview", {}, "preview"), ("enable", {"confirm_live": True}, "enable"),
+    ("disable", {}, "disable"),
+    ("run", {"confirm_live": True, "review_id": "khw-reviewed-plan"}, ("run", "khw-reviewed-plan")),
+])
+def test_khw_actions_forward_once_only_to_selected_fake_engine(phone_quint, alias, action, body, expected_call):
+    fifth = phone_quint[4]
+    path = "/khw/?kmw_api=" + action if alias else "/khw/api/" + action
+    code, _, response = request(fifth, path, method="POST", body=body)
+    assert code == 200 and json.loads(response)["ok"] is True
+    assert fifth[2].calls == [expected_call]
+    assert all(phone[2].calls == [] and phone[2].status_calls == 0 and not phone[2].enabled
+               for phone in phone_quint[:4])
+
+
+def test_all_five_csrf_tokens_cannot_cross_accounts_and_khw_requires_live_ack(phone_quint):
+    for target_index, (phone, prefix) in enumerate(zip(phone_quint, ["", "/kmw2", "/jeh", "/jeh2", "/khw"])):
+        for source_index, other in enumerate(phone_quint):
+            if target_index != source_index:
+                assert request(phone, prefix + "/api/enable", method="POST", body={"confirm_live": True},
+                               headers={"X-CSRF-Token": other[1].csrf_token})[0] == 403
+    for body in [{}, {"confirm_live": False}, {"confirm_live": "true"}]:
+        assert request(phone_quint[4], "/khw/api/enable", method="POST", body=body)[0] == 400
+    assert all(phone[2].calls == [] and not phone[2].enabled for phone in phone_quint)
+
+
+@pytest.mark.parametrize("headers,authenticate,expected", [
+    ({}, False, 401), ({"X-Forwarded-Proto": "http"}, True, 403),
+    ({"Host": "attacker.example"}, True, 403), ({"Origin": "https://attacker.example"}, True, 403),
+])
+def test_khw_auth_https_host_and_origin_are_required(phone_quint, headers, authenticate, expected):
+    assert request(phone_quint[4], "/khw/api/enable", method="POST", body={"confirm_live": True},
+                   headers=headers, authenticate=authenticate)[0] == expected
+    assert all(phone[2].calls == [] and phone[2].status_calls == 0 for phone in phone_quint)
+
+
+@pytest.mark.parametrize("action", ["preview", "configure", "enable", "disable", "run"])
+def test_khw_get_never_mutates_any_engine(phone_quint, action):
+    for path in ["/khw/api/" + action, "/khw/?kmw_api=" + action]:
+        assert request(phone_quint[4], path)[0] == 404
+    assert all(phone[2].calls == [] and phone[2].status_calls == 0 for phone in phone_quint)
+
+
+@pytest.mark.parametrize("path", [
+    "/khw", "/KHW/", "/khw//api/status", "/khw/../api/status", "/khw/%2e%2e/api/status",
+    "/%6bhw/api/status", "/khw%2fapi/status", "/khw/%2fapi/status", "/khw/api/status?kmw_api=status",
+    "/khw/?kmw_api=status&kmw_api=enable", "/khw/?kmw_api=status&port=8704",
+    "/khw/?kmw_api=status&host=127.0.0.1", "/khw/?kmw_api=unknown", "/khw/?kmw_api=status&",
+    "/khw/jeh/api/status", "/jeh/khw/api/status", "/khw/jeh2/api/status", "/jeh2/khw/api/status", "/khw/?preset=JEH&kmw_api=status",
+])
+def test_khw_rejects_traversal_nested_accounts_and_dynamic_targets(phone_quint, path):
+    assert request(phone_quint[4], path)[0] == 404
+    assert all(phone[2].calls == [] and phone[2].status_calls == 0 for phone in phone_quint)
+
+
+def test_khw_upstream_headers_are_fixed_and_do_not_forward_login(phone_quint, monkeypatch):
+    fifth = phone_quint[4]
+    original = http.client.HTTPConnection.request
+    forwarded = []
+
+    def record(self, method, url, body=None, headers=None, **kwargs):
+        if self.port in {phone[1].server_port for phone in phone_quint}:
+            forwarded.append((self.host, self.port, method, url, headers))
+        return original(self, method, url, body=body, headers=headers or {}, **kwargs)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "request", record)
+    assert request(fifth, "/khw/api/configure", method="POST", body={"at": "21:15"},
+                   headers={"X-Forwarded-Host": "attacker.example"})[0] == 200
+    assert len(forwarded) == 1
+    host, port, method, path, headers = forwarded[0]
+    assert (host, port, method, path) == ("127.0.0.1", fifth[1].server_port, "POST", "/api/configure")
+    assert headers["Host"] == fifth[1].allowed_host and headers["Origin"] == fifth[1].origin
+    assert headers["X-CSRF-Token"] == fifth[1].csrf_token
+    assert not {"Authorization", "X-Forwarded-Host", "X-Forwarded-Proto"} & headers.keys()
+    assert all(phone[2].calls == [] and phone[2].status_calls == 0 for phone in phone_quint[:4])
+
+
+def test_unavailable_khw_never_retries_or_falls_back_to_any_account(phone_quint, monkeypatch):
+    fifth = phone_quint[4]
+    original = http.client.HTTPConnection.request
+    forwarded = []
+
+    def fail_khw(self, method, url, body=None, headers=None, **kwargs):
+        if self.port == fifth[1].server_port:
+            forwarded.append((self.host, self.port))
+            raise OSError("private-khw-transport-detail")
+        return original(self, method, url, body=body, headers=headers or {}, **kwargs)
+
+    monkeypatch.setattr(http.client.HTTPConnection, "request", fail_khw)
+    code, _, body = request(fifth, "/khw/api/status")
+    assert code == 502 and json.loads(body)["ok"] is False
+    assert b"private-khw-transport-detail" not in body
+    assert forwarded == [("127.0.0.1", fifth[1].server_port)]
+    assert all(phone[2].calls == [] and phone[2].status_calls == 0 for phone in phone_quint)

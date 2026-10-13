@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Account-isolated KMW/KMW2/JEH/JEH2 runner; default execution prints a plan."""
+"""Account-isolated KMW/KMW2/JEH/JEH2/KHW runner; default execution prints a plan."""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from credential_redaction import environment_secret_values, redact_credentials
-from kmw_order_plan import SUPPORTED_PRESETS, build_kmw_plan
+from kmw_order_plan import SUPPORTED_PRESETS, build_kmw_plan, completed_trading_date
 from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
 from telegram_notify import TelegramNotificationError, TelegramNotifier, format_order_notification
 from us_market_calendar import is_us_equity_trading_day
@@ -273,12 +273,29 @@ def preflight(client, plan, now, fee_buffer, order_route="reserved", *, preset="
             raise OrderBlocked("Planned price or quantity does not match broker order units")
     day = plan["order_date"].replace("-", "")
     today_orders = client.orders_today()
+    # Refresh and preflight share the documented auction/session classification.
+    # A retained yesterday LOC/LOO row is not a new fill or a current open order.
+    # Import lazily because the source-refresh adapter also uses runner helpers.
+    from preset_snapshot_sync import _completed_auction_order
+    completed_basis = completed_trading_date(now.astimezone(ET))
     for row in today_orders:
-        if symbol(row) != "SOXL" or str(row.get("ovrs_stck_oder_stat_cls_code")) != "0":
+        if symbol(row) != "SOXL":
             continue
-        remaining = decimal(row.get("odqt")) - decimal(row.get("cntg_qty"))
-        remaining -= decimal(row.get("cncl_cnfr_qty", 0)) + decimal(row.get("rctf_cnfr_qty", 0))
-        if remaining > 0 and str(row.get("oder_rctf_cncl_cls_code")) != "2":
+        state = str(row.get("ovrs_stck_oder_stat_cls_code", ""))
+        if state in {"1", "2", "4"} or str(row.get("oder_rctf_cncl_cls_code")) == "2":
+            continue
+        quantities = [decimal(row.get("odqt")), decimal(row.get("cntg_qty")),
+                      decimal(row.get("cncl_cnfr_qty", 0)), decimal(row.get("rctf_cnfr_qty", 0))]
+        if any(quantity != quantity.to_integral_value() for quantity in quantities):
+            raise OrderBlocked("SOXL order quantities must be whole shares")
+        remaining = quantities[0] - sum(quantities[1:])
+        if remaining < 0:
+            raise OrderBlocked("SOXL order quantities disagree; inspect them before submitting")
+        if remaining > 0:
+            if state != "0":
+                raise OrderBlocked("An existing SOXL order has an unknown state; inspect it before submitting")
+            if _completed_auction_order(row, completed_basis):
+                continue
             raise OrderBlocked("An existing SOXL order is still open; inspect it before submitting")
     start = (now.astimezone(KST).date() - timedelta(days=30)).strftime("%Y%m%d")
     for row in client.reserved_orders(start, day, active_only=True):
@@ -490,6 +507,7 @@ def _cli_error_message(exc):
         "The KMW2 credential file is missing",
         "The JEH credential file is missing",
         "The JEH2 credential file is missing",
+        "The KHW credential file is missing",
         "--allow-stale-preview cannot be used with broker account commands",
         "Status and Telegram-only commands are one-time commands",
     }
@@ -705,7 +723,7 @@ def next_run(now, at):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="KMW/KMW2/JEH/JEH2 SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
+    parser = argparse.ArgumentParser(description="KMW/KMW2/JEH/JEH2/KHW SOXL LOC/MOC Meritz order runner (default: preview, direct route)")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--submit", action="store_true", help="Actually submit this account's planned orders")
     mode.add_argument("--check-account", action="store_true", help="Read broker account and validate without placing orders")

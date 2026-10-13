@@ -136,6 +136,84 @@ def test_preflight_verifies_holdings_sellable_cash_and_units(monkeypatch):
         preflight(client, plan(), NOW, Decimal("0.005"))
 
 
+def _retained_auction_row(**overrides):
+    return {"iscd": "SOXL.AX", "oder_date": "20261009", "aspr_type_code": "5",
+            "ovrs_stck_oder_stat_cls_code": "0", "oder_rctf_cncl_cls_code": "0",
+            "odqt": "10", "cntg_qty": "3", "cncl_cnfr_qty": "0", "rctf_cnfr_qty": "0",
+            **overrides}
+
+
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2", "KHW"])
+@pytest.mark.parametrize("auction_type", ["4", "5", "6", "7"])
+def test_preflight_ignores_only_retained_auction_rows_from_completed_sessions(preset, auction_type):
+    client = broker()
+    client.orders_today.return_value = [_retained_auction_row(aspr_type_code=auction_type)]
+    selected = {**plan(), "preset": preset}
+    original = deepcopy(selected)
+    checked = preflight(client, selected, NOW, Decimal("0.005"), order_route="direct", preset=preset, env={})
+    assert checked["held_quantity"] == "10.0000" and checked["required_usd"] == "502.50"
+    assert selected == original
+    client.submit_order.assert_not_called()
+    client.submit_reserved_order.assert_not_called()
+
+
+@pytest.mark.parametrize("row", [
+    _retained_auction_row(oder_date="20261012"),
+    _retained_auction_row(oder_date="20261013"),
+    _retained_auction_row(oder_date="20261010"),
+    _retained_auction_row(oder_date="20260230"),
+    _retained_auction_row(oder_date="2026-10-09"),
+    _retained_auction_row(oder_date=None),
+    _retained_auction_row(aspr_type_code="0"),
+    _retained_auction_row(aspr_type_code="1"),
+    _retained_auction_row(aspr_type_code="2"),
+    _retained_auction_row(aspr_type_code="3"),
+    _retained_auction_row(aspr_type_code="8"),
+    _retained_auction_row(aspr_type_code=None),
+    _retained_auction_row(aspr_type_code=5),
+])
+def test_current_future_ordinary_or_unknown_auction_order_still_blocks_preflight(row):
+    client = broker()
+    client.orders_today.return_value = [row]
+    with pytest.raises(OrderBlocked, match="still open"):
+        preflight(client, {**plan(), "preset": "KHW"}, NOW, Decimal("0.005"),
+                  order_route="direct", preset="KHW", env={})
+    client.order_estimate.assert_not_called()
+    client.submit_order.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["3", "9", "", None])
+def test_completed_auction_with_unknown_broker_state_remains_blocked(status):
+    client = broker()
+    client.orders_today.return_value = [_retained_auction_row(ovrs_stck_oder_stat_cls_code=status)]
+    with pytest.raises(OrderBlocked, match="unknown state"):
+        preflight(client, {**plan(), "preset": "KHW"}, NOW, Decimal("0.005"),
+                  order_route="direct", preset="KHW", env={})
+    client.submit_order.assert_not_called()
+
+
+@pytest.mark.parametrize("totals", [
+    {"odqt": "10.5"}, {"cntg_qty": "3.5"}, {"cncl_cnfr_qty": "0.5"},
+    {"rctf_cnfr_qty": "0.5"}, {"cntg_qty": "11"}, {"cntg_qty": None}, {"odqt": "NaN"},
+])
+def test_completed_auction_does_not_hide_invalid_order_quantities(totals):
+    client = broker()
+    client.orders_today.return_value = [_retained_auction_row(**totals)]
+    with pytest.raises(OrderBlocked):
+        preflight(client, plan(), NOW, Decimal("0.005"), order_route="direct", env={})
+    client.submit_order.assert_not_called()
+
+
+def test_auction_expiry_uses_actual_completed_session_instead_of_plan_claim():
+    client = broker()
+    client.orders_today.return_value = [_retained_auction_row(oder_date="20261012")]
+    claimed = {**plan(), "basis_date": "2026-10-12", "expected_basis_date": "2026-10-12",
+               "snapshot_date": "2026-10-12"}
+    with pytest.raises(OrderBlocked, match="still open"):
+        preflight(client, claimed, NOW, Decimal("0.005"), order_route="direct", env={})
+    client.submit_order.assert_not_called()
+
+
 def test_zero_quote_tick_requires_verified_configuration(monkeypatch):
     monkeypatch.delenv("MERITZ_SOXL_EXCHANGE_CODE", raising=False)
     monkeypatch.delenv("MERITZ_SOXL_PRICE_TICK", raising=False)
@@ -251,9 +329,11 @@ def test_legacy_order_identity_is_exact_and_kmw2_has_a_distinct_identity():
     assert OrderLedger.identity("account", second, order) != legacy
     third = {**original, "preset": "JEH"}
     fourth = {**original, "preset": "JEH2"}
+    fifth = {**original, "preset": "KHW"}
     assert len({legacy, OrderLedger.identity("account", second, order),
                 OrderLedger.identity("account", third, order),
-                OrderLedger.identity("account", fourth, order)}) == 4
+                OrderLedger.identity("account", fourth, order),
+                OrderLedger.identity("account", fifth, order)}) == 5
     with pytest.raises(OrderBlocked, match="KMW, KMW2, JEH"):
         OrderLedger.identity("account", {**original, "preset": "UNREGISTERED"}, order)
 
@@ -311,15 +391,32 @@ def test_jeh2_plan_requires_its_own_account_and_fresh_snapshot():
         validate_plan({**fourth, "snapshot_fresh": False}, NOW, preset="JEH2")
 
 
-def test_jeh2_credentials_and_ledger_paths_are_separate_from_existing_accounts(tmp_path, monkeypatch):
+def test_credentials_and_ledger_paths_are_separate_for_every_account(tmp_path, monkeypatch):
     from kmw_autotrade import default_env_file, default_ledger_path
 
     monkeypatch.setattr("kmw_autotrade.ROOT", tmp_path)
-    presets = ("KMW", "KMW2", "JEH", "JEH2")
-    assert len({default_env_file(preset) for preset in presets}) == 4
-    assert len({default_ledger_path(preset) for preset in presets}) == 4
+    presets = ("KMW", "KMW2", "JEH", "JEH2", "KHW")
+    assert len({default_env_file(preset) for preset in presets}) == 5
+    assert len({default_ledger_path(preset) for preset in presets}) == 5
     assert default_env_file("JEH2") == tmp_path / ".env.meritz.jeh2"
     assert default_ledger_path("JEH2") == tmp_path / ".autotrade/orders_jeh2.sqlite3"
+    assert default_env_file("KHW") == tmp_path / ".env.meritz.khw"
+    assert default_ledger_path("KHW") == tmp_path / ".autotrade/orders_khw.sqlite3"
+
+
+def test_khw_plan_requires_its_own_account_and_reconciled_current_snapshot():
+    selected = {**plan(), "preset": "KHW"}
+    validate_plan(selected, NOW, preset="KHW")
+    credentials = {"MERITZ_ACCOUNT_PRESET": "KHW", "MERITZ_APP_KEY": "synthetic-fifth-account-key"}
+    assert account_id("KHW", env=credentials)
+    for other in ("KMW", "KMW2", "JEH", "JEH2"):
+        with pytest.raises(OrderBlocked, match=f"ready {other}"):
+            validate_plan(selected, NOW, preset=other)
+        with pytest.raises(OrderBlocked, match=f"MERITZ_ACCOUNT_PRESET={other}") as caught:
+            account_id(other, env=credentials)
+        assert "synthetic-fifth-account-key" not in str(caught.value)
+    with pytest.raises(OrderBlocked, match="KHW snapshot is stale"):
+        validate_plan({**selected, "snapshot_fresh": False}, NOW, preset="KHW")
 
 
 def test_snapshot_loader_never_substitutes_the_other_account(tmp_path):
@@ -354,19 +451,19 @@ def test_notification_events_are_preset_scoped_even_when_no_orders(tmp_path, mon
     import hashlib
     ledger = OrderLedger(tmp_path / "outbox.db")
     source = {"MERITZ_APP_KEY": "fake-shared-key"}
-    for preset in ("KMW", "KMW2", "JEH", "JEH2"):
+    for preset in ("KMW", "KMW2", "JEH", "JEH2", "KHW"):
         empty = {**plan(), "preset": preset, "orders": []}
         notify_order_result(ledger, None, {"plan": empty}, error=ValueError("blocked"), env=source)
     account = hashlib.sha256(source["MERITZ_APP_KEY"].encode()).hexdigest()
     legacy_event = [account, plan()["order_date"], [], "BLOCKED"]
     legacy = hashlib.sha256(json.dumps(legacy_event, sort_keys=True).encode()).hexdigest()
     rows = ledger.db.execute("SELECT event_key,text FROM notifications ORDER BY created_at").fetchall()
-    assert len(rows) == 4 and rows[0][0] == legacy
-    assert rows[0][1].startswith("KMW 자동매매") and rows[1][1].startswith("KMW2 자동매매") and rows[2][1].startswith("JEH 자동매매") and rows[3][1].startswith("JEH2 자동매매")
+    assert len(rows) == 5 and rows[0][0] == legacy
+    assert [row[1].split(" 자동매매", 1)[0] for row in rows] == ["KMW", "KMW2", "JEH", "JEH2", "KHW"]
     ledger.db.close()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_kmw2_cli_preview_needs_no_credentials_and_selects_its_own_snapshot(tmp_path, monkeypatch, capsys, preset):
     path = tmp_path / "snapshot.json"
     path.write_text(json.dumps({"KMW": {}, preset: {}}))
@@ -383,7 +480,7 @@ def test_kmw2_cli_preview_needs_no_credentials_and_selects_its_own_snapshot(tmp_
     assert not (tmp_path / ".autotrade/plans/2026-10-12.json").exists()
 
 
-@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2"])
+@pytest.mark.parametrize("preset", ["KMW2", "JEH", "JEH2", "KHW"])
 def test_kmw2_cli_missing_credentials_cannot_use_inherited_first_account(tmp_path, monkeypatch, capsys, preset):
     monkeypatch.setattr("kmw_autotrade.ROOT", tmp_path)
     monkeypatch.setenv("MERITZ_ACCOUNT_PRESET", "KMW")

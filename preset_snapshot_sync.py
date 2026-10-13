@@ -29,6 +29,7 @@ from kmw_order_plan import (_KMWPlanTrader, _kmw_config, build_kmw_plan,
                             completed_trading_date, previous_trading_date)
 from meritz_api import MeritzClient
 from preset_snapshot_refresh import SnapshotRefreshBlocked, refresh_preset_snapshot
+from us_market_calendar import is_us_equity_trading_day
 
 ET = ZoneInfo("America/New_York")
 KST = ZoneInfo("Asia/Seoul")
@@ -156,7 +157,33 @@ def _holding_quantity(rows):
     return quantity
 
 
-def _open_orders(rows):
+def _completed_auction_order(row, completed_basis):
+    """Classify a completed session auction without inventing fills.
+
+    The today endpoint can retain an unfilled opening/closing auction from a completed
+    US session with state 0. Only its documented LOO/LOC/MOO/MOC type and a valid,
+    completed trading date prove it is outside the current OPEN-order window.
+    Missing/unknown types or dates remain subject to the conservative check.
+    """
+    if (not isinstance(row, dict) or type(completed_basis) is not date
+            or not is_us_equity_trading_day(completed_basis)
+            or row.get("aspr_type_code") not in ("4", "5", "6", "7")
+            or str(row.get("ovrs_stck_oder_stat_cls_code", "")) != "0"):
+        return False
+    value = row.get("oder_date")
+    try:
+        if not isinstance(value, str) or not re.fullmatch(r"\d{8}", value):
+            return False
+        order_day = datetime.strptime(value, "%Y%m%d").date()
+    except ValueError:
+        return False
+    return order_day <= completed_basis and is_us_equity_trading_day(order_day)
+
+
+def _open_orders(rows, *, completed_basis=None):
+    if completed_basis is not None and (type(completed_basis) is not date
+                                       or not is_us_equity_trading_day(completed_basis)):
+        _blocked("INVALID_REFRESH_DATE", "A completed brokerage session is required.")
     if not isinstance(rows, list):
         _blocked("INVALID_BROKER_FACT", "A current brokerage order list is required.")
     unresolved = []
@@ -166,6 +193,8 @@ def _open_orders(rows):
         if symbol(row) != "SOXL":
             continue
         requested = _number(row.get("odqt"), whole=True)
+        # /orders/today uses cntg_qty; cntg_dqty belongs to /orders/history.
+        # ncnt_qty and oder_able_qty do not establish the remaining quantity.
         filled = _number(row.get("cntg_qty"), whole=True)
         cancelled = _number(row.get("cncl_cnfr_qty", 0), whole=True)
         rectified = _number(row.get("rctf_cnfr_qty", 0), whole=True)
@@ -174,6 +203,8 @@ def _open_orders(rows):
             _blocked("INVALID_BROKER_FACT", "Current order totals disagree.")
         state = str(row.get("ovrs_stck_oder_stat_cls_code", ""))
         if remaining and state == "0":
+            if _completed_auction_order(row, completed_basis):
+                continue
             unresolved.append({"order_id": _order_id(row.get("oder_no")), "state": "OPEN"})
         elif remaining and state not in {"1", "2", "4"}:
             _blocked("UNRESOLVED_ORDER", "A current brokerage order has an unknown state.")
@@ -472,7 +503,7 @@ def refresh_and_load_snapshots(*, preset, env: Mapping[str, str], ledger_path, n
         fills = _attach_lot_identifiers(normalize_confirmed_fills(history), mappings)
         if any(not baseline <= _day(fill["trade_date"]) <= basis for fill in fills):
             _blocked("INVALID_BROKER_FACT", "Broker execution history exceeds its requested session range.")
-        unresolved = _open_orders(client.orders_today())
+        unresolved = _open_orders(client.orders_today(), completed_basis=basis)
         if unresolved:
             _blocked("UNRESOLVED_ORDER", "Open account orders must be resolved before snapshot refresh.")
         for attempt in range(MAX_CAS_ATTEMPTS):
