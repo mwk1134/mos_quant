@@ -305,7 +305,7 @@
     },
     "available_cash": 36328.137804870596,
     "processed_seed_dates": [],
-    "as_of_date": "2026-10-12",
+    "as_of_date": "2026-10-13",
     "compound_seed": 85655.28340386963,
     "compound_reference_seed": 85655.28340386963,
     "compound_profit_rate": 0.7,
@@ -321,6 +321,25 @@
       "peakDate": "2026-07-22",
       "peakValue": 92313.31341552734,
       "soxlPrice": 140.25
+    },
+    "compound_trading_days": 1,
+    "compound_settlements": [],
+    "broker_sync": {
+      "version": 1,
+      "baseline_date": "2026-10-12",
+      "executions": {}
+    },
+    "pending_buy": {
+      "round": 5,
+      "quantity": 97,
+      "target_price": 132.16,
+      "order_date": "2026-10-14",
+      "basis_date": "2026-10-13",
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
+      "strategy_name": "기본"
     }
   },
   "JEH2": {
