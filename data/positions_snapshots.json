@@ -538,16 +538,6 @@
     }
   },
   "KHW": {
-    "1_2026-10-05": {
-      "shares": 8,
-      "buy_price": 164.27000427246094,
-      "amount": 1314.1600341796875,
-      "round": 1,
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7
-    },
     "2_2026-10-06": {
       "shares": 17,
       "buy_price": 164.25999450683594,
@@ -598,11 +588,11 @@
       "sell_threshold": 3.5,
       "max_hold_days": 7
     },
-    "available_cash": 4270.910090026851,
+    "available_cash": 4823.610090026851,
     "processed_seed_dates": [
       "2026-09-15"
     ],
-    "as_of_date": "2026-10-13",
+    "as_of_date": "2026-10-14",
     "compound_seed": 22795.45691339111,
     "compound_reference_seed": 22795.45691339111,
     "compound_profit_rate": 0.7,
@@ -630,8 +620,14 @@
       "buy_price": 127.57,
       "amount": 3954.67
     },
-    "compound_trading_days": 1,
-    "compound_settlements": [],
+    "compound_trading_days": 2,
+    "compound_settlements": [
+      {
+        "trade_date": "2026-10-14",
+        "settlement_date": "2026-10-21",
+        "pnl": -429.8400341796875
+      }
+    ],
     "broker_sync": {
       "version": 1,
       "baseline_date": "2026-10-12",
@@ -644,15 +640,43 @@
           "fees": "0",
           "position_key": "7_2026-10-13",
           "recommended_quantity": 31
+        },
+        "2026-10-14:1640832": {
+          "trade_date": "2026-10-14",
+          "side": "SELL",
+          "quantity": 8,
+          "notional": "884.3200",
+          "fees": "0",
+          "position_key": "1_2026-10-05"
+        },
+        "2026-10-14:1678153": {
+          "trade_date": "2026-10-14",
+          "side": "BUY",
+          "quantity": 3,
+          "notional": "331.6200",
+          "fees": "0",
+          "position_key": "8_2026-10-14",
+          "recommended_quantity": 3
         }
       }
+    },
+    "8_2026-10-14": {
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
+      "strategy_name": "기본",
+      "round": 8,
+      "shares": 3,
+      "buy_price": 110.54,
+      "amount": 331.62
     },
     "pending_buy": {
       "round": 8,
       "quantity": 3,
-      "target_price": 132.16,
-      "order_date": "2026-10-14",
-      "basis_date": "2026-10-13",
+      "target_price": 114.52,
+      "order_date": "2026-10-15",
+      "basis_date": "2026-10-14",
       "mode": "AG",
       "buy_threshold": 3.6,
       "sell_threshold": 3.5,
