@@ -8,8 +8,11 @@ import sys
 import io
 import html
 import hashlib
+import math
+import re
 from copy import deepcopy
 from contextlib import redirect_stdout
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Optional
 import plotly.graph_objects as go
@@ -809,6 +812,8 @@ def _serialize_compound_settlements(settlements: list) -> list:
 
 def _preserve_broker_snapshot_metadata(snapshot: dict, previous_snapshot: dict) -> dict:
     """Keep the actual-execution cursor and confirmed session checkpoint."""
+    if "manual_buy_confirmations" in (previous_snapshot or {}):
+        snapshot["manual_buy_confirmations"] = deepcopy(previous_snapshot["manual_buy_confirmations"])
     if "broker_sync" not in (previous_snapshot or {}):
         return snapshot
     for key in ("broker_sync", "compound_trading_days", "as_of_date", "cash_snapshot_date"):
@@ -821,11 +826,148 @@ def _broker_snapshot_write_allowed(snapshot: dict, latest_snapshot: dict) -> boo
     """A stale page or a settings reset cannot erase newer confirmed fills."""
     if "broker_sync" not in (latest_snapshot or {}):
         return True
-    return (
+    if not (
         isinstance(snapshot, dict) and bool(snapshot)
         and snapshot.get("broker_sync") == latest_snapshot["broker_sync"]
         and snapshot.get("as_of_date") == latest_snapshot.get("as_of_date")
-    )
+    ):
+        return False
+    try:
+        checkpoint = datetime.strptime(snapshot["as_of_date"], "%Y-%m-%d").date()
+        for key, position in snapshot.items():
+            if not isinstance(position, dict) or "shares" not in position:
+                continue
+            match = re.fullmatch(r"[1-9][0-9]*_([0-9]{4}-[0-9]{2}-[0-9]{2})", key)
+            if not match or datetime.strptime(match[1], "%Y-%m-%d").date() > checkpoint:
+                return False
+        previous = latest_snapshot.get("manual_buy_confirmations", [])
+        proposed = snapshot.get("manual_buy_confirmations", [])
+        if not isinstance(previous, list) or not isinstance(proposed, list):
+            return False
+        # A concurrent page may have added another mapping without changing the
+        # execution checkpoint. A retry must not erase that unprocessed input.
+        return all(entry in proposed for entry in previous)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _manual_buy_confirmation_rule_defaults(snapshot: dict, recommendation: dict,
+                                           current_config: dict, trade_date: str) -> tuple:
+    """Prefer the selected day's saved rules and flag other dates for review."""
+    pending = (snapshot or {}).get("pending_buy")
+    pending = pending if isinstance(pending, dict) else {}
+    matching_day = pending.get("order_date") == trade_date
+    matching_pending = False
+    if matching_day:
+        try:
+            _manual_buy_confirmation_entry(
+                trade_date=trade_date, round_num=1, quantity=1, price="1.00",
+                mode=pending["mode"], rules=pending, strategy_name=pending["strategy_name"])
+            matching_pending = True
+        except (KeyError, ValueError):
+            pass  # Legacy pending rows may contain only the displayed order terms.
+    selected = pending if matching_pending else current_config
+    defaults = {field: selected.get(field, current_config.get(field))
+                for field in ("buy_threshold", "sell_threshold", "max_hold_days", "strategy_name")}
+    defaults["mode"] = (pending.get("mode") if matching_pending else None) or recommendation.get("mode") or "SF"
+    defaults["strategy_name"] = defaults.get("strategy_name") or "기본"
+    order_day = recommendation.get("buy_order_date") or recommendation.get("order_date")
+    return defaults, not matching_pending and (matching_day or trade_date != order_day)
+
+
+def _manual_buy_confirmation_entry(*, trade_date: str, round_num: int, quantity: int,
+                                   price, mode: str, rules: dict, strategy_name: str,
+                                   review_required: bool = False, reviewed: bool = False) -> dict:
+    """Validate user-supplied lot terms without claiming a brokerage execution."""
+    if review_required and reviewed is not True:
+        raise ValueError("선택한 체결일의 매수 당시 전략 설정을 확인하고 확인란을 선택해 주세요.")
+    invalid = "체결일·회차·수량·가격과 매수 당시 전략 설정을 확인해 주세요."
+    try:
+        if not isinstance(trade_date, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", trade_date):
+            raise ValueError
+        datetime.strptime(trade_date, "%Y-%m-%d")
+        if (type(round_num) is not int or round_num <= 0 or type(quantity) is not int
+                or quantity <= 0 or len(str(quantity)) > 19 or mode not in ("SF", "AG")
+                or not isinstance(rules, dict)):
+            raise ValueError
+        limit = Decimal(str(price))
+        with localcontext() as context:
+            context.prec = 64
+            if (isinstance(price, bool) or not limit.is_finite() or limit <= 0
+                    or limit != limit.quantize(Decimal("0.01")) or len(format(limit, "f")) > 20):
+                raise ValueError
+            notional = format(limit * quantity, ".2f")
+        thresholds = {}
+        for field in ("buy_threshold", "sell_threshold"):
+            value = rules[field]
+            if isinstance(value, bool) or not math.isfinite(float(value)):
+                raise ValueError
+            thresholds[field] = float(value)
+        hold_days = rules["max_hold_days"]
+        if type(hold_days) is not int or hold_days <= 0:
+            raise ValueError
+        if (not isinstance(strategy_name, str) or not strategy_name.strip() or len(strategy_name) > 120
+                or any(ord(character) < 32 for character in strategy_name)):
+            raise ValueError
+        return {"position_key": f"{round_num}_{trade_date}", "trade_date": trade_date,
+                "round": round_num, "quantity": quantity, "price": format(limit, ".2f"),
+                "notional": notional, "mode": mode, **thresholds,
+                "max_hold_days": hold_days, "strategy_name": strategy_name}
+    except (KeyError, TypeError, ValueError, OverflowError, InvalidOperation):
+        raise ValueError(invalid) from None
+
+
+def _apply_manual_buy_confirmation(trader, previous_snapshot: dict, entry: dict) -> tuple:
+    """Queue a broker lot mapping; legacy accounts retain their manual fill flow."""
+    expected_fields = {"position_key", "trade_date", "round", "quantity", "price", "notional",
+                       "mode", "buy_threshold", "sell_threshold", "max_hold_days", "strategy_name"}
+    if not isinstance(entry, dict) or set(entry) != expected_fields:
+        raise ValueError("수동 매수 확인 정보의 형식을 확인해 주세요.")
+    normalized = _manual_buy_confirmation_entry(
+        trade_date=entry["trade_date"], round_num=entry["round"], quantity=entry["quantity"],
+        price=entry["price"], mode=entry["mode"], rules=entry, strategy_name=entry["strategy_name"])
+    if entry["position_key"] != normalized["position_key"] or str(entry["notional"]) != normalized["notional"]:
+        raise ValueError("수동 매수 확인 정보의 회차·금액이 일치하지 않습니다.")
+    snapshot = deepcopy(previous_snapshot or {})
+    key, day = normalized["position_key"], normalized["trade_date"]
+    existing = any(pos.get("round") == normalized["round"]
+                   and (pos["buy_date"].strftime("%Y-%m-%d") if hasattr(pos["buy_date"], "strftime")
+                        else str(pos["buy_date"])) == day for pos in trader.positions)
+    if key in snapshot or existing:
+        return snapshot, "already_position"
+    if "broker_sync" in snapshot:
+        sync = snapshot["broker_sync"]
+        if (not isinstance(sync, dict) or type(sync.get("version")) is not int or sync["version"] != 1
+                or not isinstance(sync.get("executions"), dict)):
+            raise ValueError("실제 체결 동기화 기록을 먼저 확인해 주세요.")
+        if any(isinstance(row, dict) and row.get("side") == "BUY" and row.get("position_key") == key
+               for row in sync["executions"].values()):
+            return snapshot, "already_position"
+        confirmations = snapshot.get("manual_buy_confirmations", [])
+        if not isinstance(confirmations, list):
+            raise ValueError("저장된 수동 매수 확인 정보를 먼저 확인해 주세요.")
+        for previous in confirmations:
+            if not isinstance(previous, dict) or set(previous) != expected_fields:
+                raise ValueError("저장된 수동 매수 확인 정보를 먼저 확인해 주세요.")
+            if previous.get("position_key") == key or previous.get("trade_date") == day:
+                if previous == normalized:
+                    return snapshot, "already_confirmation"
+                raise ValueError("같은 체결일의 확인 내용이 다릅니다. 저장된 날짜·회차·수량·가격을 확인해 주세요.")
+        snapshot["manual_buy_confirmations"] = confirmations + [normalized]
+        return snapshot, "mapping_saved"
+    amount = float(normalized["notional"])
+    if amount > trader.available_cash:
+        raise ValueError(f"예수금 부족: 필요 ${amount:,.2f}, 보유 ${trader.available_cash:,.2f}")
+    position = {"round": normalized["round"], "buy_date": datetime.strptime(day, "%Y-%m-%d"),
+                "buy_price": float(normalized["price"]), "shares": normalized["quantity"],
+                "amount": amount, **{field: normalized[field] for field in
+                                       ("mode", "buy_threshold", "sell_threshold", "max_hold_days", "strategy_name")}}
+    trader.positions.append(position)
+    trader.available_cash -= amount
+    result = _build_snapshot_from_positions(trader, snapshot, include_runtime_state=True,
+                                            preserve_saved_positions=False)
+    result.pop("manual_cash_lock", None)
+    return result, "position_added"
 
 def _build_snapshot_from_positions(
     trader: SOXLQuantTrader,
@@ -1057,7 +1199,7 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         sha = getattr(st.session_state, '_gh_snapshot_sha', None)
     previous_snapshot = (all_data or {}).get(preset_name, {})
     if not _broker_snapshot_write_allowed(snapshot, previous_snapshot):
-        return False, "실제 체결 동기화 기록이 갱신되었습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
+        return False, "실제 체결 기록 또는 보유내역 반영일이 맞지 않습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
     if _is_manual_cash_locked_snapshot(previous_snapshot) and not _snapshot_has_positions(snapshot):
         return True, ""
     if snapshot:
@@ -1068,7 +1210,7 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
         latest_data, latest_sha = _gh_load_all_snapshots()
         latest_previous = (latest_data or {}).get(preset_name, {})
         if not _broker_snapshot_write_allowed(snapshot, latest_previous):
-            return False, "실제 체결 동기화 기록이 갱신되었습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
+            return False, "실제 체결 기록 또는 보유내역 반영일이 맞지 않습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
         if _is_manual_cash_locked_snapshot(latest_previous) and not _snapshot_has_positions(snapshot):
             return True, ""
         if snapshot:
@@ -2871,11 +3013,14 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
                     st.info(f"💡 잔여 예수금: \\${available_cash:,.0f} (목표 금액 \\${recommendation['next_buy_amount']:,.0f} 미만)")
         
         # ── 매수 체결 완료 확인 ──────────────────────────────────────────
-        # 스냅샷 기반 시뮬레이션은 새 매수를 자동 생성하지 않으므로,
-        # 실제 체결 후 이 버튼으로 스냅샷에 직접 반영해야 합니다.
+        # 자동 연동 계좌는 실제 체결과 대조할 입력만 저장하고,
+        # 기존 수동 계좌는 확인한 체결을 보유내역에 직접 반영한다.
         snapshot_for_btn = st.session_state.get('positions_snapshot', {})
         with st.expander("✅ 매수 체결 완료 확인 (스냅샷 반영)", expanded=False):
-            st.caption("실제로 매수 체결하셨나요? 아래에서 확인하면 스냅샷에 저장됩니다.")
+            if "broker_sync" in snapshot_for_btn:
+                st.caption("수동 매수 체결 내용을 저장하면 실제 체결과 대조한 뒤 보유내역에 반영됩니다.")
+            else:
+                st.caption("실제로 매수 체결하셨나요? 아래에서 확인하면 스냅샷에 저장됩니다.")
             
             # 기본값: 추천 회차/가격/수량
             default_round = recommendation.get('next_buy_round') or st.session_state.trader.current_round
@@ -2911,69 +3056,75 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
             )
             confirm_amount = confirm_shares * confirm_price
             st.write(f"**투자금액: ${confirm_amount:,.0f}**")
-            
-            if st.button("✅ 체결 확인 (스냅샷 저장)", key="confirm_buy_btn", use_container_width=True):
-                buy_date_dt = datetime.combine(confirm_date, datetime.min.time())
-                buy_date_str = confirm_date.strftime('%Y-%m-%d')
-                snap_key = f"{int(confirm_round)}_{buy_date_str}"
-                
-                # trader.positions에 중복 추가 방지
-                already_exists = any(
-                    (pos.get('round') == int(confirm_round) and
-                     (pos['buy_date'].strftime('%Y-%m-%d') if hasattr(pos['buy_date'], 'strftime') else str(pos['buy_date'])) == buy_date_str)
-                    for pos in st.session_state.trader.positions
-                )
-                if already_exists:
-                    st.warning("⚠️ 이미 저장된 체결입니다. 예수금은 다시 차감하지 않았습니다.")
-                elif confirm_amount > st.session_state.trader.available_cash:
-                    st.error(
-                        f"❌ 예수금 부족: 필요 ${confirm_amount:,.2f}, "
-                        f"보유 ${st.session_state.trader.available_cash:,.2f}"
-                    )
-                else:
-                    active_config = recommendation.get("active_config")
-                    if not isinstance(active_config, dict):
-                        active_config = st.session_state.trader.get_current_config()
-                    new_pos = {
-                        "round": int(confirm_round),
-                        "buy_date": buy_date_dt,
-                        "buy_price": float(confirm_price),
-                        "shares": int(confirm_shares),
-                        "amount": float(confirm_amount),
-                        "mode": recommendation.get('mode', st.session_state.trader.current_mode or 'SF'),
-                        "buy_threshold": float(active_config.get("buy_threshold", 0.0)),
-                        "sell_threshold": float(active_config.get("sell_threshold", 0.0)),
-                        "max_hold_days": int(active_config.get("max_hold_days", 0)),
-                        "strategy_name": str(
-                            recommendation.get("strategy_name")
-                            or active_config.get("strategy_name")
-                            or "기본"
-                        ),
-                    }
-                    st.session_state.trader.positions.append(new_pos)
-                    st.session_state.trader.available_cash -= float(confirm_amount)
+            active_config = recommendation.get("active_config")
+            if not isinstance(active_config, dict):
+                active_config = st.session_state.trader.get_current_config()
+            rule_defaults, confirm_rule_review_required = _manual_buy_confirmation_rule_defaults(
+                snapshot_for_btn, recommendation, active_config, confirm_date.strftime('%Y-%m-%d'))
+            rule_key = confirm_date.strftime('%Y-%m-%d')
+            st.markdown("**매수 당시 전략 설정**")
+            st.caption("체결일의 매수 당시 설정을 입력해 주세요. 과거 체결은 현재 추천 설정과 다를 수 있습니다.")
+            confirm_entry_mode = st.selectbox(
+                "매수 당시 모드", ("SF", "AG"),
+                index=1 if rule_defaults["mode"] == "AG" else 0,
+                key=f"confirm_entry_mode_{rule_key}")
+            confirm_entry_buy_threshold = st.number_input(
+                "매수 당시 매수 기준 (%)", value=float(rule_defaults["buy_threshold"]),
+                step=0.1, format="%.2f", key=f"confirm_entry_buy_threshold_{rule_key}")
+            confirm_entry_sell_threshold = st.number_input(
+                "매수 당시 매도 기준 (%)", value=float(rule_defaults["sell_threshold"]),
+                step=0.1, format="%.2f", key=f"confirm_entry_sell_threshold_{rule_key}")
+            confirm_entry_max_hold_days = st.number_input(
+                "매수 당시 최대 보유 거래일", min_value=1,
+                value=max(1, int(rule_defaults["max_hold_days"])), step=1,
+                key=f"confirm_entry_max_hold_days_{rule_key}")
+            confirm_entry_strategy_name = st.text_input(
+                "매수 당시 전략 이름", value=str(rule_defaults["strategy_name"]),
+                max_chars=120, key=f"confirm_entry_strategy_name_{rule_key}")
+            confirm_rules_reviewed = not confirm_rule_review_required
+            if confirm_rule_review_required:
+                confirm_rules_reviewed = st.checkbox(
+                    "선택한 체결일의 매수 당시 전략 설정을 확인했습니다.",
+                    key=f"confirm_entry_rules_reviewed_{rule_key}")
 
-                    # Explicit fills are the only place where a buy changes cash.
-                    new_snapshot = _build_snapshot_from_positions(
-                        st.session_state.trader,
-                        snapshot_for_btn or {},
-                        include_runtime_state=True,
-                        preserve_saved_positions=False,
+            if st.button("✅ 체결 확인 (스냅샷 저장)", key="confirm_buy_btn", use_container_width=True):
+                try:
+                    entry = _manual_buy_confirmation_entry(
+                        trade_date=confirm_date.strftime('%Y-%m-%d'), round_num=int(confirm_round),
+                        quantity=int(confirm_shares), price=confirm_price,
+                        mode=confirm_entry_mode,
+                        rules={"buy_threshold": confirm_entry_buy_threshold,
+                               "sell_threshold": confirm_entry_sell_threshold,
+                               "max_hold_days": int(confirm_entry_max_hold_days)},
+                        strategy_name=confirm_entry_strategy_name,
+                        review_required=confirm_rule_review_required, reviewed=confirm_rules_reviewed,
                     )
-                    new_snapshot.pop('manual_cash_lock', None)
-                    st.session_state.positions_snapshot = new_snapshot
-                    if st.session_state.get('active_preset'):
-                        gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
-                        if gh_ok:
-                            st.success(f"✅ {int(confirm_round)}회차 매수 체결이 스냅샷에 저장되었습니다!")
-                        else:
-                            st.warning(f"⚠️ GitHub 저장 실패: {gh_err}")
-                            st.success(f"✅ 세션에는 저장되었습니다. (GitHub 미반영)")
+                    new_snapshot, result = _apply_manual_buy_confirmation(
+                        st.session_state.trader, snapshot_for_btn or {}, entry)
+                except ValueError as exc:
+                    st.error(f"❌ {exc}")
+                else:
+                    if result == "already_position":
+                        st.warning("⚠️ 이미 보유내역 또는 실제 체결 기록에 반영된 회차입니다. 중복 저장하지 않았습니다.")
+                    elif result == "already_confirmation":
+                        st.warning("⚠️ 같은 체결일의 확인 내용이 이미 저장되어 있습니다. 실제 체결 갱신 결과를 확인해 주세요.")
                     else:
-                        st.success(f"✅ {int(confirm_round)}회차 매수 체결이 세션 스냅샷에 저장되었습니다.")
-                    st.session_state.trader.clear_cache()
-                    st.rerun()
-    
+                        saved_message = ("체결 확인 내용을 저장했습니다. 보유내역은 실제 체결 대조 후 갱신됩니다."
+                                         if result == "mapping_saved"
+                                         else f"{int(confirm_round)}회차 매수 체결이 스냅샷에 저장되었습니다!")
+                        st.session_state.positions_snapshot = new_snapshot
+                        if st.session_state.get('active_preset'):
+                            gh_ok, gh_err = save_preset_snapshot(st.session_state.active_preset, new_snapshot)
+                            if gh_ok:
+                                st.success(f"✅ {saved_message}")
+                            else:
+                                st.warning(f"⚠️ GitHub 저장 실패: {gh_err}")
+                                st.info("세션에만 저장되었습니다. 영구 저장 결과를 확인해 주세요.")
+                        else:
+                            st.success(f"✅ {saved_message} (현재 세션)")
+                        st.session_state.trader.clear_cache()
+                        st.rerun()
+
     with col2:
         st.subheader("🔴 매도 추천")
         
