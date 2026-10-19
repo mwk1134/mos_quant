@@ -528,16 +528,6 @@
     }
   },
   "JEH2": {
-    "3_2026-10-07": {
-      "shares": 3,
-      "buy_price": 158.91000366210938,
-      "amount": 476.7300109863281,
-      "round": 3,
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7
-    },
     "4_2026-10-08": {
       "shares": 4,
       "buy_price": 142.52000427246094,
@@ -558,12 +548,12 @@
       "sell_threshold": 3.5,
       "max_hold_days": 7
     },
-    "available_cash": 3415.9599319458,
+    "available_cash": 3696.9699319458,
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
     ],
-    "as_of_date": "2026-10-15",
+    "as_of_date": "2026-10-16",
     "compound_seed": 5489.150873382569,
     "compound_reference_seed": 5489.150873382569,
     "compound_profit_rate": 0.7,
@@ -591,7 +581,7 @@
       "buy_price": 128.4,
       "amount": 770.4
     },
-    "compound_trading_days": 4,
+    "compound_trading_days": 5,
     "compound_settlements": [
       {
         "trade_date": "2026-10-14",
@@ -602,6 +592,11 @@
         "trade_date": "2026-10-15",
         "settlement_date": "2026-10-22",
         "pnl": -227.63997802734377
+      },
+      {
+        "trade_date": "2026-10-16",
+        "settlement_date": "2026-10-23",
+        "pnl": -195.72001098632813
       }
     ],
     "broker_sync": {
@@ -657,6 +652,14 @@
           "notional": "107.3500",
           "fees": "0",
           "position_key": "9_2026-10-15"
+        },
+        "2026-10-16:3457136": {
+          "trade_date": "2026-10-16",
+          "side": "SELL",
+          "quantity": 3,
+          "notional": "281.0100",
+          "fees": "0",
+          "position_key": "3_2026-10-07"
         }
       }
     },
@@ -692,6 +695,18 @@
       "shares": 1,
       "buy_price": 107.35,
       "amount": 107.35
+    },
+    "pending_buy": {
+      "round": 7,
+      "quantity": 7,
+      "target_price": 96.95,
+      "order_date": "2026-10-19",
+      "basis_date": "2026-10-16",
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본"
     }
   },
   "KHW": {
