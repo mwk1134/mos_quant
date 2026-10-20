@@ -566,16 +566,6 @@
     }
   },
   "JEH2": {
-    "4_2026-10-08": {
-      "shares": 4,
-      "buy_price": 142.52000427246094,
-      "amount": 570.0800170898438,
-      "round": 4,
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7
-    },
     "5_2026-10-09": {
       "shares": 5,
       "buy_price": 139.75999450683594,
@@ -586,12 +576,12 @@
       "sell_threshold": 3.5,
       "max_hold_days": 7
     },
-    "available_cash": 3696.9699319458,
+    "available_cash": 4091.5699319458,
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
     ],
-    "as_of_date": "2026-10-16",
+    "as_of_date": "2026-10-19",
     "compound_seed": 5489.150873382569,
     "compound_reference_seed": 5489.150873382569,
     "compound_profit_rate": 0.7,
@@ -619,7 +609,7 @@
       "buy_price": 128.4,
       "amount": 770.4
     },
-    "compound_trading_days": 5,
+    "compound_trading_days": 6,
     "compound_settlements": [
       {
         "trade_date": "2026-10-14",
@@ -635,6 +625,11 @@
         "trade_date": "2026-10-16",
         "settlement_date": "2026-10-23",
         "pnl": -195.72001098632813
+      },
+      {
+        "trade_date": "2026-10-19",
+        "settlement_date": "2026-10-26",
+        "pnl": -175.48001708984376
       }
     ],
     "broker_sync": {
@@ -698,6 +693,14 @@
           "notional": "281.0100",
           "fees": "0",
           "position_key": "3_2026-10-07"
+        },
+        "2026-10-19:74107": {
+          "trade_date": "2026-10-19",
+          "side": "SELL",
+          "quantity": 4,
+          "notional": "394.6000",
+          "fees": "0",
+          "position_key": "4_2026-10-08"
         }
       }
     },
@@ -735,11 +738,11 @@
       "amount": 107.35
     },
     "pending_buy": {
-      "round": 7,
-      "quantity": 7,
-      "target_price": 96.95,
-      "order_date": "2026-10-19",
-      "basis_date": "2026-10-16",
+      "round": 6,
+      "quantity": 9,
+      "target_price": 102.1,
+      "order_date": "2026-10-20",
+      "basis_date": "2026-10-19",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
