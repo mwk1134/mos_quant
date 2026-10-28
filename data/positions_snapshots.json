@@ -514,7 +514,7 @@
   "KMW2": {
     "available_cash": 74079.75780487059,
     "processed_seed_dates": [],
-    "as_of_date": "2026-10-26",
+    "as_of_date": "2026-10-27",
     "compound_seed": 81821.79325811769,
     "compound_reference_seed": 81821.79325811769,
     "compound_profit_rate": 0.7,
@@ -531,7 +531,7 @@
       "peakValue": 92313.31341552734,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 10,
+    "compound_trading_days": 11,
     "compound_settlements": [
       {
         "trade_date": "2026-10-21",
@@ -699,13 +699,13 @@
         }
       }
     },
-    "cash_snapshot_date": "2026-10-26",
+    "cash_snapshot_date": "2026-10-27",
     "pending_buy": {
       "round": 1,
-      "quantity": 54,
-      "target_price": 93.76,
-      "order_date": "2026-10-27",
-      "basis_date": "2026-10-26",
+      "quantity": 48,
+      "target_price": 104.72,
+      "order_date": "2026-10-28",
+      "basis_date": "2026-10-27",
       "mode": "AG",
       "buy_threshold": 3.6,
       "sell_threshold": 3.5,
