@@ -25,7 +25,8 @@ import requests
 
 from credential_redaction import environment_secret_values, redact_credentials
 from kmw_order_plan import SUPPORTED_PRESETS, build_kmw_plan, completed_trading_date
-from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
+from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError, SubmissionStopped
+from meritz_request_pacer import MeritzPacingError
 from telegram_notify import TelegramNotificationError, TelegramNotifier, format_order_notification
 from us_market_calendar import is_us_equity_trading_day
 
@@ -195,6 +196,8 @@ def active_reservation(row, order_day):
 
 def validate_plan(plan, now, order_route="reserved", *, preset="KMW"):
     preset = validate_preset(preset)
+    if isinstance(plan, dict) and plan.get("atr70_r2_managed") is True:
+        raise OrderBlocked("Use the dedicated KMW2 ATR70/R2 runtime for mixed orders")
     if not isinstance(plan, dict) or plan.get("preset") != preset or plan.get("status") != "ready":
         raise OrderBlocked(f"Only a ready {preset} plan can be submitted")
     validate_order_route(order_route)
@@ -276,9 +279,9 @@ def preflight(client, plan, now, fee_buffer, order_route="reserved", *, preset="
     # Refresh and preflight share the documented auction/session classification.
     # A retained yesterday LOC/LOO row is not a new fill or a current open order.
     # Import lazily because the source-refresh adapter also uses runner helpers.
-    from preset_snapshot_sync import _completed_auction_order
+    from preset_snapshot_sync import _apply_confirmed_cancellations, _completed_auction_order
     completed_basis = completed_trading_date(now.astimezone(ET))
-    for row in today_orders:
+    for row in _apply_confirmed_cancellations(today_orders):
         if symbol(row) != "SOXL":
             continue
         state = str(row.get("ovrs_stck_oder_stat_cls_code", ""))
@@ -347,6 +350,10 @@ class OrderLedger:
         # Price/quantity are intentionally excluded: changing a recommendation cannot resend a position.
         values = [account, validate_preset(plan.get("preset")), plan["order_date"], order["ticker"], order["side"],
                   order.get("round"), order.get("position_key")]
+        if order.get("intent_id"):
+            # Mixed sleeves may act on the same date. Preserve legacy identities
+            # while binding mixed receipts to their deterministic event intent.
+            values.extend([order.get("strategy"), order["intent_id"]])
         return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
     def claim(self, account, plan):
@@ -457,6 +464,18 @@ def submit_plan(client, plan, ledger, account, exchange_code, notification_conte
             ledger.update(identity, accepted_state, body)
             results.append({"order": order, "state": accepted_state, "response": body})
         except Exception as exc:
+            if isinstance(exc, (SubmissionStopped, MeritzPacingError)):
+                # The dispatch guard ran after the rate-limit wait and before
+                # any HTTP order request. This row is definitely unsent.
+                for pending in identities[index:]:
+                    ledger.update(pending, "NOT_SENT")
+                if notification_context is not None:
+                    notification_context.update(results=results, failed_order=order,
+                                                failed_state="STOPPED" if isinstance(exc, SubmissionStopped) else "BLOCKED",
+                                                not_sent_count=len(identities) - index)
+                if isinstance(exc, SubmissionStopped):
+                    raise OrderBlocked("Submission stopped by user") from None
+                raise
             state = "UNKNOWN" if isinstance(exc, AmbiguousSubmission) else "REJECTED" if isinstance(exc, MeritzError) else "UNKNOWN"
             body = getattr(exc, "response", None)
             ledger.update(identity, state, body if isinstance(body, dict) else None)
@@ -650,7 +669,18 @@ def _run_once(args, notification_context=None):
     # A displayable next-session recommendation is not executable yet.
     validate_plan(plan, datetime.now(KST), order_route=order_route, preset=preset)
     account = account_id(preset, env=env)
-    client = MeritzClient.from_env(env=env)
+
+    def may_dispatch():
+        try:
+            if order_route == "direct":
+                direct_order_window(datetime.now(KST), plan["order_date"])
+            else:
+                reservation_window(datetime.now(KST), plan["order_date"])
+        except OrderBlocked:
+            return False
+        return True
+
+    client = MeritzClient.from_env(env=env, before_submission=may_dispatch if args.submit else None)
     ledger = OrderLedger(args.ledger, secrets=secrets)
     try:
         ledger.unresolved(account)

@@ -180,6 +180,90 @@ def _completed_auction_order(row, completed_basis):
     return order_day <= completed_basis and is_us_equity_trading_day(order_day)
 
 
+def _apply_confirmed_cancellations(rows):
+    """Copy full cancellation proof from one child onto its stale original.
+
+    The today endpoint may leave the original's cancellation total at zero.
+    Only a unique, fully confirmed cancellation with identical order terms
+    can supply that total. Ambiguous or partial evidence is left unchanged.
+    """
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        _blocked("INVALID_BROKER_FACT", "A current brokerage order list is invalid.")
+
+    def identity(row, field):
+        try:
+            day = _history_day(row.get("oder_date"))
+            if not is_us_equity_trading_day(day):
+                return None
+            return day, _order_id(row.get(field))
+        except SnapshotRefreshBlocked:
+            return None
+
+    def proves_full_cancel(original, child):
+        try:
+            if (original.get("oder_rctf_cncl_cls_code") != "0"
+                    or child.get("oder_rctf_cncl_cls_code") != "2"
+                    or original.get("ovrs_stck_oder_stat_cls_code") != "0"
+                    or child.get("ovrs_stck_oder_stat_cls_code") != "0"
+                    or _number(original.get("orgl_oder_no"), whole=True) != 0
+                    or symbol(original) != "SOXL" or symbol(child) != "SOXL"):
+                return False
+            for field in ("ovrs_exch_vndr_idno", "seln_byov_clcd", "aspr_type_code", "oder_cond_cls_code"):
+                if not isinstance(original.get(field), str) or not original[field] or original[field] != child.get(field):
+                    return False
+            if (original["seln_byov_clcd"] not in {"1", "2"}
+                    or original["aspr_type_code"] not in {"5", "7"}
+                    or original["oder_cond_cls_code"] != "7"):
+                return False
+            price = _number(original.get("ovrs_stck_oder_prc"))
+            if price != _number(child.get("ovrs_stck_oder_prc")):
+                return False
+            if ((original["aspr_type_code"] == "5" and price <= 0)
+                    or (original["aspr_type_code"] == "7" and (price != 0 or original["seln_byov_clcd"] != "1"))):
+                return False
+            quantity = _number(original.get("odqt"), positive=True, whole=True)
+            if (_number(child.get("odqt"), positive=True, whole=True) != quantity
+                    or _number(child.get("cncl_cnfr_qty"), whole=True) != quantity
+                    or _number(original.get("cncl_cnfr_qty"), whole=True) not in (0, quantity)):
+                return False
+            for row in (original, child):
+                if (_number(row.get("cntg_qty"), whole=True) != 0
+                        or _number(row.get("rctf_cnfr_qty"), whole=True) != 0):
+                    return False
+                if "oder_cnfr_yn" in row and row["oder_cnfr_yn"] != "Y":
+                    return False
+                if "rctf_odqt" in row and _number(row["rctf_odqt"], whole=True) != 0:
+                    return False
+            if "cncl_odqt" in child and _number(child["cncl_odqt"], whole=True) != quantity:
+                return False
+            if "cncl_odqt" in original and _number(original["cncl_odqt"], whole=True) not in (0, quantity):
+                return False
+            return True
+        except SnapshotRefreshBlocked:
+            return False
+
+    by_id, children = {}, {}
+    for index, row in enumerate(rows):
+        key = identity(row, "oder_no")
+        parent_key = identity(row, "orgl_oder_no")
+        if key is not None:
+            by_id.setdefault(key, []).append(index)
+        if parent_key is not None:
+            children.setdefault(parent_key, []).append(index)
+    normalized = deepcopy(rows)
+    for index, original in enumerate(rows):
+        key = identity(original, "oder_no")
+        if key is None or len(by_id[key]) != 1 or len(children.get(key, [])) != 1:
+            continue
+        child = rows[children[key][0]]
+        child_key = identity(child, "oder_no")
+        if child_key is None or child_key == key or len(by_id[child_key]) != 1:
+            continue
+        if proves_full_cancel(original, child):
+            normalized[index]["cncl_cnfr_qty"] = original["odqt"]
+    return normalized
+
+
 def _open_orders(rows, *, completed_basis=None):
     if completed_basis is not None and (type(completed_basis) is not date
                                        or not is_us_equity_trading_day(completed_basis)):
@@ -489,6 +573,12 @@ def refresh_and_load_snapshots(*, preset, env: Mapping[str, str], ledger_path, n
         snapshot = document.get(preset)
         if not isinstance(snapshot, dict) or not snapshot:
             _blocked("SNAPSHOT_MISSING", "The selected original web app preset has no confirmed snapshot.")
+        if preset == "KMW2" and "atr70_r2" in snapshot:
+            from atr70_r2_adapter import refresh_mixed_document
+            broker_session = requests.Session()
+            broker_session.trust_env = False
+            client = MeritzClient.from_env(env=isolated, session=broker_session)
+            return refresh_mixed_document(document, sha, github=github, client=client, now=now)
         baseline = _day(snapshot.get("broker_sync", {}).get("baseline_date", snapshot.get("as_of_date")))
         if baseline > basis or (basis - baseline).days > 3660:
             _blocked("INVALID_REFRESH_DATE", "The confirmed execution history range is invalid.")

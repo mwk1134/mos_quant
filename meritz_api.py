@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Mapping, Optional
 import requests
 
 from credential_redaction import redact_credentials
+from meritz_request_pacer import default_request_pacer
 
 
 BASE_URL = "https://openapi.imeritz.com:9443"
@@ -27,6 +28,10 @@ QUERY_CODES = frozenset({"5762", "5766", "5820"})
 
 class MeritzError(RuntimeError):
     """An API/transport error. Messages deliberately omit credentials and bodies."""
+
+
+class SubmissionStopped(MeritzError):
+    """The dispatch guard stopped a submission before its HTTP request."""
 
 
 class MeritzAPIError(MeritzError):
@@ -99,6 +104,8 @@ class MeritzClient:
         *,
         session: Optional[requests.Session] = None,
         timeout: float = 15.0,
+        before_submission=None,
+        request_pacer=None,
     ):
         if not app_key or not app_secret:
             raise ValueError("MERITZ_APP_KEY and MERITZ_APP_SECRET are required")
@@ -106,6 +113,10 @@ class MeritzClient:
             raise ValueError("MERITZ_MAC_ADDRESS must be 12 hexadecimal characters without separators")
         if timeout <= 0:
             raise ValueError("Timeout must be positive")
+        if before_submission is not None and not callable(before_submission):
+            raise ValueError("Submission guard must be callable")
+        if request_pacer is not None and not callable(request_pacer):
+            raise ValueError("Request pacer must be callable")
         self._app_key = app_key
         self._app_secret = app_secret
         self._mac_address = mac_address.upper()
@@ -113,6 +124,8 @@ class MeritzClient:
         self._timeout = timeout
         self._access_token = None
         self._token_expires_at = 0.0
+        self._before_submission = before_submission
+        self._request_pacer = request_pacer if request_pacer is not None else default_request_pacer
 
     @classmethod
     def from_env(cls, *, env: Optional[Mapping[str, str]] = None, **kwargs) -> MeritzClient:
@@ -141,19 +154,20 @@ class MeritzClient:
     def authenticate(self) -> None:
         """Obtain and cache an OAuth token in memory; never write or print it."""
         try:
-            response = self._session.request(
-                "POST",
-                BASE_URL + "/oauth2/token",
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": self._app_key,
-                    "client_secret": self._app_secret,
-                    "scope": "login",
-                },
-                headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
-                timeout=self._timeout,
-                allow_redirects=False,
-            )
+            with self._request_pacer():
+                response = self._session.request(
+                    "POST",
+                    BASE_URL + "/oauth2/token",
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": self._app_key,
+                        "client_secret": self._app_secret,
+                        "scope": "login",
+                    },
+                    headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+                    timeout=self._timeout,
+                    allow_redirects=False,
+                )
         except requests.RequestException:
             raise MeritzError("Meritz token request failed") from None
         body = self._json(response)
@@ -182,20 +196,23 @@ class MeritzClient:
             self.authenticate()
         submission = method == "POST"
         try:
-            response = self._session.request(
-                method,
-                BASE_URL + path,
-                params=params,
-                json=payload,
-                headers={
-                    "Authorization": "Bearer " + self._access_token,
-                    "mac_address": self._mac_address,
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
-                timeout=self._timeout,
-                allow_redirects=False,
-            )
+            with self._request_pacer():
+                if submission and self._before_submission is not None and not self._before_submission():
+                    raise SubmissionStopped("Submission stopped before dispatch")
+                response = self._session.request(
+                    method,
+                    BASE_URL + path,
+                    params=params,
+                    json=payload,
+                    headers={
+                        "Authorization": "Bearer " + self._access_token,
+                        "mac_address": self._mac_address,
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=self._timeout,
+                    allow_redirects=False,
+                )
         except requests.RequestException:
             if submission:
                 raise AmbiguousSubmission("Order request interrupted; reconcile orders before retrying") from None
@@ -285,8 +302,17 @@ class MeritzClient:
             raise MeritzAPIError("Meritz quote did not return the requested symbol")
         return data
 
+    def websocket_token(self) -> str:
+        """Authenticate lazily for the official market-data subscription."""
+        self.authenticate()
+        return self._access_token
+
     def holdings(self) -> List[dict]:
         return self._rows("/accounts/v1/me/overseas/holdings")
+
+    def currencies(self) -> List[dict]:
+        """Read native settled/estimated currency cash for mixed activation."""
+        return self._rows("/accounts/v1/me/overseas/currencies", paginated=True)
 
     def order_estimate(self, integrated_margin: bool = False) -> List[dict]:
         return self._rows("/trading/v1/overseas/orders/estimate", {"intg_marg_iqry_yn": "Y" if integrated_margin else "N"})
@@ -383,6 +409,40 @@ class MeritzClient:
             success_codes={"5620", "0000"},
         )
         return self._submission_receipt(body, "pros_srno", warning_status=False)
+
+    def submit_mixed_order(
+        self, *, preset: str, side: str, symbol: str, exchange_vendor_code: str,
+        quantity: Any, price: Any, order_type: str,
+    ) -> Dict[str, Any]:
+        """Explicit KMW2 mixed-strategy route; legacy close-order rules stay strict.
+
+        The runtime validates session, ownership and available funds immediately
+        before dispatch. A receipt never establishes that an order was filled.
+        """
+        if preset != "KMW2":
+            raise ValueError("Mixed orders are supported only for KMW2")
+        if symbol != "SOXL":
+            raise ValueError("Mixed orders require SOXL")
+        _choice(order_type, {"LOC", "MOC", "MOO", "MARKET"}, "mixed order type")
+        if order_type in {"LOC", "MOC"}:
+            return self.submit_order(side=side, symbol=symbol,
+                exchange_vendor_code=exchange_vendor_code, quantity=quantity,
+                price=price, order_type=order_type)
+        _choice(side, {"buy", "sell"}, "order side")
+        if order_type == "MOO" and side != "sell":
+            raise ValueError("Mixed MOO is supported only for next-open exits")
+        amount = _positive_integer(quantity, max_length=19, name="quantity")
+        limit = _decimal(price, positive=False, max_length=20, name="price")
+        if Decimal(limit) != 0:
+            raise ValueError("MOO and MARKET orders require zero price")
+        body = self._request("POST", "/trading/v1/overseas/orders/" + side, payload={
+            "ovrs_stck_symb_iscd": symbol,
+            "ovrs_exch_vndr_idno": self._vendor(exchange_vendor_code),
+            "oder_cls_code": "33" if order_type == "MOO" else "05",
+            "oder_cond_cls_code": "2" if order_type == "MOO" else "0", "odqt": amount,
+            "ovrs_stck_oder_prc": limit, "warn_cnfr_yn": "N",
+        }, success_codes={"0001"})
+        return self._submission_receipt(body, "oder_no", warning_codes={"0", "1", "2", "3"})
 
     def cancel_order(
         self, *, order_date: str, order_no: Any, quantity: Any, order_type: str = "LOC",

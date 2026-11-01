@@ -137,8 +137,12 @@ def _order_description(order):
     side = {"BUY": "매수", "SELL": "매도"}.get(order.get("side"), "주문")
     quantity = _integer(order.get("quantity")) or "?"
     kind = order.get("order_type")
-    terms = "MOC 종가 시장가" if kind == "MOC" else f"LOC {_price(order.get('price'))}" if kind == "LOC" else "주문유형 확인 필요"
+    terms = {"MOC": "MOC 종가 시장가", "MOO": "MOO 시가 시장가", "MARKET": "장중 시장가"}.get(kind)
+    if terms is None:
+        terms = f"LOC {_price(order.get('price'))}" if kind == "LOC" else "주문유형 확인 필요"
     line = f"{side} {quantity}주 {terms}"
+    if order.get("strategy") in {"ATR", "R2"}:
+        line += " · " + order["strategy"]
     round_number = _integer(order.get("round"), maximum=1000000)
     if round_number:
         line += f" · {round_number}회차"
@@ -196,7 +200,8 @@ def format_order_notification(
              if isinstance(row.get("order"), Mapping)}
     if not kinds:
         kinds = {order.get("order_type") for order in plan.get("orders", []) if isinstance(order, Mapping)}
-    order_label = ("LOC 주문" if kinds <= {"LOC"} else "종가 주문") if direct else "예약주문"
+    order_label = ("LOC 주문" if kinds <= {"LOC"} else "종가 주문" if kinds <= {"LOC", "MOC"}
+                   else "혼합 주문") if direct else "예약주문"
     unknown = failed_state in {"UNKNOWN", "SENDING"} or any(
         row.get("state") in {"UNKNOWN", "SENDING"} for row in results
     )

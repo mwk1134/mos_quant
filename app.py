@@ -57,6 +57,8 @@ APP_LOSS_COMPOUNDING_RATE = 0.20
 APP_COMPOUNDING_SETTLEMENT_DAYS = 7
 APP_COMPOUNDING_RENEWAL_DAYS = 10
 MA_ALIGNMENT_SWITCH_KEY = "ma_alignment_switch_enabled"
+ATR70_R2_SWITCH_KEY = "atr70_r2_mix_enabled"
+ATR70_R2_STATE_KEY = "atr70_r2"
 
 
 def configure_app_trader(
@@ -475,6 +477,16 @@ def load_preset_snapshot(preset_name: str) -> dict:
         result[MA_ALIGNMENT_SWITCH_KEY] = bool(
             preset_config.get(MA_ALIGNMENT_SWITCH_KEY, False)
         )
+        if preset_name == "KMW2":
+            saved_configs = all_data.get(_PRESET_CONFIGS_KEY, {})
+            saved_config = saved_configs.get("KMW2", {}) if isinstance(saved_configs, dict) else {}
+            mixed_enabled = bool(saved_config.get("atr70_r2_mix_enabled", preset_config.get("atr70_r2_mix_enabled", False)))
+            result["atr70_r2_mix_enabled"] = bool(
+                mixed_enabled
+            )
+            st.session_state.kmw2_preset["atr70_r2_mix_enabled"] = mixed_enabled
+            if st.session_state.get("active_preset") == "KMW2":
+                st.session_state["atr70_r2_mix_enabled"] = mixed_enabled
     return result
 
 def _is_market_trading_day() -> bool:
@@ -814,6 +826,9 @@ def _preserve_broker_snapshot_metadata(snapshot: dict, previous_snapshot: dict) 
     """Keep the actual-execution cursor and confirmed session checkpoint."""
     if "manual_buy_confirmations" in (previous_snapshot or {}):
         snapshot["manual_buy_confirmations"] = deepcopy(previous_snapshot["manual_buy_confirmations"])
+    for key in ("atr70_r2", "atr70_r2_mix_enabled", "atr70_r2_status"):
+        if key in (previous_snapshot or {}):
+            snapshot[key] = deepcopy(previous_snapshot[key])
     if "broker_sync" not in (previous_snapshot or {}):
         return snapshot
     for key in ("broker_sync", "compound_trading_days", "as_of_date", "cash_snapshot_date"):
@@ -824,6 +839,15 @@ def _preserve_broker_snapshot_metadata(snapshot: dict, previous_snapshot: dict) 
 
 def _broker_snapshot_write_allowed(snapshot: dict, latest_snapshot: dict) -> bool:
     """A stale page or a settings reset cannot erase newer confirmed fills."""
+    if "atr70_r2" in (latest_snapshot or {}) or (latest_snapshot or {}).get("atr70_r2_mix_enabled", False):
+        # The live mixed ledger belongs to the execution engine.  A settings
+        # page may mirror preferences, but cannot replace its cash or lots with
+        # a simulated legacy portfolio, even before the first mixed execution.
+        if not isinstance(snapshot, dict):
+            return False
+        protected_keys = (set(snapshot) | set(latest_snapshot)) - {"maxMdd"}
+        if any(snapshot.get(key) != latest_snapshot.get(key) for key in protected_keys):
+            return False
     if "broker_sync" not in (latest_snapshot or {}):
         return True
     if not (
@@ -976,6 +1000,8 @@ def _build_snapshot_from_positions(
     preserve_saved_positions: bool = True,
 ) -> dict:
     """트레이더 보유 포지션을 저장용 스냅샷으로 변환. 기존 저장 수량은 우선 보존."""
+    if "atr70_r2" in (previous_snapshot or {}):
+        return deepcopy(previous_snapshot)
     current_snapshot = {}
     for pos in trader.positions:
         buy_date = pos['buy_date']
@@ -1097,6 +1123,13 @@ def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot:
     """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
     if not previous_snapshot:
         return None, "기존 스냅샷을 불러오지 못해 자동 갱신을 중단했습니다."
+    if preset_name == "KMW2" and (
+        preset.get("atr70_r2_mix_enabled", False)
+        or "atr70_r2" in previous_snapshot
+    ):
+        # Enabling the switch is an instruction to wait for confirmed sales,
+        # never permission to invent those sales from historical prices.
+        return deepcopy(previous_snapshot), None
 
     temp_trader = SOXLQuantTrader(
         initial_capital=preset['initial_capital'],
@@ -1346,13 +1379,16 @@ def _copy_seed_increases(seeds: list) -> list:
 
 def _normalize_preset_config(config: dict) -> dict:
     """프리셋 설정을 저장/복원용으로 정규화."""
-    return {
+    result = {
         "initial_capital": float(config.get("initial_capital", 0) or 0),
         "session_start_date": str(config.get("session_start_date", "")),
         "seed_increases": _copy_seed_increases(config.get("seed_increases") or []),
         "position_edits": dict(config.get("position_edits") or {}),
         MA_ALIGNMENT_SWITCH_KEY: bool(config.get(MA_ALIGNMENT_SWITCH_KEY, False)),
     }
+    if "atr70_r2_mix_enabled" in config:
+        result["atr70_r2_mix_enabled"] = bool(config["atr70_r2_mix_enabled"])
+    return result
 
 def _preset_state_key(preset_name: str) -> str:
     return f"{preset_name.lower()}_preset"
@@ -1391,6 +1427,8 @@ def apply_persisted_preset_configs() -> None:
         ):
             if field in persisted_config:
                 merged[field] = persisted_config[field]
+        if preset_name == "KMW2":
+            merged["atr70_r2_mix_enabled"] = bool(persisted_config.get("atr70_r2_mix_enabled", False))
         st.session_state[key] = _normalize_preset_config(merged)
     st.session_state._preset_configs_loaded = True
 
@@ -1436,6 +1474,10 @@ def sync_active_preset_config_from_session() -> None:
     preset[MA_ALIGNMENT_SWITCH_KEY] = bool(
         st.session_state.get(MA_ALIGNMENT_SWITCH_KEY, False)
     )
+    if preset_name == "KMW2":
+        preset["atr70_r2_mix_enabled"] = bool(
+            st.session_state.get("atr70_r2_mix_enabled", preset.get("atr70_r2_mix_enabled", False))
+        )
     st.session_state[key] = _normalize_preset_config(preset)
 
 def save_active_preset_config() -> tuple:
@@ -1459,7 +1501,14 @@ def save_active_preset_config() -> tuple:
     configs = all_data.get(_PRESET_CONFIGS_KEY, {})
     if not isinstance(configs, dict):
         configs = {}
-    configs[preset_name] = _normalize_preset_config(st.session_state[key])
+    selected_config = _normalize_preset_config(st.session_state[key])
+    if preset_name == "KMW2" and isinstance(configs.get(preset_name), dict):
+        # Seed/settings saves must not undo a mixed switch changed in another
+        # browser. Only save_preset_atr70_r2_setting changes this preference.
+        selected_config["atr70_r2_mix_enabled"] = bool(configs[preset_name].get("atr70_r2_mix_enabled", False))
+        st.session_state[key]["atr70_r2_mix_enabled"] = selected_config["atr70_r2_mix_enabled"]
+        st.session_state["atr70_r2_mix_enabled"] = selected_config["atr70_r2_mix_enabled"]
+    configs[preset_name] = selected_config
     all_data[_PRESET_CONFIGS_KEY] = configs
 
     ok, err = _gh_save_all_snapshots(all_data, sha)
@@ -1479,7 +1528,14 @@ def save_preset_ma_alignment_setting(preset_name: str, enabled: bool) -> tuple:
     key = _preset_state_key(preset_name)
     if key not in st.session_state:
         return False, f"알 수 없는 프리셋입니다: {preset_name}"
+    if preset_name == "KMW2" and (
+        st.session_state[key].get("atr70_r2_mix_enabled", False)
+        or "atr70_r2" in (st.session_state.get("positions_snapshot") or {})
+    ):
+        return False, "ATR70-R2 혼합매매에서는 R2 정배열 규칙을 사용합니다. 기존 정배열 스위치는 변경하지 않습니다."
 
+    original_preset = dict(st.session_state[key])
+    original_session_choice = st.session_state.get(MA_ALIGNMENT_SWITCH_KEY, False)
     enabled = bool(enabled)
     preset = dict(st.session_state[key])
     preset[MA_ALIGNMENT_SWITCH_KEY] = enabled
@@ -1495,6 +1551,15 @@ def save_preset_ma_alignment_setting(preset_name: str, enabled: bool) -> tuple:
             or {}
         )
         sha = getattr(st.session_state, "_gh_snapshot_sha", None)
+    if preset_name == "KMW2":
+        configs = all_data.get(_PRESET_CONFIGS_KEY, {})
+        latest_config = configs.get("KMW2", {}) if isinstance(configs, dict) else {}
+        latest_snapshot = all_data.get("KMW2", {})
+        if latest_config.get("atr70_r2_mix_enabled", False) or "atr70_r2" in latest_snapshot:
+            st.session_state[key] = original_preset
+            if st.session_state.get("active_preset") == "KMW2":
+                st.session_state[MA_ALIGNMENT_SWITCH_KEY] = original_session_choice
+            return False, "다른 화면에서 혼합매매 설정이 변경되었습니다. KMW2 프리셋을 다시 열어 주세요."
 
     def apply_setting(data: dict) -> dict:
         updated = dict(data or {})
@@ -1525,6 +1590,14 @@ def save_preset_ma_alignment_setting(preset_name: str, enabled: bool) -> tuple:
     ok, err = _gh_save_all_snapshots(all_data, sha)
     if not ok and "GitHub API" in str(err) and "(409)" in str(err):
         latest_data, latest_sha = _gh_load_all_snapshots()
+        if preset_name == "KMW2":
+            latest_configs = (latest_data or {}).get(_PRESET_CONFIGS_KEY, {})
+            latest_config = latest_configs.get("KMW2", {}) if isinstance(latest_configs, dict) else {}
+            if latest_config.get("atr70_r2_mix_enabled", False) or "atr70_r2" in ((latest_data or {}).get("KMW2") or {}):
+                st.session_state[key] = original_preset
+                if st.session_state.get("active_preset") == "KMW2":
+                    st.session_state[MA_ALIGNMENT_SWITCH_KEY] = original_session_choice
+                return False, "다른 화면에서 혼합매매 설정이 변경되었습니다. KMW2 프리셋을 다시 열어 주세요."
         all_data = apply_setting(latest_data)
         ok, err = _gh_save_all_snapshots(all_data, latest_sha)
 
@@ -1542,6 +1615,72 @@ def save_preset_ma_alignment_setting(preset_name: str, enabled: bool) -> tuple:
     except Exception:
         pass
     return ok, err
+
+
+def save_preset_atr70_r2_setting(preset_name: str, enabled: bool) -> tuple:
+    """Save only the KMW2 preference; never start a strategy or alter its ledger."""
+    if preset_name != "KMW2" or "kmw2_preset" not in st.session_state:
+        return False, "ATR70-R2 혼합매매는 KMW2에서만 사용할 수 있습니다."
+    enabled = bool(enabled)
+    all_data, sha = _gh_load_all_snapshots()
+    if not all_data:
+        all_data = deepcopy(st.session_state.get("_gh_snapshot_all") or {})
+        sha = st.session_state.get("_gh_snapshot_sha")
+    if not isinstance(all_data, dict) or not all_data:
+        return False, "저장된 계좌 정보를 확인하지 못했습니다. 최신 프리셋을 다시 불러와 주세요."
+
+    def apply_setting(data):
+        updated = deepcopy(data)
+        configs = updated.get(_PRESET_CONFIGS_KEY, {})
+        configs = dict(configs) if isinstance(configs, dict) else {}
+        current = configs.get("KMW2", {})
+        current = dict(current) if isinstance(current, dict) else {}
+        if not current:
+            current = _normalize_preset_config(st.session_state.kmw2_preset)
+        current["atr70_r2_mix_enabled"] = enabled
+        configs["KMW2"] = current
+        updated[_PRESET_CONFIGS_KEY] = configs
+        snapshot = updated.get("KMW2")
+        if isinstance(snapshot, dict) and snapshot:
+            snapshot["atr70_r2_mix_enabled"] = enabled
+        return updated
+
+    updated = apply_setting(all_data)
+    ok, err = _gh_save_all_snapshots(updated, sha)
+    if not ok and "GitHub API" in str(err) and "(409)" in str(err):
+        latest, latest_sha = _gh_load_all_snapshots()
+        if not isinstance(latest, dict) or not latest:
+            return False, "동시에 변경된 최신 계좌 정보를 확인하지 못해 설정을 저장하지 않았습니다."
+        updated = apply_setting(latest)
+        ok, err = _gh_save_all_snapshots(updated, latest_sha)
+    if not ok:
+        # A failed preference write cannot look enabled locally while the live
+        # engine continues trading the old configuration.
+        return False, str(err)
+
+    saved_config = _normalize_preset_config(updated[_PRESET_CONFIGS_KEY]["KMW2"])
+    st.session_state.kmw2_preset = saved_config
+    st.session_state["atr70_r2_mix_enabled"] = enabled
+    st.session_state._gh_snapshot_all = updated
+    _, new_sha = _gh_load_all_snapshots()
+    st.session_state._gh_snapshot_sha = new_sha
+    if st.session_state.get("active_preset") == "KMW2":
+        # Use the latest server snapshot rather than a stale open page's lots.
+        st.session_state.positions_snapshot = deepcopy(updated.get("KMW2") or {})
+    try:
+        _write_local_all_snapshots(updated)
+    except Exception:
+        pass
+    return True, ""
+
+
+def _atr70_r2_ui_selected(snapshot=None) -> bool:
+    if st.session_state.get("active_preset") != "KMW2":
+        return False
+    preset = st.session_state.get("kmw2_preset") or {}
+    if snapshot is None:
+        snapshot = st.session_state.get("positions_snapshot") or {}
+    return bool(preset.get("atr70_r2_mix_enabled", False) or "atr70_r2" in snapshot)
 
 def _snapshot_position_keys(snapshot: dict) -> list:
     keys = []
@@ -1865,6 +2004,8 @@ if 'active_preset' not in st.session_state:
     st.session_state.active_preset = None
 if MA_ALIGNMENT_SWITCH_KEY not in st.session_state:
     st.session_state[MA_ALIGNMENT_SWITCH_KEY] = False
+if ATR70_R2_SWITCH_KEY not in st.session_state:
+    st.session_state[ATR70_R2_SWITCH_KEY] = False
 if 'kmw_preset' not in st.session_state:
     st.session_state.kmw_preset = {
         'initial_capital': 9000.0,
@@ -1905,6 +2046,7 @@ if 'kmw2_preset' not in st.session_state:
         'seed_increases': [],
         'position_edits': {},
         MA_ALIGNMENT_SWITCH_KEY: False,
+        ATR70_R2_SWITCH_KEY: False,
     }
 if 'khw_preset' not in st.session_state:
     st.session_state.khw_preset = {
@@ -2006,6 +2148,54 @@ def initialize_trader():
         except Exception:
             pass
 
+def show_atr70_r2_preference_control():
+    """Arm the KMW2 transition without changing existing position rules."""
+    if st.session_state.get("active_preset") != "KMW2":
+        return
+    preset = st.session_state.get("kmw2_preset") or {}
+    snapshot = st.session_state.get("positions_snapshot") or {}
+    enabled = bool(preset.get(ATR70_R2_SWITCH_KEY, False))
+    st.session_state[ATR70_R2_SWITCH_KEY] = enabled
+    st.subheader("🔀 ATR70-R2 혼합매매 · KMW2")
+    feedback = st.session_state.pop("_atr70_r2_save_feedback", None)
+    if feedback:
+        (st.success if feedback[0] else st.error)(feedback[1])
+    toggle_key = "atr70_r2_opt_in_kmw2"
+    pending = st.session_state.pop("_atr70_r2_widget_sync", None)
+    if pending is not None:
+        st.session_state[toggle_key] = bool(pending)
+    if toggle_key not in st.session_state:
+        st.session_state[toggle_key] = enabled
+    selected = st.toggle(
+        "ATR70-R2 혼합매매 적용",
+        key=toggle_key,
+        help="기존 보유분은 원래 매도 규칙으로 관리하고 신규 매수를 중단합니다. 실제 전량 매도와 미체결 해소를 확인한 후 ATR70·정배열 R2에 각각 50%를 배분합니다.",
+    )
+    st.caption("ATR70 50% + 정배열 R2 50% · 월초 비중조정 · KMW2 전용")
+    mixed_state = snapshot.get("atr70_r2")
+    if isinstance(mixed_state, dict) and mixed_state.get("phase") == "WAITING_FLAT":
+        st.warning("기존 보유분 전량 매도 대기 · 신규 매수 중단. 실제 잔고 0주와 미체결 해소를 확인한 뒤 혼합 전략을 시작합니다.")
+    elif "atr70_r2" in snapshot:
+        if enabled:
+            st.info("혼합 전략 관리 중입니다. ATR 돌파 매수와 익일 시가 청산, R2 종가 주문을 각 전략의 자금으로 관리합니다.")
+        else:
+            st.warning("혼합매매 신규 매수 중단 · 기존 혼합 보유분의 청산 관리는 유지합니다. 기존 동파법으로 자동 복귀하지 않습니다.")
+    elif enabled:
+        st.warning("기존 보유분 전량 매도 대기 · 신규 매수 중단. 실제 잔고 0주와 미체결 해소를 확인한 뒤 혼합 전략을 시작합니다.")
+    else:
+        st.caption("스위치를 켜면 기존 보유분 매도를 기다립니다. 자동매매 엔진의 활성화 상태는 별도로 유지됩니다.")
+    if bool(selected) != enabled:
+        ok, err = save_preset_atr70_r2_setting("KMW2", bool(selected))
+        st.session_state._atr70_r2_widget_sync = bool(selected) if ok else enabled
+        if ok:
+            message = "KMW2 혼합매매 전환을 예약했습니다. 기존 보유분 전량 매도 확인 전에는 혼합 매수를 시작하지 않습니다." if selected else "혼합매매 신규 매수를 중단했습니다. 기존 혼합 보유분의 매도 관리는 계속합니다."
+        else:
+            message = f"설정을 저장하지 못해 기존 선택을 유지합니다: {err}"
+        st.session_state._atr70_r2_save_feedback = (ok, message)
+        st.session_state.trader = None
+        st.rerun()
+
+
 def show_ma_alignment_preference_control():
     """Render and persist the per-preset MA-alignment opt-in."""
     preset_name = st.session_state.get("active_preset")
@@ -2027,6 +2217,9 @@ def show_ma_alignment_preference_control():
         )
     )
     st.session_state[MA_ALIGNMENT_SWITCH_KEY] = enabled
+    mixed_selected = _atr70_r2_ui_selected()
+    if mixed_selected:
+        status_placeholder.info("ATR70-R2 혼합매매가 선택되어 있습니다. 혼합 전략의 R2 정배열 규칙을 사용하며 기존 정배열 설정은 보관합니다.")
 
     feedback = st.session_state.pop("_ma_alignment_save_feedback", None)
     if feedback:
@@ -2053,6 +2246,7 @@ def show_ma_alignment_preference_control():
         selected = st.toggle(
             "이 프리셋에 정배열 전략 적용",
             key=toggle_key,
+            disabled=mixed_selected,
             help=(
                 "SOXL 전일 종가 기준 SMA5 > SMA20 > SMA60일 때만 신규 매수에 "
                 "정배열 전략을 적용합니다. 기존 포지션의 매도 조건은 유지됩니다."
@@ -2076,7 +2270,7 @@ def show_ma_alignment_preference_control():
         "다른 프리셋에는 영향을 주지 않습니다."
     )
 
-    if bool(selected) != enabled:
+    if not mixed_selected and bool(selected) != enabled:
         ok, err = save_preset_ma_alignment_setting(preset_name, bool(selected))
         if st.session_state.get("trader") is not None and hasattr(
             st.session_state.trader, "set_ma_alignment_switch"
@@ -2111,7 +2305,8 @@ def show_mobile_settings():
         max_value=1000000.0,
         value=float(st.session_state.initial_capital),
         step=1000.0,
-        format="%.0f"
+        format="%.0f",
+        disabled=_atr70_r2_ui_selected(),
     )
     
     if initial_capital != st.session_state.initial_capital:
@@ -2132,7 +2327,8 @@ def show_mobile_settings():
     session_start_date = st.date_input(
         "📅 투자 시작일",
         value=default_start_date,
-        max_value=datetime.now()
+        max_value=datetime.now(),
+        disabled=_atr70_r2_ui_selected(),
     )
     
     # 프리셋 불러오기 버튼 (가로 1줄, 5열)
@@ -2223,8 +2419,13 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
 
+    show_atr70_r2_preference_control()
     ma_alignment_placeholder = show_ma_alignment_preference_control()
     show_preset_max_mdd_summary()
+    if _atr70_r2_ui_selected():
+        st.caption("혼합매매 전환 대기·운용 중에는 저장된 투자원금·시작일·시드증액을 화면에서 재설정하지 않습니다. 운용자금은 확인된 실제 계좌 기준으로 관리합니다.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return ma_alignment_placeholder
     
     new_start_date = session_start_date.strftime('%Y-%m-%d')
     if new_start_date != st.session_state.session_start_date:
@@ -2386,6 +2587,9 @@ def main():
 def show_dashboard():
     """대시보드 페이지"""
     st.header("🏠 대시보드")
+    if _atr70_r2_ui_selected():
+        show_atr70_r2_recommendation(st.session_state.get("positions_snapshot") or {})
+        return
     
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
@@ -2610,16 +2814,257 @@ def _update_ma_alignment_display(placeholder, recommendation: dict) -> None:
             show_ma_alignment_alert(recommendation)
 
 
+def _atr70_r2_sleeve_rows(state: dict) -> tuple:
+    """Build display rows from confirmed sleeves without valuing simulated fills."""
+    if not isinstance(state, dict) or state.get("phase") not in {"ACTIVE", "WAITING_FLAT", "DRAINING", "CLOSED", "PAUSED"}:
+        raise ValueError("혼합 전략 상태를 확인할 수 없습니다.")
+    summary, holdings = [], []
+    for strategy, label in (("atr", "ATR Wilder70"), ("r2", "정배열 R2")):
+        sleeve = state.get(strategy)
+        if not isinstance(sleeve, dict):
+            if state.get("phase") == "WAITING_FLAT":
+                continue
+            raise ValueError("전략별 장부를 확인할 수 없습니다.")
+        cash = Decimal(str(sleeve.get("cash")))
+        if not cash.is_finite() or cash < 0:
+            raise ValueError("전략별 현금을 확인할 수 없습니다.")
+        lots = sleeve.get("lots", [])
+        if isinstance(lots, dict):
+            lots = list(lots.values())
+        if not isinstance(lots, list):
+            raise ValueError("전략별 보유내역을 확인할 수 없습니다.")
+        shares = 0
+        for lot in lots:
+            if not isinstance(lot, dict):
+                raise ValueError("전략별 보유내역을 확인할 수 없습니다.")
+            quantity = lot.get("shares", 0)
+            if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0:
+                raise ValueError("전략별 보유수량을 확인할 수 없습니다.")
+            shares += quantity
+            price = Decimal(str(lot.get("entry_price", lot.get("buy_price", 0))))
+            if not price.is_finite() or price < 0:
+                raise ValueError("전략별 체결가를 확인할 수 없습니다.")
+            if quantity:
+                holdings.append({"전략": label, "진입일": str(lot.get("entry_date", lot.get("buy_date", "-"))),
+                                 "수량": quantity, "체결가": f"${price:,.2f}",
+                                 "매도 관리": "다음 미국 거래일 시가 청산" if strategy == "atr" else "진입 당시 R2 매도 조건 유지"})
+        summary.append({"전략": label, "목표 비중": "50%", "장부 현금": f"${cash:,.2f}", "SOXL 보유": shares})
+    return summary, holdings
+
+
+def _atr70_r2_readonly_plan(snapshot: dict) -> dict:
+    """Calculate a display preview; this path cannot refresh or submit orders."""
+    from kmw_order_plan import build_kmw_plan
+    all_data = deepcopy(st.session_state.get("_gh_snapshot_all") or {})
+    all_data["KMW2"] = deepcopy(snapshot)
+    raw_configs = all_data.get("_preset_configs")
+    configs = deepcopy(raw_configs) if isinstance(raw_configs, dict) else {}
+    selected = configs.get("KMW2")
+    selected = deepcopy(selected) if isinstance(selected, dict) else {}
+    selected.update(deepcopy(st.session_state.get("kmw2_preset") or {}))
+    configs["KMW2"] = selected
+    all_data["_preset_configs"] = configs
+    plan = build_kmw_plan(all_data, preset="KMW2", allow_stale_snapshot=True)
+    if not isinstance(plan, dict):
+        raise ValueError("Mixed preview unavailable")
+    return plan
+
+
+def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -> dict:
+    """Keep conditional recommendations and saved receipts distinct per strategy."""
+    plan = plan if isinstance(plan, dict) else {}
+    state = state if isinstance(state, dict) else {}
+    raw_tables = plan.get("strategy_order_tables")
+    raw_tables = raw_tables if isinstance(raw_tables, dict) else {}
+    raw_orders = plan.get("orders")
+    raw_orders = raw_orders if isinstance(raw_orders, list) else []
+    registered = state.get("orders")
+    registered = list(registered.values()) if isinstance(registered, dict) else []
+    status_labels = {"ACCEPTED": "접수 확인 · 체결 대기", "OPEN": "미체결", "PARTIALLY_FILLED": "부분체결",
+                     "FILLED": "체결 확인", "CANCELLED": "취소 확인", "REJECTED": "주문 거절",
+                     "SENDING": "접수 확인 중", "UNKNOWN": "접수 여부 확인 필요"}
+    tables = {}
+    for strategy, label in (("ATR", "ATR70 주문표"), ("R2", "R2 주문표")):
+        entry = raw_tables.get(strategy)
+        entry = entry if isinstance(entry, dict) else {}
+        message = str(entry.get("message") or "")
+        orders = entry.get("orders", entry.get("rows"))
+        if not isinstance(orders, list):
+            orders = [order for order in raw_orders if isinstance(order, dict) and order.get("strategy") == strategy]
+        source = "최신 표시용 주문안"
+        if waiting:
+            orders = []
+            message = ("스위치 OFF · " if not enabled else "") + "기존 보유분 전량 매도 확인 대기 · 혼합 신규 주문 없음"
+        elif not signal_available:
+            orders = [{**deepcopy(order), "existing_order": True}
+                      for order in registered if isinstance(order, dict) and order.get("strategy") == strategy
+                      and (order.get("broker_order_id") or order.get("status") in status_labels)][-20:]
+            message = "최신 신호 확인 불가 · 저장된 접수내역만 표시"
+            source = "저장된 접수내역"
+        elif not message:
+            message = "정규장 시가·돌파 조건 확인 대기" if strategy == "ATR" else "현재 신규 주문 조건 미충족 또는 기존 주문 관리 중"
+        if not enabled and not waiting:
+            message = "스위치 OFF · 신규 매수 추천 제외 · 기존 보유분 매도 관리 유지. 기접수 주문은 유지됩니다. " + message
+        rows = []
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            side = str(order.get("side") or "").upper()
+            existing = bool(order.get("existing_order") or order.get("broker_order_id"))
+            if not enabled and side == "BUY" and not existing:
+                continue
+            if side not in {"BUY", "SELL"}:
+                continue
+            kind = str(order.get("order_type") or "-")
+            price = order.get("reference_price", order.get("price"))
+            if kind == "MARKET" and existing and price is None:
+                price = order.get("price")
+            price_text = "시가 확정 후 산정" if strategy == "ATR" and side == "BUY" else "-"
+            try:
+                if isinstance(price, bool):
+                    raise ValueError("Invalid display price")
+                price_number = Decimal(str(price))
+                if price_number.is_finite() and price_number > 0:
+                    price_text = f"${price_number:,.2f}"
+            except (ValueError, TypeError, InvalidOperation):
+                pass
+            if kind == "MOO":
+                price_text = "시가 시장가"
+            elif kind == "MOC":
+                price_text = "종가 시장가"
+            elif kind == "MARKET":
+                if existing:
+                    price_text = "시장가" + (f" · 예산 기준 {price_text}" if price_text.startswith("$") else " · 접수 가격 없음 · 체결 별도 확인")
+                else:
+                    price_text = "시장가" + (f" · 예산 기준 {price_text}" if price_text.startswith("$") else " · " + price_text if side == "BUY" else "")
+            quantity = order.get("quantity")
+            quantity = quantity if type(quantity) is int and quantity > 0 else "시가 확정 후 산정" if strategy == "ATR" and side == "BUY" else "-"
+            status = str(order.get("status") or ("접수내역 확인" if existing else "조건 확인 대기"))
+            status = status_labels.get(status, status)
+            filled = order.get("filled_quantity", order.get("cumulative_quantity"))
+            if type(filled) is int and type(quantity) is int and 0 < filled < quantity and "부분체결" not in status:
+                status = "부분체결 · " + status
+            if type(filled) is int and filled > 0 and type(quantity) is int and "/" not in status:
+                status += f" · 체결 {filled}/{quantity}주"
+            condition = str(order.get("condition") or order.get("reason") or "")
+            session = order.get("order_date", order.get("session_date"))
+            if existing:
+                status = "저장된 주문 · " + status
+                if session:
+                    status += f" · 미국 주문일 {session}"
+            details = " · ".join(text for text in (condition, status) if text)
+            rows.append({"매매": "매수" if side == "BUY" else "매도", "유형": kind,
+                         "기준가격": price_text, "수량": quantity, "조건·상태": details})
+        if not rows:
+            awaiting_open = strategy == "ATR" and enabled and not waiting and signal_available and entry.get("status") in {"WAITING_BREAKOUT", "WAITING_OPEN"}
+            rows = [{"매매": "대기", "유형": "-", "기준가격": "시가 확정 후 산정" if awaiting_open else "-",
+                     "수량": "미정" if awaiting_open else "-", "조건·상태": message}]
+        tables[strategy] = {"label": label, "message": message, "rows": rows, "source": source,
+                            "order_date": entry.get("order_date", plan.get("order_date"))}
+    return tables
+
+
+def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_available=True):
+    """Always render two strategy order tables, including explicit no-order rows."""
+    tables = _atr70_r2_order_tables(plan, state, enabled=enabled, waiting=waiting, signal_available=signal_available)
+    if not signal_available:
+        st.warning("최신 신호 확인 불가 · 저장된 접수내역은 현재 신규 주문 추천이 아닙니다.")
+    elif isinstance(plan, dict):
+        if plan.get("order_date"):
+            st.caption("표시용 주문안 · 미국 주문일 " + str(plan["order_date"]))
+        if plan.get("generated_at"):
+            st.caption("주문안 계산 시각: " + str(plan["generated_at"]))
+        if plan.get("snapshot_fresh") is False:
+            st.caption("과거 저장 장부의 미리보기입니다. 실제 주문 전 확정 체결과 잔고를 갱신합니다.")
+    for strategy in ("ATR", "R2"):
+        table = tables[strategy]
+        st.subheader(table["label"])
+        st.caption(table["message"])
+        st.dataframe(pd.DataFrame(table["rows"]), use_container_width=True, hide_index=True)
+    st.caption("두 표는 전략별 조건·접수 상태를 확인하는 표시용 주문표입니다. 실제 주문 전송과 체결 상태는 자동매매 관리 화면에서 확인합니다.")
+
+
+def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
+    """Display the live mixed ledger instead of rebuilding a legacy simulation."""
+    if ma_alignment_placeholder is not None:
+        ma_alignment_placeholder.info("KMW2 ATR70-R2 혼합매매 · R2 정배열 판단은 혼합 전략에서 관리합니다.")
+    enabled = bool((st.session_state.get("kmw2_preset") or {}).get(ATR70_R2_SWITCH_KEY, False))
+    state = snapshot.get(ATR70_R2_STATE_KEY)
+    st.subheader("🔀 ATR70 50% + 정배열 R2 50%")
+    if state is None or (isinstance(state, dict) and state.get("phase") == "WAITING_FLAT"):
+        st.warning("기존 보유분 전량 매도 대기 · 신규 매수 중단")
+        st.write("기존 포지션은 원래 매도 조건을 유지합니다. 자동매매 엔진이 실제 잔고 0주와 미체결 해소를 확인한 뒤 운용자금을 반반 배분합니다.")
+        rows = [{"회차": value.get("round"), "매수일": key.split("_", 1)[1],
+                 "수량": value.get("shares"), "매수가": value.get("buy_price"),
+                 "매도 조건": "기존 목표가·보유기한 유지"}
+                for key, value in snapshot.items()
+                if re.fullmatch(r"[1-9][0-9]*_\d{4}-\d{2}-\d{2}", key) and isinstance(value, dict)]
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption("화면의 보유수량이 0이더라도 실제 계좌 확인 전에는 혼합매매를 시작하지 않습니다.")
+        try:
+            plan = _atr70_r2_readonly_plan(snapshot)
+            signal_available = True
+        except Exception:
+            plan, signal_available = None, False
+        if isinstance(plan, dict):
+            sells = [{"종목": order.get("ticker", "SOXL"), "매매": "매도", "수량": order.get("quantity"),
+                      "주문 유형": order.get("order_type"), "가격": order.get("price")}
+                     for order in (plan.get("orders") or []) if isinstance(order, dict) and order.get("side") == "SELL"]
+            if sells:
+                st.write("**전환 전 기존 보유분 매도 주문안**")
+                st.dataframe(pd.DataFrame(sells), use_container_width=True, hide_index=True)
+        show_atr70_r2_order_tables(plan, state, enabled=enabled, waiting=True, signal_available=signal_available)
+        return
+    try:
+        summary, holdings = _atr70_r2_sleeve_rows(state)
+    except (ValueError, TypeError, InvalidOperation):
+        st.error("혼합 전략 장부를 확인하지 못했습니다. 자동매매 관리 화면에서 상태를 확인해 주세요.")
+        show_atr70_r2_order_tables(None, state, enabled=enabled, signal_available=False)
+        return
+    if enabled:
+        st.success("혼합 전략 설정 켜짐 · 각 전략의 현금과 보유수량을 따로 관리합니다. 자동매매 실행 상태는 관리 화면에서 확인합니다.")
+    else:
+        st.warning("혼합매매 신규 매수 중단 · 기존 보유분 청산 관리 유지. 기존 동파법으로 자동 복귀하지 않습니다.")
+    if summary:
+        st.write("**전략별 장부 현금·보유수량**")
+        st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
+    if holdings:
+        st.write("**확인된 보유분**")
+        st.dataframe(pd.DataFrame(holdings), use_container_width=True, hide_index=True)
+    else:
+        st.info("저장된 혼합 전략 보유분이 없습니다.")
+    reserve_rate = state.get("fee_rate")
+    if reserve_rate is not None:
+        try:
+            if isinstance(reserve_rate, bool):
+                raise ValueError("Invalid fee reserve")
+            reserve_rate = Decimal(str(reserve_rate))
+            if not reserve_rate.is_finite() or not Decimal("0") <= reserve_rate < Decimal("1"):
+                raise ValueError("Invalid fee reserve")
+        except (ValueError, TypeError, InvalidOperation):
+            st.caption("비용 여유분 설정을 확인할 수 없습니다.")
+        else:
+            st.caption(f"비용 여유분 {reserve_rate * 100:.2f}%는 추정 비용이며 실제 브로커 수수료와 다를 수 있습니다.")
+    status = snapshot.get("atr70_r2_status")
+    if isinstance(status, dict):
+        labels = {"WAITING": "다음 실행 조건 대기", "DIRECT_ACCEPTED": "주문 접수 확인", "BLOCKED": "실행 확인 필요", "UNKNOWN": "접수 여부 확인 필요"}
+        if status.get("state") in labels:
+            st.caption("엔진 상태: " + labels[status["state"]])
+        if status.get("error_code"):
+            st.warning("자동매매 관리 화면에서 실행 상태를 확인해 주세요.")
+    try:
+        preview = _atr70_r2_readonly_plan(snapshot)
+        signal_available = True
+    except Exception:
+        preview, signal_available = None, False
+    show_atr70_r2_order_tables(preview, state, enabled=enabled, signal_available=signal_available)
+    st.caption("월중 비중은 변동하며 매월 첫 미국 거래일에 50:50을 목표로 조정합니다. 실시간 잔고와 체결 상태는 자동매매 관리 화면에서 확인합니다.")
+
+
 def show_daily_recommendation(ma_alignment_placeholder=None):
     """일일 매매 추천 페이지"""
     st.header("📊 일일 매매 추천")
-    
-    if not st.session_state.trader:
-        _update_ma_alignment_display(
-            ma_alignment_placeholder, {"error": "매매 시스템이 초기화되지 않았습니다."}
-        )
-        st.error("시스템이 초기화되지 않았습니다.")
-        return
     
     # 매 실행 시 스냅샷 로드 (로컬 우선 → GitHub fallback). preset 선택 시 수량 정확도 보장
     if st.session_state.get('active_preset'):
@@ -2645,6 +3090,15 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
             )
             st.caption("Streamlit Secrets의 GITHUB_TOKEN과 GitHub 연결 상태를 확인한 뒤 다시 시도해주세요.")
             return
+    if _atr70_r2_ui_selected():
+        show_atr70_r2_recommendation(st.session_state.get("positions_snapshot") or {}, ma_alignment_placeholder)
+        return
+    if not st.session_state.trader:
+        _update_ma_alignment_display(
+            ma_alignment_placeholder, {"error": "매매 시스템이 초기화되지 않았습니다."}
+        )
+        st.error("시스템이 초기화되지 않았습니다.")
+        return
     
     # 시뮬레이션 실행 - 캐시를 클리어하여 최신 상태 반영
     # 테스트 날짜 오버라이드 고려
@@ -3448,6 +3902,9 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
 def show_portfolio():
     """포트폴리오 페이지"""
     st.header("💼 포트폴리오 현황")
+    if _atr70_r2_ui_selected():
+        show_atr70_r2_recommendation(st.session_state.get("positions_snapshot") or {})
+        return
     
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
@@ -3621,6 +4078,8 @@ def show_portfolio():
 def show_backtest():
     """백테스팅 페이지"""
     st.header("📈 백테스팅")
+    if _atr70_r2_ui_selected():
+        st.info("아래 백테스트는 기존 동파법·정배열 설정의 연구 화면입니다. ATR70-R2 혼합매매 성과를 계산하지 않습니다.")
     
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
@@ -3822,6 +4281,9 @@ def show_backtest():
 def show_advanced_settings():
     """고급 설정 페이지"""
     st.header("⚙️ 고급 설정")
+    if _atr70_r2_ui_selected():
+        st.info("ATR70-R2 혼합매매의 진입·청산·배분 규칙은 혼합 전략에서 관리합니다. 기존 동파법 설정과 보유내역 편집은 전환 대기·운용 중 사용하지 않습니다.")
+        return
     
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")

@@ -266,6 +266,27 @@ class KMWEngine:
     def tick(self, now=None):
         """One scheduler tick, also used with a fake backend in offline tests."""
         now = now or self.clock()
+        if self.preset == "KMW2" and callable(getattr(type(self.backend), "mixed_tick", None)):
+            with self._lock:
+                enabled = self._state["enabled"] and not self._stop.is_set()
+                generation = self._generation
+            if enabled and self._run_lock.acquire(blocking=False):
+                try:
+                    result = self.backend.mixed_tick(now=now,
+                        should_continue=lambda: self._may_continue(generation))
+                    if result.get("handled"):
+                        if result.get("orders") or result.get("state") in {"BLOCKED", "UNKNOWN"}:
+                            with self._lock:
+                                uncertain = result.get("state") == "UNKNOWN"
+                                if uncertain:
+                                    self._generation += 1
+                                self._event(result.get("error") or "KMW2 혼합 전략 실행 상태를 갱신했습니다.",
+                                    last_run={**result, "trigger": "mixed", "finished_at": self.clock().isoformat()},
+                                    enabled=self._state["enabled"] and not uncertain,
+                                    phase="INACTIVE" if uncertain else "BLOCKED" if result.get("state") == "BLOCKED" else "WAITING")
+                        return result
+                finally:
+                    self._run_lock.release()
         with self._lock:
             due = self._state["enabled"] and now >= self._next
         if due:
@@ -322,6 +343,8 @@ class KMWEngine:
         self._wake.set()
         if self._worker is not None:
             self._worker.join(timeout=2)
+        if callable(getattr(type(self.backend), "close", None)):
+            self.backend.close()
 
 
 def main(argv=None):

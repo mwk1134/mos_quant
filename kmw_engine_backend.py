@@ -17,11 +17,12 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import time as monotonic_time
 from typing import Callable
 
 from credential_redaction import environment_secret_values
 from kmw_autotrade import (
-    KST, ROOT, OrderBlocked, OrderLedger, account_id, configured_notifier,
+    ET, KST, ROOT, OrderBlocked, OrderLedger, account_id, configured_notifier,
     default_env_file, default_ledger_path, read_env,
     direct_order_window, load_env, load_snapshots, notify_order_result, preflight, submit_plan,
     symbol, validate_account_configuration, validate_plan, validate_preset,
@@ -45,7 +46,7 @@ _STATES = frozenset({
 })
 _ORDER_FIELDS = (
     "ticker", "side", "quantity", "price", "order_type", "round",
-    "position_key", "reason", "expiry_date",
+    "position_key", "reason", "expiry_date", "strategy",
 )
 _DEFAULT_ENV = object()
 
@@ -143,7 +144,7 @@ def _safe_order(order):
             result[field] = value
         elif field == "side" and isinstance(value, str) and value in {"BUY", "SELL"}:
             result[field] = value
-        elif field == "order_type" and isinstance(value, str) and value in {"LOC", "MOC"}:
+        elif field == "order_type" and isinstance(value, str) and value in {"LOC", "MOC", "MOO", "MARKET"}:
             result[field] = value
         elif field in {"quantity", "round"}:
             quantity = _quantity(value)
@@ -153,7 +154,9 @@ def _safe_order(order):
             number = _nonnegative_number(value)
             if number is not None:
                 result[field] = format(number, "f")
-        elif field == "position_key" and isinstance(value, str) and re.fullmatch(r"[1-9]\d*_\d{4}-\d{2}-\d{2}", value):
+        elif field == "position_key" and isinstance(value, str) and re.fullmatch(r"(?:[1-9]\d*_\d{4}-\d{2}-\d{2}|(?:ATR|R2):\d{4}-\d{2}-\d{2}(?::\d+)?)", value):
+            result[field] = value
+        elif field == "strategy" and value in {"ATR", "R2"}:
             result[field] = value
         elif field == "reason" and isinstance(value, str) and value in {"holding_period_expired", "target_price", "daily_recommendation"}:
             result[field] = value
@@ -196,6 +199,12 @@ class KMWBackend:
         self.env_file = Path(env_file) if env_file is not None else None
         self.ledger_path = Path(ledger_path) if ledger_path is not None else default_ledger_path(self.preset)
         self._clock = clock if clock is not None else lambda: datetime.now(KST)
+        self._mixed_store = None
+        self._mixed_store_credentials = None
+        self._mixed_feed = None
+        self._mixed_feed_account = None
+        self._mixed_last_check = float("-inf")
+        self._mixed_managed = False
 
     def _load_credentials(self):
         # Never update process globals: a partial second-account file cannot
@@ -213,6 +222,121 @@ class KMWBackend:
     def _failure(self, exc):
         code, message = _failure(exc)
         return code, re.sub(r"KMW(?!2)", self.preset, message) if self.preset != "KMW" else message
+
+    def mixed_tick(self, now=None, should_continue=None, *, force=False):
+        """Poll the enabled KMW2 mix independently from the legacy daily batch."""
+        if self.preset != "KMW2":
+            return {"handled": False, "state": "INACTIVE", "orders": []}
+        if not force and monotonic_time.monotonic() - self._mixed_last_check < 5:
+            return {"handled": self._mixed_managed, "state": "WAITING", "orders": []}
+        self._mixed_last_check = monotonic_time.monotonic()
+        from atr70_r2_adapter import MixedSnapshotStore
+        from atr70_r2_runtime import (MeritzTradeFeed, MixedBlocked, fresh_quote,
+                                     mixed_order_window, run_mixed_tick)
+        ledger = None
+        try:
+            current = _now(now)
+            if should_continue is not None and not should_continue():
+                return {"handled": self._mixed_managed, "state": "STOPPED", "orders": []}
+            credentials = self._load_credentials()
+            validate_account_configuration(self.preset, env=credentials)
+            account = account_id(self.preset, env=credentials)
+            if self._mixed_store is None or credentials != self._mixed_store_credentials:
+                if self._mixed_store is not None:
+                    self._mixed_store.close()
+                self._mixed_store = MixedSnapshotStore(credentials, preset=self.preset)
+                self._mixed_store_credentials = dict(credentials)
+            store = self._mixed_store
+            context = store.read(current)
+            state = context.get("state")
+            requested = context.get("enabled") is True
+            self._mixed_managed = isinstance(state, dict) and state.get("phase") == "ACTIVE"
+            if state is None and not requested:
+                return {"handled": False, "state": "INACTIVE", "orders": []}
+            if not self._mixed_managed and requested:
+                # This reconciles legacy sells first and supplies broker-confirmed
+                # flatness. It cannot create a mixed position from a backtest.
+                self.refresh_preview(now=current)
+                context = store.read(current)
+                state = context.get("state")
+            dispatch = {"order": None}
+
+            def may_dispatch():
+                if should_continue is not None and not should_continue():
+                    return False
+                order = dispatch["order"]
+                if order is None:
+                    return False
+                try:
+                    instant = _now(self._clock())
+                    mixed_order_window(instant, order)
+                    if order["order_type"] == "MARKET":
+                        latest = fresh_quote(self._mixed_feed.latest() if self._mixed_feed else None,
+                                             instant, order["session_date"])
+                        if order["side"] == "BUY":
+                            last = Decimal(latest["last_price"])
+                            if (last < Decimal(order.get("trigger_price", "0"))
+                                    or last * Decimal("1.1") > Decimal(order["price"])):
+                                return False
+                except OrderBlocked:
+                    return False
+                return True
+
+            client = MeritzClient.from_env(env=credentials, before_submission=may_dispatch)
+            vendor = credentials.get("MERITZ_SOXL_EXCHANGE_CODE", "").strip()
+            matches = [row for row in client.exchanges()
+                       if str(row.get("ovrs_exch_vndr_idno", "")).strip() == vendor
+                       and row.get("onln_yn") == "Y"]
+            if len(matches) != 1 or vendor not in {"0066", "0321", "0537"}:
+                raise MixedBlocked("EXCHANGE", "SOXL 거래소 설정을 확인하세요.")
+            market = matches[0].get("ovrs_stck_exch_idno")
+            if market not in {"OQ", "NY", "AX"}:
+                raise MixedBlocked("EXCHANGE", "SOXL 실시간 거래소 채널을 확인하세요.")
+            if self._mixed_feed is None or self._mixed_feed_account != account:
+                if self._mixed_feed is not None:
+                    self._mixed_feed.close()
+                self._mixed_feed = MeritzTradeFeed(client, key=f"{market}@SOXL", clock=self._clock)
+                self._mixed_feed_account = account
+            self._mixed_feed.start()
+            ledger = OrderLedger(self.ledger_path, secrets=environment_secret_values(credentials))
+            result = run_mixed_tick(client, state, context,
+                lambda updated: store.save(updated, _now(self._clock())), ledger,
+                now=current, enabled=requested, account=account, exchange_code=vendor,
+                quote=self._mixed_feed.latest(), should_continue=should_continue,
+                clock=self._clock, before_order=lambda order: dispatch.update(order=order),
+                quote_provider=self._mixed_feed.latest)
+            self._mixed_managed = result.get("handled") is True
+            if result.get("orders"):
+                # The existing outbox deduplicates delivery independently from
+                # order dispatch. Status/quote polls never send notifications.
+                notification_plan = {"preset": "KMW2", "order_date": current.astimezone(ET).date().isoformat(),
+                    "generated_at": current.isoformat(), "orders": [row["order"] for row in result["orders"]]}
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    notifier = configured_notifier(env=credentials)
+                    notify_order_result(ledger, notifier, {"preset": "KMW2", "account": account,
+                        "plan": notification_plan, "results": result["orders"], "order_route": "direct"}, env=credentials)
+            result["orders"] = [_public_result(row) for row in result.get("orders", [])]
+            return result
+        except Exception as exc:
+            mixed_context = getattr(exc, "mixed_context", None)
+            if ledger is not None and mixed_context:
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    notifier = configured_notifier(env=credentials)
+                    notify_order_result(ledger, notifier, mixed_context, error=exc, env=credentials)
+            code, message = self._failure(exc)
+            if isinstance(exc, MixedBlocked):
+                code, message = exc.code, str(exc)
+            return {"handled": self._mixed_managed, "state": "UNKNOWN" if isinstance(exc, AmbiguousSubmission) else "BLOCKED",
+                    "error_code": code, "error": message, "orders": []}
+        finally:
+            if ledger is not None:
+                ledger.db.close()
+
+    def close(self):
+        if self._mixed_feed is not None:
+            self._mixed_feed.close()
+        if self._mixed_store is not None:
+            self._mixed_store.close()
 
     def preview(self, now: datetime | None = None, *, allow_stale_snapshot: bool = False) -> dict:
         """Fetch this preset's persisted web app portfolio; no broker calls."""
@@ -273,6 +397,11 @@ class KMWBackend:
         Operational failures return a safe result, keeping the original ledger
         state and any accepted prefix. No ambiguous request is retried.
         """
+        if isinstance(plan, dict) and plan.get("atr70_r2_managed") is True:
+            if plan.get("preset") != self.preset or self.preset != "KMW2":
+                return {"state": "BLOCKED", "orders": [], "error_code": "PRESET_MISMATCH",
+                        "error": "혼합 주문표와 KMW2 계좌를 확인하세요."}
+            return self.mixed_tick(now, should_continue, force=True)
         ledger = None
         context = {}
         notifier = None

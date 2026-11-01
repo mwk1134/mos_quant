@@ -39,6 +39,7 @@ DEFAULT_KMW2_CONFIG = {
     "seed_increases": [],
     "position_edits": {},
     "ma_alignment_switch_enabled": False,
+    "atr70_r2_mix_enabled": False,
 }
 DEFAULT_JEH_CONFIG = {
     "initial_capital": 2793.0,
@@ -192,6 +193,11 @@ def _kmw_config(all_snapshots: dict, snapshot: dict, *, preset: str = "KMW") -> 
         config["ma_alignment_switch_enabled"] = bool(
             snapshot.get("ma_alignment_switch_enabled", config["ma_alignment_switch_enabled"])
         )
+    if preset == "KMW2":
+        if "atr70_r2_mix_enabled" not in persisted:
+            config["atr70_r2_mix_enabled"] = snapshot.get("atr70_r2_mix_enabled", False)
+        if type(config["atr70_r2_mix_enabled"]) is not bool:
+            raise ValueError("atr70_r2_mix_enabled must be a boolean")
     _number(config["initial_capital"], "initial_capital", minimum=Decimal("0.01"))
     _date(config["session_start_date"], "session_start_date")
     if not isinstance(config["seed_increases"], list):
@@ -274,6 +280,9 @@ def build_kmw_plan(
         if not allow_stale_snapshot:
             raise ValueError(stale_message)
         plan["warnings"].append(stale_message + " Preview only; submission is prohibited.")
+    if preset == "KMW2" and "atr70_r2" in snapshot:
+        from atr70_r2_adapter import build_mixed_preview
+        return build_mixed_preview(all_snapshots, snapshot, now, plan)
     cash = _number(snapshot.get("available_cash"), f"{preset} available_cash")
     for field in ("compound_seed", "compound_reference_seed"):
         _number(snapshot.get(field), f"{preset} {field}", minimum=Decimal("0.01"))
@@ -401,4 +410,8 @@ def build_kmw_plan(
             })
         else:
             plan["warnings"].append("Recommended buy budget cannot buy one whole share")
+    if preset == "KMW2" and config.get("atr70_r2_mix_enabled"):
+        plan["orders"] = [order for order in plan["orders"] if order["side"] == "SELL"]
+        plan.update(mixed_phase="WAITING_FLAT", mixed_enabled=True, buy_budget=0)
+        plan["warnings"].append("ATR70-R2 전환 대기: 기존 보유분의 매도 조건을 유지하며 신규 매수는 중단합니다. 실제 잔고·미체결 0 확인 후 혼합 운용을 시작합니다.")
     return plan

@@ -244,6 +244,8 @@ def refresh_preset_snapshot(all_snapshots: dict, *, preset: str, basis_date: str
     snapshot = document.get(preset)
     if not isinstance(snapshot, dict) or not snapshot:
         _blocked("The selected preset has no confirmed snapshot.")
+    if "atr70_r2" in snapshot:
+        _blocked("Mixed strategy accounting requires the mixed execution reconciler.", "MIXED_MANAGED")
     try:
         config = _kmw_config(document, snapshot, preset=preset)
     except (ValueError, KeyError, TypeError):
