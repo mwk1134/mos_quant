@@ -539,30 +539,25 @@
       "strategy_name": "기본"
     },
     "pending_buy": {
-      "round": 2,
+      "round": 3,
+      "quantity": 120,
+      "target_price": 79.82,
       "order_date": "2026-11-02",
-      "quantity": 137,
-      "target_price": 79.8238031616211,
-      "basis_date": "2026-10-30"
+      "basis_date": "2026-10-30",
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
+      "strategy_name": "기본"
     },
-    "available_cash": 69472.20780487059,
+    "available_cash": 61536.05780487059,
     "processed_seed_dates": [],
-    "as_of_date": "2026-10-29",
-    "compound_seed": 82586.52925811769,
+    "as_of_date": "2026-10-30",
+    "compound_seed": 82249.87725811769,
     "compound_reference_seed": 81821.79325811769,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "compound_settlements": [
-      {
-        "trade_date": "2026-10-23",
-        "settlement_date": "2026-10-30",
-        "pnl": -2617.06
-      },
-      {
-        "trade_date": "2026-10-23",
-        "settlement_date": "2026-10-30",
-        "pnl": 266.8
-      },
       {
         "trade_date": "2026-10-26",
         "settlement_date": "2026-11-02",
@@ -733,11 +728,30 @@
           "fees": "0",
           "position_key": "1_2026-10-29",
           "recommended_quantity": 45
+        },
+        "2026-10-30:2921745": {
+          "trade_date": "2026-10-30",
+          "side": "BUY",
+          "quantity": 103,
+          "notional": "7936.1500",
+          "fees": "0",
+          "position_key": "2_2026-10-30"
         }
       }
     },
-    "compound_trading_days": 13,
-    "cash_snapshot_date": "2026-10-28"
+    "compound_trading_days": 14,
+    "cash_snapshot_date": "2026-10-28",
+    "2_2026-10-30": {
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
+      "strategy_name": "기본",
+      "round": 2,
+      "shares": 103,
+      "buy_price": 77.05,
+      "amount": 7936.15
+    }
   },
   "JEH2": {
     "available_cash": 5821.5199319458,
