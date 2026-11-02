@@ -764,13 +764,13 @@
     }
   },
   "JEH2": {
-    "available_cash": 5821.5199319458,
+    "available_cash": 5359.2199319458,
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
     ],
-    "as_of_date": "2026-10-29",
-    "compound_seed": 5258.437876800537,
+    "as_of_date": "2026-10-30",
+    "compound_seed": 5266.236876800537,
     "compound_reference_seed": 5393.732874725342,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
@@ -786,18 +786,8 @@
       "peakValue": 6394.129971160889,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 14,
+    "compound_trading_days": 15,
     "compound_settlements": [
-      {
-        "trade_date": "2026-10-23",
-        "settlement_date": "2026-10-30",
-        "pnl": -26.98
-      },
-      {
-        "trade_date": "2026-10-23",
-        "settlement_date": "2026-10-30",
-        "pnl": 18.85
-      },
       {
         "trade_date": "2026-10-26",
         "settlement_date": "2026-11-02",
@@ -978,6 +968,15 @@
           "fees": "0",
           "position_key": "1_2026-10-29",
           "recommended_quantity": 3
+        },
+        "2026-10-30:2924383": {
+          "trade_date": "2026-10-30",
+          "side": "BUY",
+          "quantity": 6,
+          "notional": "462.3000",
+          "fees": "0",
+          "position_key": "2_2026-10-30",
+          "recommended_quantity": 6
         }
       }
     },
@@ -993,12 +992,23 @@
       "buy_price": 102.39,
       "amount": 307.17
     },
-    "pending_buy": {
+    "2_2026-10-30": {
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
+      "strategy_name": "기본",
       "round": 2,
-      "quantity": 6,
-      "target_price": 106.08,
-      "order_date": "2026-10-30",
-      "basis_date": "2026-10-29",
+      "shares": 6,
+      "buy_price": 77.05,
+      "amount": 462.3
+    },
+    "pending_buy": {
+      "round": 3,
+      "quantity": 7,
+      "target_price": 79.82,
+      "order_date": "2026-11-02",
+      "basis_date": "2026-10-30",
       "mode": "AG",
       "buy_threshold": 3.6,
       "sell_threshold": 3.5,
