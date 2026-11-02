@@ -30,6 +30,7 @@ if str(CURRENT_DIR) not in sys.path:
 
 # 기존 SOXLQuantTrader 클래스 import
 from soxl_quant_system import SOXLQuantTrader, calculate_cash_limited_order
+from banban_strategy import DEFAULT_KMW3_CONFIG
 
 
 def _ensure_current_strategy_class():
@@ -357,7 +358,7 @@ st.markdown("""
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
 _PRESET_CONFIGS_KEY = "_preset_configs"
-_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "KHW")
+_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "KHW", "KMW3")
 _MAX_MDD_KEY = "maxMdd"
 _MDD_CALCULATION_VERSION = "full_history_v1"
 
@@ -470,6 +471,10 @@ def load_preset_snapshot(preset_name: str) -> dict:
     result = all_data.get(preset_name, {})
     if not result:
         result = _load_snapshot_fallback(preset_name)
+        if not result and preset_name == "KMW3":
+            # A new simulation preset can be bundled locally before the
+            # remote document has a record for it.
+            result = _load_all_snapshots_fallback(prefer_local=True).get(preset_name, {})
         if result:
             all_data[preset_name] = result
             st.session_state._gh_snapshot_all = all_data
@@ -776,6 +781,7 @@ def get_preset_configs() -> dict:
         "KMW2": st.session_state.kmw2_preset,
         "JEH2": st.session_state.jeh2_preset,
         "KHW": st.session_state.khw_preset,
+        "KMW3": st.session_state.kmw3_preset,
     }
 
 def _preserve_position_strategy_fields(
@@ -1125,6 +1131,12 @@ def _pending_buy_from_recommendation(
 
 def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
     """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
+    if preset_name == "KMW3":
+        from banban_ui import load_replay
+        try:
+            return load_replay(preset)["snapshot"], None
+        except (ValueError, RuntimeError):
+            return None, "반반매매의 확정 시세를 확인하지 못해 갱신을 보류했습니다."
     if not previous_snapshot:
         return None, "기존 스냅샷을 불러오지 못해 자동 갱신을 중단했습니다."
     if preset_name == "KMW2" and (
@@ -1330,7 +1342,7 @@ def show_preset_max_mdd_summary() -> None:
     if st.button(
         "🔄 프리셋 MDD 수동 갱신",
         key="refresh_all_preset_mdds",
-        help="5개 프리셋의 전체 이력을 다시 계산합니다. 평소에는 저장된 값을 표시합니다.",
+        help="모든 프리셋의 전체 이력을 다시 계산합니다. 평소에는 저장된 값을 표시합니다.",
         use_container_width=True,
     ):
         with st.spinner("프리셋별 최고 MDD 계산 중..."):
@@ -1392,6 +1404,9 @@ def _normalize_preset_config(config: dict) -> dict:
     }
     if "atr70_r2_mix_enabled" in config:
         result["atr70_r2_mix_enabled"] = bool(config["atr70_r2_mix_enabled"])
+    for field in ("strategy_id", "strategy_name", "simulation", "execution_mode", "commission_rate"):
+        if field in config:
+            result[field] = config[field]
     return result
 
 def _preset_state_key(preset_name: str) -> str:
@@ -1428,6 +1443,11 @@ def apply_persisted_preset_configs() -> None:
             "seed_increases",
             "position_edits",
             MA_ALIGNMENT_SWITCH_KEY,
+            "strategy_id",
+            "strategy_name",
+            "simulation",
+            "execution_mode",
+            "commission_rate",
         ):
             if field in persisted_config:
                 merged[field] = persisted_config[field]
@@ -1529,13 +1549,13 @@ def save_active_preset_config() -> tuple:
 
 def save_preset_ma_alignment_setting(preset_name: str, enabled: bool) -> tuple:
     """Reject stale pages trying to change the retired standalone strategy."""
-    return False, "기존 정배열 스위치는 종료되었습니다. KMW2의 ATR70-R2 혼합매매 스위치를 사용해 주세요."
+    return False, "기존 정배열 스위치는 종료되었습니다. KMW2의 반반매매 (ATR70-R2) 스위치를 사용해 주세요."
 
 
 def save_preset_atr70_r2_setting(preset_name: str, enabled: bool) -> tuple:
     """Save only the KMW2 preference; never start a strategy or alter its ledger."""
     if preset_name != "KMW2" or "kmw2_preset" not in st.session_state:
-        return False, "ATR70-R2 혼합매매는 KMW2에서만 사용할 수 있습니다."
+        return False, "반반매매 (ATR70-R2)는 KMW2에서만 사용할 수 있습니다."
     enabled = bool(enabled)
     all_data, sha = _gh_load_all_snapshots()
     if not all_data:
@@ -1971,6 +1991,8 @@ if 'khw_preset' not in st.session_state:
         'position_edits': {},
         MA_ALIGNMENT_SWITCH_KEY: False,
     }
+if 'kmw3_preset' not in st.session_state:
+    st.session_state.kmw3_preset = deepcopy(DEFAULT_KMW3_CONFIG)
 
 apply_persisted_preset_configs()
 ensure_preset_seed_increase("KMW", "2026-06-21", 11293.0)
@@ -2071,7 +2093,7 @@ def show_atr70_r2_preference_control():
     snapshot = st.session_state.get("positions_snapshot") or {}
     enabled = bool(preset.get(ATR70_R2_SWITCH_KEY, False))
     st.session_state[ATR70_R2_SWITCH_KEY] = enabled
-    st.subheader("🔀 ATR70-R2 혼합매매 · KMW2")
+    st.subheader("🔀 반반매매 (ATR70-R2) · KMW2")
     feedback = st.session_state.pop("_atr70_r2_save_feedback", None)
     if feedback:
         (st.success if feedback[0] else st.error)(feedback[1])
@@ -2082,7 +2104,7 @@ def show_atr70_r2_preference_control():
     if toggle_key not in st.session_state:
         st.session_state[toggle_key] = enabled
     selected = st.toggle(
-        "ATR70-R2 혼합매매 적용",
+        "반반매매 (ATR70-R2) 적용",
         key=toggle_key,
         help="기존 보유분은 원래 매도 규칙으로 관리하고 신규 매수를 중단합니다. 실제 전량 매도와 미체결 해소를 확인한 후 ATR70·정배열 R2에 각각 50%를 배분합니다.",
     )
@@ -2127,7 +2149,7 @@ def show_mobile_settings():
         value=float(st.session_state.initial_capital),
         step=1000.0,
         format="%.0f",
-        disabled=_atr70_r2_ui_selected(),
+        disabled=_atr70_r2_ui_selected() or st.session_state.get("active_preset") == "KMW3",
     )
     
     if initial_capital != st.session_state.initial_capital:
@@ -2149,11 +2171,11 @@ def show_mobile_settings():
         "📅 투자 시작일",
         value=default_start_date,
         max_value=datetime.now(),
-        disabled=_atr70_r2_ui_selected(),
+        disabled=_atr70_r2_ui_selected() or st.session_state.get("active_preset") == "KMW3",
     )
     
-    # 프리셋 불러오기 버튼 (가로 1줄, 5열)
-    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5 = st.columns(5)
+    # 프리셋별 투자 설정과 전략을 함께 불러온다.
+    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5, pr_col6 = st.columns(6)
     with pr_col1:
         if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000, 2026/06/21 +11,293", use_container_width=True):
             kmw = st.session_state.kmw_preset
@@ -2240,9 +2262,27 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
 
+    with pr_col6:
+        if st.button("KMW3", help="반반매매 (ATR70-R2): 80,000달러, 시작일 2026/10/20, ATR70·R2 각 50%", use_container_width=True):
+            kmw3 = st.session_state.kmw3_preset
+            st.session_state.initial_capital = kmw3['initial_capital']
+            st.session_state.session_start_date = kmw3['session_start_date']
+            st.session_state.seed_increases = _copy_seed_increases(kmw3.get('seed_increases') or [])
+            st.session_state.position_edits = {}
+            st.session_state.active_preset = "KMW3"
+            st.session_state[MA_ALIGNMENT_SWITCH_KEY] = False
+            st.session_state[ATR70_R2_SWITCH_KEY] = False
+            st.session_state.positions_snapshot = load_preset_snapshot("KMW3")
+            st.session_state.trader = None
+            st.rerun()
+
     show_atr70_r2_preference_control()
     ma_alignment_placeholder = None
     show_preset_max_mdd_summary()
+    if st.session_state.get("active_preset") == "KMW3":
+        st.caption("반반매매 (ATR70-R2) · ATR70 50% + R2 50% · 매월 첫 미국 거래일 비중 조정")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return ma_alignment_placeholder
     if _atr70_r2_ui_selected():
         st.caption("혼합매매 전환 대기·운용 중에는 저장된 투자원금·시작일·시드증액을 화면에서 재설정하지 않습니다. 운용자금은 확인된 실제 계좌 기준으로 관리합니다.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -2353,6 +2393,11 @@ def main():
     
     # 설정 패널 (모든 화면)
     ma_alignment_placeholder = show_mobile_settings()
+
+    if st.session_state.get("active_preset") == "KMW3":
+        from banban_ui import show_workspace
+        show_workspace(st.session_state.kmw3_preset)
+        return
     
     # 트레이더 초기화
     initialize_trader()
@@ -2748,7 +2793,7 @@ def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_av
 def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
     """Display the live mixed ledger instead of rebuilding a legacy simulation."""
     if ma_alignment_placeholder is not None:
-        ma_alignment_placeholder.info("KMW2 ATR70-R2 혼합매매 · R2 정배열 판단은 혼합 전략에서 관리합니다.")
+        ma_alignment_placeholder.info("KMW2 반반매매 (ATR70-R2) · R2 정배열 판단은 혼합 전략에서 관리합니다.")
     enabled = bool((st.session_state.get("kmw2_preset") or {}).get(ATR70_R2_SWITCH_KEY, False))
     state = snapshot.get(ATR70_R2_STATE_KEY)
     st.subheader("🔀 ATR70 50% + 정배열 R2 50%")
@@ -3824,7 +3869,7 @@ def show_backtest():
     """백테스팅 페이지"""
     st.header("📈 백테스팅")
     if _atr70_r2_ui_selected():
-        st.info("아래 백테스트는 기존 동파법·정배열 설정의 연구 화면입니다. ATR70-R2 혼합매매 성과를 계산하지 않습니다.")
+        st.info("아래 백테스트는 기존 동파법·정배열 설정의 연구 화면입니다. 반반매매 (ATR70-R2) 성과를 계산하지 않습니다.")
     
     if not st.session_state.trader:
         st.error("시스템이 초기화되지 않았습니다.")
@@ -4027,7 +4072,7 @@ def show_advanced_settings():
     """고급 설정 페이지"""
     st.header("⚙️ 고급 설정")
     if _atr70_r2_ui_selected():
-        st.info("ATR70-R2 혼합매매의 진입·청산·배분 규칙은 혼합 전략에서 관리합니다. 기존 동파법 설정과 보유내역 편집은 전환 대기·운용 중 사용하지 않습니다.")
+        st.info("반반매매 (ATR70-R2)의 진입·청산·배분 규칙은 혼합 전략에서 관리합니다. 기존 동파법 설정과 보유내역 편집은 전환 대기·운용 중 사용하지 않습니다.")
         return
     
     if not st.session_state.trader:

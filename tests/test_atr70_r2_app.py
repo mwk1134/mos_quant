@@ -251,13 +251,13 @@ def test_streamlit_switch_on_waits_for_actual_zero_with_only_the_mixed_switch():
             patch("requests.get", side_effect=AssertionError("Network forbidden")):
         app = AppTest.from_string(component_script()).run(timeout=20)
         assert not app.exception
-        mixed = next(toggle for toggle in app.toggle if toggle.label == "ATR70-R2 혼합매매 적용")
+        mixed = next(toggle for toggle in app.toggle if toggle.label == "반반매매 (ATR70-R2) 적용")
         mixed.set_value(True).run(timeout=20)
         assert not app.exception
         assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is True
         assert "atr70_r2" not in app.session_state._stored["KMW2"]
         assert app.session_state._stored["KMW2"]["1_2026-10-30"]["shares"] == 3
-        assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
+        assert [toggle.label for toggle in app.toggle] == ["반반매매 (ATR70-R2) 적용"]
         assert any("전량 매도 대기" in warning.value for warning in app.warning)
 
 
@@ -269,7 +269,7 @@ def test_streamlit_active_mixed_off_keeps_lots_and_shows_exit_management():
         assert len(app.dataframe) == 2
         assert len(order_html_boards(app)) == 2
         assert any("비용 여유분 0.50%는 추정 비용이며 실제 브로커 수수료와 다를 수 있습니다." == caption.value for caption in app.caption)
-        mixed = next(toggle for toggle in app.toggle if toggle.label == "ATR70-R2 혼합매매 적용")
+        mixed = next(toggle for toggle in app.toggle if toggle.label == "반반매매 (ATR70-R2) 적용")
         mixed.set_value(False).run(timeout=20)
         assert not app.exception
         assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is False
@@ -277,7 +277,7 @@ def test_streamlit_active_mixed_off_keeps_lots_and_shows_exit_management():
         assert any("청산 관리" in warning.value for warning in app.warning)
         assert len(app.dataframe) == 2
         assert len(order_html_boards(app)) == 2
-        assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
+        assert [toggle.label for toggle in app.toggle] == ["반반매매 (ATR70-R2) 적용"]
 
 
 @pytest.mark.parametrize("fee_rate", ["NaN", "Infinity", "-0.005", "1", True])
@@ -302,7 +302,7 @@ def test_streamlit_kmw2_off_still_has_exactly_one_mixed_switch():
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_string(component_script(running=False)).run(timeout=20)
     assert not app.exception
-    assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
+    assert [toggle.label for toggle in app.toggle] == ["반반매매 (ATR70-R2) 적용"]
     assert app.toggle[0].value is False
     assert "save_count" not in app.session_state
 
@@ -379,8 +379,8 @@ def test_full_webapp_mixed_waiting_and_active_render_without_network_or_writes(r
         app.run(timeout=25)
     assert not app.exception
     assert not app.error
-    assert next(toggle for toggle in app.toggle if toggle.label == "ATR70-R2 혼합매매 적용").value
-    assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
+    assert next(toggle for toggle in app.toggle if toggle.label == "반반매매 (ATR70-R2) 적용").value
+    assert [toggle.label for toggle in app.toggle] == ["반반매매 (ATR70-R2) 적용"]
     assert app.session_state.trader.ma_alignment_switch_enabled is False
     assert next(widget for widget in app.number_input if widget.label == "💰 초기 투자금 (달러)").disabled
     assert next(widget for widget in app.date_input if widget.label == "📅 투자 시작일").disabled

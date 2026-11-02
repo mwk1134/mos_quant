@@ -1,0 +1,79 @@
+{
+  "commit": "26673cef86f22ddce021f77c793e15db536d9874",
+  "source": "reports/atr_r2_review_2026-10-31/friend_source_26673ce/research",
+  "modifications": "Local imports changed to package-relative imports. The wall-clock live-session skip is disabled because banban_strategy accepts completed historical sessions only. Trading formulas unchanged.",
+  "files": {
+    "atr_breakout.py": {
+      "upstream_sha256": "491f55661df59f3bb9e92b8e274356c7fa3acb4bca7a175ba0de40132d22ca60",
+      "packaged_sha256": "b2ae5d51ef205a990fcbd238b4f2cb77f28ef31077c8f3932b9d4e9f8ba459db"
+    },
+    "atr_breakout_backtest.py": {
+      "upstream_sha256": "cd211ea1889bbcac1c3948d91bed0e51ef1cf58a677fa3eb7b648a9f24e42a87",
+      "packaged_sha256": "a8a56d83a4a036c9b8f10e6d46ad6fc899e995f724a3688cd53e4a63d8a34768"
+    },
+    "atr_calculation.py": {
+      "upstream_sha256": "781627f4dd4ed06db184dba2abc142747138e4eef8cde7c80b230b9520912445",
+      "packaged_sha256": "781627f4dd4ed06db184dba2abc142747138e4eef8cde7c80b230b9520912445"
+    },
+    "atr_r2_backtest.py": {
+      "upstream_sha256": "f64d7438f86612827affad7a8b7b10962c5d2e00fd344662cc039ed283093d30",
+      "packaged_sha256": "559c673c29c3a555c80b326cc046400760259b0f77e8eac0f48b26c2f81f272e"
+    },
+    "atr_sessions.py": {
+      "upstream_sha256": "f24a8d3ef3772fdf7034f9abbd792a6383c3bff07650c47cf7dbf4345351ea55",
+      "packaged_sha256": "f24a8d3ef3772fdf7034f9abbd792a6383c3bff07650c47cf7dbf4345351ea55"
+    },
+    "atr_settings.py": {
+      "upstream_sha256": "b9a96c7858ab5cccf65fe40e48371c918cf95b6734093d3b9d25f5272a61c0a2",
+      "packaged_sha256": "b9a96c7858ab5cccf65fe40e48371c918cf95b6734093d3b9d25f5272a61c0a2"
+    },
+    "backtester.py": {
+      "upstream_sha256": "36bf8729907d1b330c93bc244e919b626b0f14fb58903fac9025b31eec9cdb09",
+      "packaged_sha256": "bc18dfaf741469096922d8903b8676b44dc999c769b9ed731d44464e3d19045b"
+    },
+    "buy_sizing.py": {
+      "upstream_sha256": "81e744c3e68d0fb5699bc6cff99f7872a955d78a732cd6a09e0eff6199ddc4b8",
+      "packaged_sha256": "81e744c3e68d0fb5699bc6cff99f7872a955d78a732cd6a09e0eff6199ddc4b8"
+    },
+    "cash_flow_seed_policy.py": {
+      "upstream_sha256": "5a4c05128c2ce1d84af1c5ebd37301d844518b3467d4e8e42bac508b006f2624",
+      "packaged_sha256": "5a4c05128c2ce1d84af1c5ebd37301d844518b3467d4e8e42bac508b006f2624"
+    },
+    "config.py": {
+      "upstream_sha256": "0b2c907aa99571aeb9990f891b552131983cb1b3e2f4bbb2905b4fbd8096b1f6",
+      "packaged_sha256": "0b2c907aa99571aeb9990f891b552131983cb1b3e2f4bbb2905b4fbd8096b1f6"
+    },
+    "jsd_backtest_costs.py": {
+      "upstream_sha256": "54e57f3d943a8e43e5601273097064f9f6233fe30c0190722e6ead6b6fbcf7dd",
+      "packaged_sha256": "e775ff2ed32aa2c867b50c5e90368138c69d089688b008ffe8fd0fafefcf3471"
+    },
+    "market_data_provider.py": {
+      "upstream_sha256": "615ccd2004e3bbbca262eb139072d6decbc6710b0ff40b14e5ebca4c55fb1cd5",
+      "packaged_sha256": "615ccd2004e3bbbca262eb139072d6decbc6710b0ff40b14e5ebca4c55fb1cd5"
+    },
+    "mode_manager.py": {
+      "upstream_sha256": "d940fedf45b1d79cd41fe66513cf9d9018f0bac5efd7ea368271c4c3d2e2b560",
+      "packaged_sha256": "3a1e52d9056873379671692aa66da2343380573e50a2ac6e27c0e73a0964292a"
+    },
+    "monthly_rebalance.py": {
+      "upstream_sha256": "138c762db1a9b91d0eb37f6724096115e1f6474e49684f1322c4f3ef49fd5e9f",
+      "packaged_sha256": "5148f6d51b425e8ae674538a806fc843641e9ffdf3cd1e1ee7d9dbae44f5374c"
+    },
+    "rsi_calculator.py": {
+      "upstream_sha256": "1afa0b2512de768d09e25930a687cbb4b449c3c2ab6f431ff1ac3e099eefa8b3",
+      "packaged_sha256": "1afa0b2512de768d09e25930a687cbb4b449c3c2ab6f431ff1ac3e099eefa8b3"
+    },
+    "snapshot_provider.py": {
+      "upstream_sha256": "20bcb5573948e6f76f26de0e26461a9ae13504bb36350fda675ed1e5ded26222",
+      "packaged_sha256": "20bcb5573948e6f76f26de0e26461a9ae13504bb36350fda675ed1e5ded26222"
+    },
+    "strategy_presets.py": {
+      "upstream_sha256": "4cfa624ab59624f568a09bf0dc2adcd13a55abb36a8876abdd2e1ce00f06c863",
+      "packaged_sha256": "4cfa624ab59624f568a09bf0dc2adcd13a55abb36a8876abdd2e1ce00f06c863"
+    },
+    "trading_days.py": {
+      "upstream_sha256": "9646476b61e2951a0793e193a64189f785f4f63e3394b98f50b2a43607bd7015",
+      "packaged_sha256": "9646476b61e2951a0793e193a64189f785f4f63e3394b98f50b2a43607bd7015"
+    }
+  }
+}

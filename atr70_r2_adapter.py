@@ -390,7 +390,7 @@ def build_mixed_preview(document, snapshot, now, plan):
                                     "buy_date": lot["entry_date"], "buy_price": lot["entry_price"], "round": lot["round"]}
                                    for strategy in ("ATR", "R2") for lot in state[strategy.lower()]["lots"] if lot["shares"]],
             "mixed_state": deepcopy(state), "warnings": plan["warnings"] + warnings + [
-                "혼합 전략은 전용 장중 엔진이 실행합니다. ATR70 50% + 정배열 R2 50%, 월초 비중 조정."]}
+                "반반매매 (ATR70-R2)는 전용 장중 엔진이 실행합니다. ATR70 50% + 정배열 R2 50%, 월초 비중 조정."]}
 
 
 def refresh_mixed_document(document, sha, *, github, client, now):

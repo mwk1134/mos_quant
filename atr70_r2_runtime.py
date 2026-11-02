@@ -191,7 +191,7 @@ def _broker_cash(client):
     actual = _money(rows[0].get("frcr_amt"))
     estimated = _money(rows[0].get("estm_frcr_amt"))
     if actual != estimated:
-        raise MixedBlocked("WAITING_CASH", "결제 대기 현금이 정리된 뒤 혼합 전략을 시작합니다.")
+        raise MixedBlocked("WAITING_CASH", "결제 대기 현금이 정리된 뒤 반반매매를 시작합니다.")
     return str(actual)
 
 
@@ -253,7 +253,7 @@ def reconcile_broker(state, client, *, now, reservation_start_date="2026-04-29")
         expired = _completed_auction_order(row, completed)
         if remaining > 0 and not rejected and not expired:
             if identity is None:
-                raise MixedBlocked("FOREIGN_ORDER", "혼합 전략에 속하지 않는 SOXL 미체결 주문이 있습니다.")
+                raise MixedBlocked("FOREIGN_ORDER", "반반매매에 속하지 않는 SOXL 미체결 주문이 있습니다.")
             order = result["orders"][identity]
             if (_quantity(row["odqt"]) != order["quantity"] or
                     {"1": "SELL", "2": "BUY"}.get(str(row.get("seln_byov_clcd"))) != order["side"]):
