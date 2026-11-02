@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from kmw_order_plan import DEFAULT_JEH_CONFIG, DEFAULT_JEH2_CONFIG, DEFAULT_KHW_CONFIG, _KMWPlanTrader, build_kmw_plan, order_price
+from kmw_order_plan import DEFAULT_JEH_CONFIG, DEFAULT_JEH2_CONFIG, DEFAULT_KHW_CONFIG, _KMWPlanTrader, _kmw_config, build_kmw_plan, order_price
 from soxl_quant_system import SOXLQuantTrader
 
 
@@ -284,7 +284,7 @@ class KMWOrderPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "after the completed"):
             build_kmw_plan(future, NOW, allow_stale_snapshot=True)
 
-    def test_persisted_kmw_seed_and_alignment_config_are_used(self):
+    def test_persisted_kmw_seed_is_used_but_legacy_alignment_is_disabled(self):
         source = snapshots()
         source["_preset_configs"]["KMW"].update({
             "initial_capital": 12000,
@@ -308,8 +308,56 @@ class KMWOrderPlanTests(unittest.TestCase):
         with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
             build_kmw_plan(source, NOW)
         self.assertEqual(captured["capital"], 12000)
-        self.assertTrue(captured["alignment"])
+        self.assertFalse(captured["alignment"])
         self.assertEqual(captured["seeds"][-1]["amount"], 7068)
+
+    def test_disabling_legacy_alignment_preserves_saved_position_exit_rules(self):
+        source = snapshots()
+        source["_preset_configs"]["KMW"]["ma_alignment_switch_enabled"] = True
+        source["KMW"]["ma_alignment_switch_enabled"] = True
+        source["KMW"]["1_2026-10-05"].update({
+            "mode": "SF", "buy_price": 100.0, "amount": 4100.0,
+            "buy_threshold": 6.5, "sell_threshold": 1.8, "max_hold_days": 30,
+            "strategy_name": "dongpa_ma_v1_1_r",
+        })
+        original = deepcopy(source)
+        captured = {}
+
+        def capture(trader, **kwargs):
+            captured["alignment"] = trader.ma_alignment_switch_enabled
+            return recommendation(trader, **kwargs)
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
+            plan = build_kmw_plan(source, NOW)
+        sell = next(order for order in plan["orders"] if order["side"] == "SELL")
+        self.assertFalse(captured["alignment"])
+        self.assertEqual((sell["quantity"], sell["price"], sell["order_type"]), (41, "101.80", "LOC"))
+        self.assertEqual(sell["expiry_date"], "2026-11-16")
+        self.assertEqual(source, original)
+        # Historical fill reconciliation can still read the original opt-in;
+        # only the prospective recommendation disables the retired strategy.
+        self.assertTrue(_kmw_config(source, source["KMW"], preset="KMW")["ma_alignment_switch_enabled"])
+
+    def test_all_presets_ignore_old_alignment_flags_for_new_recommendations(self):
+        source = five_preset_snapshots()
+        for preset in ("KMW", "KMW2", "JEH", "JEH2", "KHW"):
+            source[preset]["ma_alignment_switch_enabled"] = True
+            source["_preset_configs"].setdefault(preset, {})["ma_alignment_switch_enabled"] = True
+        original = deepcopy(source)
+        captured = []
+
+        def capture(trader, **kwargs):
+            captured.append(trader.ma_alignment_switch_enabled)
+            return recommendation(trader, **kwargs)
+
+        with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
+            for preset in ("KMW", "KMW2", "JEH", "JEH2", "KHW"):
+                with self.subTest(preset=preset):
+                    build_kmw_plan(source, NOW, preset=preset)
+                    self.assertFalse(captured[-1])
+                    self.assertTrue(_kmw_config(source, source[preset], preset=preset)["ma_alignment_switch_enabled"])
+        self.assertEqual(captured, [False] * 5)
+        self.assertEqual(source, original)
 
     def test_nonfinite_and_zero_loc_prices_rejected(self):
         for value in ("NaN", "Infinity", "0", "0.001", "-1"):
@@ -401,7 +449,7 @@ class KMW2OrderPlanTests(unittest.TestCase):
         self.assertEqual(captured, {
             "capital": 70000,
             "start": "2026-05-04",
-            "alignment": True,
+            "alignment": False,
             "seeds": [{"date": "2026-08-03", "amount": 2000.0}],
         })
         sell = next(order for order in plan["orders"] if order["side"] == "SELL")
@@ -409,7 +457,7 @@ class KMW2OrderPlanTests(unittest.TestCase):
         self.assertEqual(sell["price"], "83.84")
         self.assertEqual(source, original)
 
-    def test_snapshot_alignment_fallback_is_preset_specific(self):
+    def test_snapshot_alignment_fallback_cannot_reenable_retired_strategy(self):
         source = two_preset_snapshots()
         source["KMW"]["ma_alignment_switch_enabled"] = False
         source["KMW2"]["ma_alignment_switch_enabled"] = True
@@ -422,7 +470,7 @@ class KMW2OrderPlanTests(unittest.TestCase):
         with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
             build_kmw_plan(source, NOW, preset="KMW2")
             build_kmw_plan(source, NOW)
-        self.assertEqual(captured, [True, False])
+        self.assertEqual(captured, [False, False])
 
     def test_missing_kmw2_and_unsupported_presets_never_fall_back_to_kmw(self):
         with patch.object(_KMWPlanTrader, "get_daily_recommendation") as get_rec:
@@ -723,7 +771,7 @@ class JEHOrderPlanTests(unittest.TestCase):
         with patch.object(_KMWPlanTrader, "get_daily_recommendation", capture):
             plan = build_kmw_plan(source, NOW, preset="JEH")
         self.assertEqual(captured, {"capital": 2793, "start": "2025-10-30",
-                                    "seeds": seeds, "alignment": True})
+                                    "seeds": seeds, "alignment": False})
         self.assertNotIn("2026-06-21", [seed["date"] for seed in captured["seeds"]])
         self.assertEqual(plan["orders"][1]["quantity"], 12)
         self.assertEqual(plan["orders"][1]["price"], "51.56")

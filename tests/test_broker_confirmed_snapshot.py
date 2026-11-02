@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta
 import io
 from pathlib import Path
+import re
 from types import SimpleNamespace
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
@@ -62,7 +63,7 @@ def app_functions(*names, **extra):
         for node in ast.walk(function):
             if isinstance(node, ast.arg):
                 node.annotation = None
-    namespace = {"pd": pd, "np": np, "datetime": datetime, "timedelta": timedelta,
+    namespace = {"pd": pd, "np": np, "datetime": datetime, "timedelta": timedelta, "re": re,
                  "deepcopy": deepcopy, "MA_ALIGNMENT_SWITCH_KEY": "ma_alignment_switch_enabled",
                  "_merge_snapshot_max_mdd": lambda current, previous: current,
                  "_snapshot_has_positions": lambda snapshot: any(isinstance(v, dict) and "shares" in v for v in snapshot.values()),

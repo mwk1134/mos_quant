@@ -188,7 +188,7 @@ def component_script(active="KMW2", running=False, fee_rate="0.005"):
     """Run the real changed Streamlit functions with an entirely fake backend."""
     names = {"_copy_seed_increases", "_normalize_preset_config", "_preset_state_key", "save_preset_atr70_r2_setting",
              "_atr70_r2_ui_selected", "show_atr70_r2_preference_control",
-             "show_ma_alignment_preference_control", "_atr70_r2_sleeve_rows",
+             "_atr70_r2_sleeve_rows",
              "_atr70_r2_readonly_plan", "_atr70_r2_order_tables", "show_atr70_r2_order_tables",
              "show_atr70_r2_recommendation", "show_daily_recommendation"}
     tree = ast.parse(APP.read_text())
@@ -239,13 +239,13 @@ def load_preset_snapshot(preset):
     body = "\n\n".join(ast.unparse(node) for node in nodes)
     return prelude + "\n" + body + '''
 show_atr70_r2_preference_control()
-placeholder=show_ma_alignment_preference_control()
+placeholder=None
 if _atr70_r2_ui_selected():
     show_daily_recommendation(placeholder)
 '''
 
 
-def test_streamlit_switch_on_waits_for_actual_zero_and_locks_legacy_switch():
+def test_streamlit_switch_on_waits_for_actual_zero_with_only_the_mixed_switch():
     from streamlit.testing.v1 import AppTest
     with patch("requests.Session.request", side_effect=AssertionError("Network forbidden")), \
             patch("requests.get", side_effect=AssertionError("Network forbidden")):
@@ -257,8 +257,7 @@ def test_streamlit_switch_on_waits_for_actual_zero_and_locks_legacy_switch():
         assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is True
         assert "atr70_r2" not in app.session_state._stored["KMW2"]
         assert app.session_state._stored["KMW2"]["1_2026-10-30"]["shares"] == 3
-        legacy = next(toggle for toggle in app.toggle if toggle.label == "이 프리셋에 정배열 전략 적용")
-        assert legacy.disabled
+        assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
         assert any("전량 매도 대기" in warning.value for warning in app.warning)
 
 
@@ -276,7 +275,7 @@ def test_streamlit_active_mixed_off_keeps_lots_and_shows_exit_management():
         assert app.session_state._stored["KMW2"]["atr70_r2"] == mixed_state()
         assert any("청산 관리" in warning.value for warning in app.warning)
         assert len(app.dataframe) == 4
-        assert next(toggle for toggle in app.toggle if toggle.label == "이 프리셋에 정배열 전략 적용").disabled
+        assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
 
 
 @pytest.mark.parametrize("fee_rate", ["NaN", "Infinity", "-0.005", "1", True])
@@ -288,13 +287,62 @@ def test_streamlit_never_displays_invalid_fee_reserve_as_a_real_cost(fee_rate):
     assert not any("추정 비용이며" in caption.value for caption in app.caption)
 
 
-def test_streamlit_other_preset_has_no_mixed_switch_or_writes():
+@pytest.mark.parametrize("preset", ["KMW", "JEH", "JEH2", "KHW", None, "UNREGISTERED"])
+def test_streamlit_other_preset_has_no_strategy_switch_or_writes(preset):
     from streamlit.testing.v1 import AppTest
-    app = AppTest.from_string(component_script(active="KMW")).run(timeout=20)
+    app = AppTest.from_string(component_script(active=preset)).run(timeout=20)
     assert not app.exception
-    assert [toggle.label for toggle in app.toggle] == ["이 프리셋에 정배열 전략 적용"]
-    assert not app.toggle[0].disabled
+    assert not app.toggle
     assert "save_count" not in app.session_state
+
+
+def test_streamlit_kmw2_off_still_has_exactly_one_mixed_switch():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_string(component_script(running=False)).run(timeout=20)
+    assert not app.exception
+    assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
+    assert app.toggle[0].value is False
+    assert "save_count" not in app.session_state
+
+
+@pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2", "KHW", None, "UNREGISTERED"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_retired_legacy_switch_cannot_mutate_preferences_or_read_or_write_accounts(preset, enabled):
+    state = Session(active_preset="KMW2", kmw2_preset={MA: True}, **{MA: True})
+    before = deepcopy(state)
+    read, save, local = Mock(), Mock(), Mock()
+    scope = functions("save_preset_ma_alignment_setting", st=SimpleNamespace(session_state=state),
+                      _gh_load_all_snapshots=read, _gh_save_all_snapshots=save,
+                      _write_local_all_snapshots=local)
+    ok, message = scope["save_preset_ma_alignment_setting"](preset, enabled)
+    assert ok is False and isinstance(message, str) and message
+    assert state == before
+    read.assert_not_called()
+    save.assert_not_called()
+    local.assert_not_called()
+
+
+@pytest.mark.parametrize("requested", [None, False, True])
+def test_retired_alignment_setting_stays_saved_but_is_disabled_for_legacy_new_orders(requested):
+    state = Session(**{MA: True})
+    trader = Mock()
+    scope = functions("configure_app_trader", st=SimpleNamespace(session_state=state),
+                      APP_COMPOUNDING_ENABLED=True, APP_PROFIT_COMPOUNDING_RATE=0.70,
+                      APP_LOSS_COMPOUNDING_RATE=0.20, APP_COMPOUNDING_SETTLEMENT_DAYS=7,
+                      APP_COMPOUNDING_RENEWAL_DAYS=10)
+    result = scope["configure_app_trader"](trader, ma_alignment_enabled=requested)
+    assert result is trader
+    trader.set_ma_alignment_switch.assert_called_once_with(False)
+    assert state[MA] is True
+
+
+def test_legacy_switch_renderers_and_switch_prompt_are_removed_from_the_app():
+    tree = ast.parse(APP.read_text())
+    functions_present = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    assert not {"show_ma_alignment_preference_control", "show_ma_alignment_alert", "_update_ma_alignment_display"} & functions_present
+    string_literals = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    assert "이 프리셋에 정배열 전략 적용" not in string_literals
+    assert not any("스위치를 켜면 다음 신규 매수에 정배열 전략을 적용" in value for value in string_literals)
 
 
 @pytest.mark.parametrize("running", [False, True])
@@ -330,7 +378,8 @@ def test_full_webapp_mixed_waiting_and_active_render_without_network_or_writes(r
     assert not app.exception
     assert not app.error
     assert next(toggle for toggle in app.toggle if toggle.label == "ATR70-R2 혼합매매 적용").value
-    assert next(toggle for toggle in app.toggle if toggle.label == "이 프리셋에 정배열 전략 적용").disabled
+    assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
+    assert app.session_state.trader.ma_alignment_switch_enabled is False
     assert next(widget for widget in app.number_input if widget.label == "💰 초기 투자금 (달러)").disabled
     assert next(widget for widget in app.date_input if widget.label == "📅 투자 시작일").disabled
 

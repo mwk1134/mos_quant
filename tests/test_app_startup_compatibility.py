@@ -255,7 +255,7 @@ class SessionDeploymentCompatibilityTests(unittest.TestCase):
         self.assertEqual(upgraded.test_today_override, "2026-10-13")
         self.assertEqual(state.active_preset, "JEH")
         self.assertTrue(upgraded.profit_loss_compounding_enabled)
-        self.assertTrue(upgraded.ma_alignment_switch_enabled)
+        self.assertFalse(upgraded.ma_alignment_switch_enabled)
         self.assertEqual(upgraded._simulation_cache, {})
         self.assertEqual(upgraded._stock_data_fallbacks, {})
         self.assertEqual(previous._simulation_cache, {"old": "cached"})
@@ -290,6 +290,85 @@ class SessionDeploymentCompatibilityTests(unittest.TestCase):
         self.assertIs(upgraded, previous)
         self.assertEqual(previous._simulation_cache, {"healthy": "retain"})
         clear_cache.assert_not_called()
+
+    def test_configure_disables_legacy_alignment_despite_old_argument_and_session(self):
+        for argument in (None, False, True):
+            with self.subTest(argument=argument):
+                trader = self.trader()
+                state = self.state(trader)
+                namespace = startup_helpers(state)
+                self.assertIs(namespace["configure_app_trader"](trader, ma_alignment_enabled=argument), trader)
+                self.assertFalse(trader.ma_alignment_switch_enabled)
+                self.assertTrue(trader._ma_alignment_switch_explicitly_set)
+                self.assertFalse(trader.restore_ma_alignment_switch_from_snapshot({"ma_alignment_switch_enabled": True}))
+                self.assertFalse(trader.ma_alignment_switch_enabled)
+
+    def test_long_lived_enabled_session_is_disabled_without_resetting_accounting(self):
+        previous = self.trader()
+        previous.set_profit_loss_compounding(True)
+        previous.set_ma_alignment_switch(True)
+        previous.positions = [{"round": 2, "shares": 17, "buy_price": 100.0,
+            "buy_date": datetime(2026, 10, 9), "amount": 1700.0, "mode": "SF",
+            "buy_threshold": 6.5, "sell_threshold": 1.8, "max_hold_days": 30,
+            "strategy_name": "dongpa_ma_v1_1_r"}]
+        previous.available_cash = 1234.56
+        previous.compound_seed = 5555.0
+        previous.compound_reference_seed = 4444.0
+        previous.compound_settlements = [{"trade_date": datetime(2026, 10, 9),
+            "settlement_date": datetime(2026, 10, 16), "pnl": 42.0}]
+        previous.trading_days_count = 17
+        previous._simulation_cache = {"enabled": "obsolete recommendation"}
+        original_positions = deepcopy(previous.positions)
+        original_settlements = deepcopy(previous.compound_settlements)
+        state = self.state(previous)
+        namespace = startup_helpers(state)
+        with patch.object(previous, "set_profit_loss_compounding", side_effect=AssertionError("Do not reset compounding")), \
+                patch.object(previous, "clear_cache", wraps=previous.clear_cache) as clear_cache:
+            upgraded = namespace["_upgrade_session_trader"]()
+        self.assertIs(upgraded, previous)
+        clear_cache.assert_called_once_with()
+        self.assertFalse(upgraded.ma_alignment_switch_enabled)
+        self.assertTrue(upgraded._ma_alignment_switch_explicitly_set)
+        self.assertEqual(upgraded._simulation_cache, {})
+        self.assertEqual(upgraded.positions, original_positions)
+        self.assertEqual(upgraded.available_cash, 1234.56)
+        self.assertEqual(upgraded.compound_seed, 5555.0)
+        self.assertEqual(upgraded.compound_reference_seed, 4444.0)
+        self.assertEqual(upgraded.compound_settlements, original_settlements)
+        self.assertEqual(upgraded.trading_days_count, 17)
+        self.assertEqual(upgraded.get_position_config(upgraded.positions[0])["sell_threshold"], 1.8)
+        self.assertEqual(upgraded.get_position_config(upgraded.positions[0])["max_hold_days"], 30)
+        self.assertFalse(upgraded.restore_ma_alignment_switch_from_snapshot({"ma_alignment_switch_enabled": True}))
+        with patch.object(previous, "clear_cache") as clear_cache:
+            self.assertIs(namespace["_upgrade_session_trader"](), previous)
+        clear_cache.assert_not_called()
+
+    def test_confirmed_snapshot_restores_old_position_rules_without_reenabling_strategy(self):
+        snapshot = reviewed_jeh_snapshot()
+        snapshot["ma_alignment_switch_enabled"] = True
+        snapshot["1_2026-10-05"].update({"mode": "SF", "buy_threshold": 6.5,
+            "sell_threshold": 1.8, "max_hold_days": 30, "strategy_name": "dongpa_ma_v1_1_r"})
+        snapshot["compound_settlements"] = [{"trade_date": "2026-10-09", "settlement_date": "2026-10-16", "pnl": 25.0}]
+        original = deepcopy(snapshot)
+        for method in ("restore_real_positions", "simulate_from_snapshot_to_today"):
+            with self.subTest(method=method):
+                trader = self.trader()
+                startup_helpers(self.state(trader))["configure_app_trader"](trader, ma_alignment_enabled=True)
+                with patch.object(trader, "run_backtest", side_effect=AssertionError("No price simulation")), \
+                        patch.object(trader, "get_stock_data", side_effect=AssertionError("No market query")):
+                    result = (trader.restore_real_positions(snapshot) if method == "restore_real_positions"
+                              else trader.simulate_from_snapshot_to_today(snapshot, "2025-10-30"))
+                self.assertTrue(result["broker_confirmed"])
+                self.assertFalse(trader.ma_alignment_switch_enabled)
+                position = trader.positions[0]
+                self.assertEqual((position["sell_threshold"], position["max_hold_days"], position["strategy_name"]),
+                                 (1.8, 30, "dongpa_ma_v1_1_r"))
+                self.assertEqual(trader.compound_seed, snapshot["compound_seed"])
+                self.assertEqual(trader.compound_reference_seed, snapshot["compound_reference_seed"])
+                self.assertEqual(trader.available_cash, snapshot["available_cash"])
+                self.assertEqual(trader.compound_settlements[0]["pnl"], 25.0)
+                self.assertEqual(sum(position["shares"] for position in trader.positions), 217)
+                self.assertEqual(snapshot, original)
 
     def test_upgraded_session_restores_actual_217_share_jeh_snapshot_without_simulation(self):
         previous = SimpleNamespace(**deepcopy(vars(self.trader())))

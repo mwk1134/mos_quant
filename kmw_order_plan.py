@@ -325,7 +325,9 @@ def build_kmw_plan(
         enabled=True, profit_rate=0.70, loss_rate=0.20,
         settlement_delay_days=7, renewal_days=10,
     )
-    trader.set_ma_alignment_switch(bool(config["ma_alignment_switch_enabled"]))
+    # Retire the standalone opt-in only for prospective orders. Keep the raw
+    # config for reconstructing historical executions and frozen exit rules.
+    trader.set_ma_alignment_switch(False)
     trader.set_seed_increases(config["seed_increases"])
     trader.session_start_date = config["session_start_date"]
     trader.positions, _, _ = trader._snapshot_to_positions_and_state(snapshot)
