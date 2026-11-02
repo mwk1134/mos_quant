@@ -266,7 +266,8 @@ def test_streamlit_active_mixed_off_keeps_lots_and_shows_exit_management():
     with patch("requests.Session.request", side_effect=AssertionError("Network forbidden")):
         app = AppTest.from_string(component_script(running=True)).run(timeout=20)
         assert not app.exception
-        assert len(app.dataframe) == 4
+        assert len(app.dataframe) == 2
+        assert len(order_html_boards(app)) == 2
         assert any("비용 여유분 0.50%는 추정 비용이며 실제 브로커 수수료와 다를 수 있습니다." == caption.value for caption in app.caption)
         mixed = next(toggle for toggle in app.toggle if toggle.label == "ATR70-R2 혼합매매 적용")
         mixed.set_value(False).run(timeout=20)
@@ -274,7 +275,8 @@ def test_streamlit_active_mixed_off_keeps_lots_and_shows_exit_management():
         assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is False
         assert app.session_state._stored["KMW2"]["atr70_r2"] == mixed_state()
         assert any("청산 관리" in warning.value for warning in app.warning)
-        assert len(app.dataframe) == 4
+        assert len(app.dataframe) == 2
+        assert len(order_html_boards(app)) == 2
         assert [toggle.label for toggle in app.toggle] == ["ATR70-R2 혼합매매 적용"]
 
 
@@ -493,9 +495,9 @@ def test_readonly_preview_does_not_mutate_snapshot_cache_or_save_anything():
     assert state == before and doc == document()
 
 
-def order_frames(app):
-    return [frame.value for frame in app.dataframe
-            if list(frame.value.columns) == ["매매", "유형", "기준가격", "수량", "조건·상태"]]
+def order_html_boards(app):
+    return [element.value for element in app.markdown
+            if 'data-order-strategy="ATR"' in element.value or 'data-order-strategy="R2"' in element.value]
 
 
 def test_streamlit_always_displays_two_separate_current_strategy_order_tables():
@@ -504,10 +506,13 @@ def test_streamlit_always_displays_two_separate_current_strategy_order_tables():
         app = AppTest.from_string(component_script(running=True)).run(timeout=20)
     assert not app.exception
     assert [heading.value for heading in app.subheader if heading.value in {"ATR70 주문표", "R2 주문표"}] == ["ATR70 주문표", "R2 주문표"]
-    frames = order_frames(app)
-    assert len(frames) == 2
-    assert frames[0].iloc[0]["유형"] == "MARKET"
-    assert frames[1].iloc[0]["유형"] == "LOC"
+    boards = order_html_boards(app)
+    assert len(boards) == 2
+    assert 'data-order-strategy="ATR"' in boards[0] and 'MARKET' in boards[0]
+    assert 'data-order-strategy="R2"' in boards[1] and 'LOC' in boards[1]
+    assert "시가 확정 후 산정" in boards[0] and "미정" in boards[0]
+    assert "$100.00" in boards[1]
+    assert len(app.dataframe) == 2  # Only the cash/holdings views remain dataframes.
     builder.assert_called_once()
     assert any("미국 주문일 2026-11-02" in caption.value for caption in app.caption)
     assert any("확인된 보유분" in text.value for text in app.markdown)
@@ -518,6 +523,28 @@ def test_streamlit_source_failure_still_displays_both_tables_and_warning():
     with patch("kmw_order_plan.build_kmw_plan", side_effect=ValueError("synthetic data failure")):
         app = AppTest.from_string(component_script(running=True)).run(timeout=20)
     assert not app.exception
-    assert len(order_frames(app)) == 2
+    boards = order_html_boards(app)
+    assert len(boards) == 2
+    assert all("저장된 접수내역" in board for board in boards)
     assert any("최신 신호 확인 불가" in warning.value for warning in app.warning)
     assert not any("synthetic data failure" in warning.value for warning in app.warning)
+
+
+def test_streamlit_html_keeps_accepted_partial_buy_visible_after_switch_off():
+    from streamlit.testing.v1 import AppTest
+    plan = preview_tables()
+    plan["strategy_order_tables"]["R2"]["orders"].append({
+        "strategy": "R2", "side": "BUY", "order_type": "LOC", "price": "90", "quantity": 10,
+        "filled_quantity": 3, "status": "OPEN", "existing_order": True,
+        "broker_order_id": "synthetic-receipt", "session_date": "2026-11-02"})
+    with patch("kmw_order_plan.build_kmw_plan", return_value=plan):
+        app = AppTest.from_string(component_script(running=True)).run(timeout=20)
+        app.toggle[0].set_value(False).run(timeout=20)
+    assert not app.exception
+    boards = order_html_boards(app)
+    assert len(boards) == 2
+    assert 'class="mix-order-badge buy"' not in boards[0]
+    assert "저장 주문" in boards[1] and "부분체결" in boards[1] and "체결 3/10주" in boards[1]
+    assert "미국 주문일 2026-11-02" in boards[1]
+    assert "$90.00" in boards[1] and "$100.00" not in boards[1]
+    assert all("기접수 주문은 유지됩니다" in board for board in boards)

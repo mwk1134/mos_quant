@@ -2680,11 +2680,15 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
                     price_text = f"${price_number:,.2f}"
             except (ValueError, TypeError, InvalidOperation):
                 pass
+            market_price_note = ""
             if kind == "MOO":
                 price_text = "시가 시장가"
             elif kind == "MOC":
                 price_text = "종가 시장가"
             elif kind == "MARKET":
+                market_price_note = (f"예산 기준 {price_text}" if price_text.startswith("$")
+                                     else "접수 가격 없음 · 체결 별도 확인" if existing
+                                     else price_text if side == "BUY" else "")
                 if existing:
                     price_text = "시장가" + (f" · 예산 기준 {price_text}" if price_text.startswith("$") else " · 접수 가격 없음 · 체결 별도 확인")
                 else:
@@ -2706,11 +2710,14 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
                     status += f" · 미국 주문일 {session}"
             details = " · ".join(text for text in (condition, status) if text)
             rows.append({"매매": "매수" if side == "BUY" else "매도", "유형": kind,
-                         "기준가격": price_text, "수량": quantity, "조건·상태": details})
+                         "기준가격": price_text, "수량": quantity, "조건·상태": details,
+                         "조건": condition, "상태": status, "기존주문": existing,
+                         "가격설명": market_price_note})
         if not rows:
             awaiting_open = strategy == "ATR" and enabled and not waiting and signal_available and entry.get("status") in {"WAITING_BREAKOUT", "WAITING_OPEN"}
             rows = [{"매매": "대기", "유형": "-", "기준가격": "시가 확정 후 산정" if awaiting_open else "-",
-                     "수량": "미정" if awaiting_open else "-", "조건·상태": message}]
+                     "수량": "미정" if awaiting_open else "-", "조건·상태": message,
+                     "조건": "", "상태": message, "기존주문": False}]
         tables[strategy] = {"label": label, "message": message, "rows": rows, "source": source,
                             "order_date": entry.get("order_date", plan.get("order_date"))}
     return tables
@@ -2718,6 +2725,8 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
 
 def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_available=True):
     """Always render two strategy order tables, including explicit no-order rows."""
+    from order_table_ui import ORDER_TABLE_CSS, render_order_table_html
+
     tables = _atr70_r2_order_tables(plan, state, enabled=enabled, waiting=waiting, signal_available=signal_available)
     if not signal_available:
         st.warning("최신 신호 확인 불가 · 저장된 접수내역은 현재 신규 주문 추천이 아닙니다.")
@@ -2728,11 +2737,11 @@ def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_av
             st.caption("주문안 계산 시각: " + str(plan["generated_at"]))
         if plan.get("snapshot_fresh") is False:
             st.caption("과거 저장 장부의 미리보기입니다. 실제 주문 전 확정 체결과 잔고를 갱신합니다.")
+    st.markdown(ORDER_TABLE_CSS, unsafe_allow_html=True)
     for strategy in ("ATR", "R2"):
         table = tables[strategy]
         st.subheader(table["label"])
-        st.caption(table["message"])
-        st.dataframe(pd.DataFrame(table["rows"]), use_container_width=True, hide_index=True)
+        st.markdown(render_order_table_html(table, strategy), unsafe_allow_html=True)
     st.caption("두 표는 전략별 조건·접수 상태를 확인하는 표시용 주문표입니다. 실제 주문 전송과 체결 상태는 자동매매 관리 화면에서 확인합니다.")
 
 
