@@ -9,9 +9,9 @@ prices nor accesses accounts, submits orders, or persists state.
 from __future__ import annotations
 
 from contextlib import redirect_stdout
-from copy import deepcopy
+from copy import copy, deepcopy
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import io
 import json
 import math
@@ -164,7 +164,17 @@ def _holdings(engine):
     return result
 
 
+def _cent_price(value):
+    """Round only the displayed recommendation; keep model prices separate."""
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
 def _preview(engine, data, end):
+    # Preview the next morning's settlements/mode/renewal on a private view.
+    # Never advance the replay engine or consume its pending settlements.
+    engine = copy(engine)
+    engine.mode_history = deepcopy(engine.mode_history)
+    engine.settlements = deepcopy(engine.settlements)
     calendar = exchange_calendar()
     session = calendar.next_session(end).strftime("%Y-%m-%d")
     monthly = session[:7] != end[:7]
@@ -193,21 +203,45 @@ def _preview(engine, data, end):
         rules = get_mode_config(position["mode"], strategy_context=context)
         expiry = calendar.session_offset(position["entry_date"], int(rules["max_holding_days"])).strftime("%Y-%m-%d")
         expired = session >= expiry
+        strategy_price = position["entry_price"] * rules["sell_threshold"]
         result["R2"].append({"side": "SELL", "order_type": "MOC" if expired else "LOC",
-                             "quantity": position["shares"], "price": None if expired else position["entry_price"] * rules["sell_threshold"],
+                             "quantity": None if monthly else position["shares"],
+                             "model_quantity": None if monthly else position["shares"],
+                             "shares_before_rebalance": position["shares"],
+                             "strategy_price": strategy_price,
+                             "price": None if expired else _cent_price(Decimal(str(position["entry_price"])) * Decimal(str(rules["sell_threshold"]))),
                              "round": position["round"], "entry_date": position["entry_date"],
                              "expiry_date": expiry, "status": "REBALANCE_PENDING" if monthly else "CONDITIONAL"})
     rules = get_mode_config(engine.current_mode, strategy_context=engine.strategy_context)
     round_number = engine.get_next_round()
-    if round_number is not None:
-        price = last["close"] * rules["buy_threshold"]
+    strategy_price = last["close"] * rules["buy_threshold"]
+    price = _cent_price(Decimal(str(last["close"])) * Decimal(str(rules["buy_threshold"])))
+    if monthly:
+        # Opening rebalancing can fully remove lots and change the next round,
+        # cash and reference seed. Even a full book can gain a buy round; its
+        # quantity cannot be known from the previous close alone.
+        result["R2"].append({"side": "BUY", "order_type": "LOC", "quantity": None,
+                             "model_quantity": None, "strategy_price": strategy_price,
+                             "price": price, "budget": None, "round": None,
+                             "mode": engine.current_mode, "strategy_id": engine.active_strategy_id,
+                             "status": "REBALANCE_PENDING"})
+    elif round_number is not None:
         budget = min(engine.live_cash, engine.reference_seed * rules["rounds"][round_number - 1])
-        # Keep the audited engine's fixed-at-limit sizing and fee reservation.
-        quantity = min(math.floor(budget / price), math.floor(budget / (price * (1 + engine.rate))))
-        result["R2"].append({"side": "BUY", "order_type": "LOC", "quantity": None if monthly else max(0, quantity),
+        # Evaluate a conditional fill at the already-known LOC limit. The
+        # audited sizing includes its exact fee reservation and float tolerance,
+        # and fixes quantity before any same-day sale proceeds are available.
+        # Capping again at the cent-rounded recommendation prevents that shown
+        # order from exceeding its budget when rounding raises the unit price.
+        candidate = engine.check_buy_signal(strategy_price, last["close"])
+        model_quantity = candidate["shares"] if candidate else 0
+        unit_cost = Decimal(str(price)) * (Decimal(1) + Decimal(str(engine.rate)))
+        rounded_cash_cap = int(Decimal(str(budget)) // unit_cost) if unit_cost > 0 else 0
+        quantity = min(model_quantity, max(0, rounded_cash_cap))
+        result["R2"].append({"side": "BUY", "order_type": "LOC", "quantity": quantity,
+                             "model_quantity": model_quantity, "strategy_price": strategy_price,
                              "price": price, "budget": budget, "round": round_number,
                              "mode": engine.current_mode, "strategy_id": engine.active_strategy_id,
-                             "status": "REBALANCE_PENDING" if monthly else "CONDITIONAL"})
+                             "status": "CONDITIONAL"})
     return result
 
 

@@ -10,6 +10,17 @@ import pandas as pd
 import streamlit as st
 
 from banban_strategy import normalize_config, replay, report_from_snapshot
+from banban_research.atr_sessions import ET, exchange_calendar
+from kmw_order_plan import _KMWPlanTrader
+
+
+class _BanbanMarketDataTrader(_KMWPlanTrader):
+    """Cut at the exchange's completed session, including early closes."""
+
+    def _drop_unfinished_daily_bar(self, stock_data):
+        if stock_data is None or stock_data.empty:
+            return stock_data
+        return stock_data[stock_data.index.date <= self._expected_basis_date].copy()
 
 
 class BanbanMarketDataError(RuntimeError):
@@ -22,12 +33,10 @@ class BanbanMarketDataError(RuntimeError):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_completed_replay(config_json, basis_date):
-    from kmw_order_plan import _KMWPlanTrader
-
     config = normalize_config(json.loads(config_json))
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        provider = _KMWPlanTrader(now=datetime.now(timezone.utc), expected_basis_date=date.fromisoformat(basis_date),
-                                  initial_capital=1)
+        provider = _BanbanMarketDataTrader(now=datetime.now(timezone.utc),
+            expected_basis_date=date.fromisoformat(basis_date), initial_capital=1)
         market = {}
         for symbol in ("SOXL", "QQQ"):
             try:
@@ -49,10 +58,27 @@ def _load_completed_replay(config_json, basis_date):
             "받아온 일봉의 날짜·가격 이력을 검증하지 못해 추천 계산을 보류했습니다.") from exc
 
 
-def _completed_basis_date():
-    from kmw_order_plan import completed_trading_date, ET
+def _completed_basis_date(now=None):
+    current = now if now is not None else datetime.now(timezone.utc)
+    if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError("A timezone-aware market instant is required")
+    calendar = exchange_calendar()
+    session = calendar.date_to_session(current.astimezone(ET).date().isoformat(), direction="previous")
+    if current < calendar.session_close(session).to_pydatetime():
+        session = calendar.previous_session(session)
+    return session.strftime("%Y-%m-%d")
 
-    return completed_trading_date(datetime.now(ET)).isoformat()
+
+def _clear_recommendation_cache():
+    """Retry these daily histories without erasing unrelated preset data."""
+    import soxl_quant_system as strategy
+
+    _load_completed_replay.clear()
+    with strategy._SHARED_STOCK_DATA_CACHE_LOCK:
+        for symbol in ("SOXL", "QQQ"):
+            key = f"{symbol}_15y"
+            strategy._SHARED_STOCK_DATA_CACHE.pop(key, None)
+            strategy._SHARED_STOCK_DATA_RETRY_AFTER.pop(key, None)
 
 
 def load_replay(config):
@@ -66,7 +92,7 @@ def _show_orders(report, *, unavailable_reason=None):
     if unavailable_reason:
         for label in ("ATR70 주문표", "R2 주문표"):
             st.subheader(label)
-            st.dataframe(pd.DataFrame([{"매매": "대기", "유형": "-", "기준가격": "-", "수량": "-",
+            st.dataframe(pd.DataFrame([{"매매": "대기", "회차": "-", "유형": "-", "기준가격": "-", "수량": "-",
                                         "조건": unavailable_reason}]), use_container_width=True, hide_index=True)
         st.caption("최신 확정 일봉 확인 후 매수가·매도가와 수량을 계산합니다.")
         return
@@ -90,6 +116,8 @@ def _show_orders(report, *, unavailable_reason=None):
             if orders:
                 rows = [_order_row(order) for order in orders]
                 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                if strategy == "R2" and not any(order.get("side") == "BUY" for order in orders):
+                    st.caption("R2 가용 회차가 없어 신규 매수는 없습니다. 보유분의 매도 조건은 계속 표시합니다.")
             else:
                 st.caption("조건 확인 대기 · 신규 주문 없음")
     st.caption("확정 일봉으로 계산한 모의 매매표입니다. 실제 계좌의 주문·체결을 나타내지 않습니다.")
@@ -108,17 +136,23 @@ def _order_row(order):
                     "FILTER_BLOCKED": "변동성 조건 미충족 · 신규 매수 없음",
                     "WAITING_OPEN": "정규장 시가 × 1.015 돌파 확인 후 수량 산정",
                     "REBALANCE_PENDING": "월초 비중 조정 후 수량 재계산"}.get(status, status)
+    pending_quantity = "비중 조정 후 산정" if status == "REBALANCE_PENDING" else "조건 확인 후 산정"
     return {"매매": "대기" if blocked else "매수" if order.get("side") == "BUY" else "매도",
+            "회차": order.get("round") if order.get("round") is not None else "-",
             "유형": kind, "기준가격": "-" if blocked else price,
-            "수량": "-" if blocked else order.get("quantity") if order.get("quantity") is not None else "조건 확인 후 산정",
+            "수량": "-" if blocked else order.get("quantity") if order.get("quantity") is not None else pending_quantity,
             "조건": "가용 현금 부족 · 신규 매수 없음" if order.get("quantity") == 0 else order.get("condition", status_label)}
 
 
+@st.fragment(run_every=60)
 def show_workspace(config):
+    if st.session_state.get("active_preset") not in (None, "KMW3"):
+        return
     st.subheader("🔀 KMW3 · 반반매매 (ATR70-R2)")
     st.caption(f"투자 시작일 {config['session_start_date']} · 투자원금 ${config['initial_capital']:,.0f} · ATR70 50% + R2 50%")
     if st.button("🔄 반반매매 시세 갱신", key="kmw3_refresh"):
-        _load_completed_replay.clear()
+        _clear_recommendation_cache()
+    st.caption("화면이 열려 있으면 1분마다 확인합니다. 미국 장 마감 후 다음 거래일의 추천으로 갱신합니다.")
     historical = False
     try:
         with st.spinner("반반매매의 확정 시세와 보유분을 계산 중입니다..."):
