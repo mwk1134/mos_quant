@@ -1053,12 +1053,12 @@
     }
   },
   "KHW": {
-    "available_cash": 15378.16009002685,
+    "available_cash": 13196.72009002685,
     "processed_seed_dates": [
       "2026-09-15"
     ],
-    "as_of_date": "2026-10-30",
-    "compound_seed": 21727.817956604,
+    "as_of_date": "2026-11-02",
+    "compound_seed": 22048.051956604002,
     "compound_reference_seed": 22158.738897155756,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
@@ -1074,19 +1074,8 @@
       "peakValue": 21554.320251464844,
       "soxlPrice": 105.91
     },
-    "compound_trading_days": 14,
-    "compound_settlements": [
-      {
-        "trade_date": "2026-10-26",
-        "settlement_date": "2026-11-02",
-        "pnl": -50.55
-      },
-      {
-        "trade_date": "2026-10-26",
-        "settlement_date": "2026-11-02",
-        "pnl": 471.92
-      }
-    ],
+    "compound_trading_days": 15,
+    "compound_settlements": [],
     "broker_sync": {
       "version": 1,
       "baseline_date": "2026-10-12",
@@ -1275,6 +1264,15 @@
           "fees": "0",
           "position_key": "2_2026-10-30",
           "recommended_quantity": 27
+        },
+        "2026-11-02:105151": {
+          "trade_date": "2026-11-02",
+          "side": "BUY",
+          "quantity": 32,
+          "notional": "2181.4400",
+          "fees": "0",
+          "position_key": "3_2026-11-02",
+          "recommended_quantity": 32
         }
       }
     },
@@ -1301,12 +1299,23 @@
       "buy_price": 77.05,
       "amount": 2080.35
     },
-    "pending_buy": {
+    "3_2026-11-02": {
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
+      "strategy_name": "기본",
       "round": 3,
-      "quantity": 32,
-      "target_price": 79.82,
-      "order_date": "2026-11-02",
-      "basis_date": "2026-10-30",
+      "shares": 32,
+      "buy_price": 68.17,
+      "amount": 2181.44
+    },
+    "pending_buy": {
+      "round": 4,
+      "quantity": 46,
+      "target_price": 70.62,
+      "order_date": "2026-11-03",
+      "basis_date": "2026-11-02",
       "mode": "AG",
       "buy_threshold": 3.6,
       "sell_threshold": 3.5,
