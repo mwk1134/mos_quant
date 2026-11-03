@@ -165,15 +165,71 @@ from banban_strategy import DEFAULT_KMW3_CONFIG
 st.session_state.positions_snapshot = {stored!r}
 show_workspace(DEFAULT_KMW3_CONFIG)
 """
-    with patch("banban_ui.load_replay", side_effect=ValueError("offline")):
+    with patch("banban_ui.load_replay", side_effect=ValueError("offline")), \
+            patch("banban_ui._completed_basis_date", return_value="2026-11-02"):
         app = AppTest.from_string(script).run(timeout=20)
     assert not app.exception and not app.error
     assert any("2026-10-20" in warning.value and "저장된 모의 결과" in warning.value for warning in app.warning)
     assert any(metric.value == "$80,200.00" for metric in app.metric)
     headings = [heading.value for heading in app.subheader]
-    assert "ATR70 주문표" not in headings and "R2 주문표" not in headings
-    assert all("유형" not in frame.value.columns for frame in app.dataframe)
+    assert "ATR70 주문표" in headings and "R2 주문표" in headings
+    waiting_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
+    assert len(waiting_tables) == 2
+    assert all(table["매매"].tolist() == ["대기"] for table in waiting_tables)
+    assert all(table["기준가격"].tolist() == ["-"] for table in waiting_tables)
+    assert all(table["수량"].tolist() == ["-"] for table in waiting_tables)
     assert all(10 not in frame.value["수량"].tolist() for frame in app.dataframe if "수량" in frame.value)
+
+
+def test_workspace_market_failure_keeps_valid_saved_current_recommendations():
+    report = sample_report()
+    stored = {**report["snapshot"], "banban_report": {key: value for key, value in report.items() if key != "snapshot"}}
+    script = f"""
+import streamlit as st
+from banban_ui import show_workspace
+from banban_strategy import DEFAULT_KMW3_CONFIG
+st.session_state.positions_snapshot = {stored!r}
+show_workspace(DEFAULT_KMW3_CONFIG)
+"""
+    with patch("banban_ui.load_replay", side_effect=ValueError("offline")), \
+            patch("banban_ui._completed_basis_date", return_value="2026-10-20"):
+        app = AppTest.from_string(script).run(timeout=20)
+    assert not app.exception and not app.error
+    headings = [heading.value for heading in app.subheader]
+    assert "ATR70 주문표" in headings and "R2 주문표" in headings
+    order_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
+    assert len(order_tables) == 2
+    assert order_tables[1]["수량"].tolist() == [10]
+    assert order_tables[1]["기준가격"].tolist() == ["$101.50"]
+    assert any("2026-10-21" in caption.value for caption in app.caption)
+
+
+def test_workspace_prefers_latest_verified_session_over_older_loaded_snapshot():
+    current = sample_report()
+    current["end_date"] = current["snapshot"]["as_of_date"] = current["daily"][0]["date"] = "2026-10-21"
+    current["order_preview"]["session_date"] = "2026-10-22"
+    current_saved = {**current["snapshot"], "banban_report": {key: value for key, value in current.items() if key != "snapshot"}}
+    older = sample_report()
+    older["order_preview"]["R2"][0].update(quantity=99, reference_price=333.0)
+    older_saved = {**older["snapshot"], "banban_report": {key: value for key, value in older.items() if key != "snapshot"}}
+    script = f"""
+import streamlit as st
+from banban_ui import show_workspace
+from banban_strategy import DEFAULT_KMW3_CONFIG
+st.session_state.positions_snapshot = {older_saved!r}
+st.session_state._kmw3_last_verified_snapshot = {current_saved!r}
+show_workspace(DEFAULT_KMW3_CONFIG)
+"""
+    with patch("banban_ui.load_replay", side_effect=ValueError("offline")), \
+            patch("banban_ui._completed_basis_date", return_value="2026-10-21"):
+        app = AppTest.from_string(script).run(timeout=20)
+    assert not app.exception and not app.error
+    order_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
+    assert len(order_tables) == 2
+    assert order_tables[1]["수량"].tolist() == [10]
+    assert order_tables[1]["기준가격"].tolist() == ["$101.50"]
+    assert any("2026-10-21" in caption.value for caption in app.caption)
+    assert not app.warning
 
 
 @pytest.mark.parametrize("saved_capital", [10000.0, "invalid"])
@@ -192,4 +248,11 @@ show_workspace(DEFAULT_KMW3_CONFIG)
         app = AppTest.from_string(script).run(timeout=20)
     assert not app.exception and not app.error
     assert not app.metric
-    assert any("확정 시세를 불러오지 못했습니다" in warning.value for warning in app.warning)
+    assert any("반반매매 추천 계산을 완료하지 못했습니다" in warning.value for warning in app.warning)
+    headings = [heading.value for heading in app.subheader]
+    assert "ATR70 주문표" in headings and "R2 주문표" in headings
+    waiting_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
+    assert len(waiting_tables) == 2
+    assert all(table["매매"].tolist() == ["대기"] for table in waiting_tables)
+    assert all(table["기준가격"].tolist() == ["-"] for table in waiting_tables)
+    assert all(table["수량"].tolist() == ["-"] for table in waiting_tables)

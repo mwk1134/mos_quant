@@ -1356,26 +1356,22 @@
     "strategy_name": "반반매매",
     "simulation": true,
     "execution_mode": "simulation",
-    "available_cash": 80535.13668561936,
+    "available_cash": 70402.96309947586,
     "initial_capital": 80000.0,
     "session_start_date": "2026-10-20",
-    "as_of_date": "2026-10-28",
+    "as_of_date": "2026-11-02",
     "banban": {
       "phase": "SIMULATED",
       "atr": {
-        "cash": 40000.0,
+        "cash": 40073.52199220848,
         "lots": []
       },
       "r2": {
-        "cash": 40535.136685619356,
-        "lots": [],
-        "seed": 40076.46572542206,
-        "reference_seed": 40000.0,
-        "settlements": [
+        "cash": 30329.441107267387,
+        "lots": [
           {
-            "profit_loss": 24.608915084838866,
-            "trade_date": "2026-10-23",
-            "settlement_date": "2026-10-30",
+            "round": 1,
+            "mode": "AG",
             "strategy_id": "dongpa_modified",
             "strategy_context": {
               "strategy_id": "dongpa_modified",
@@ -1415,12 +1411,21 @@
               "profit_reflection_rate": 0.72,
               "loss_reflection_rate": 0.213,
               "reference_seed_renewal_days": 10
-            }
+            },
+            "entry_date": "2026-10-29",
+            "entry_price": 102.38999938964844,
+            "shares": 22,
+            "target_amount": 2480.0,
+            "_entry_cost": 1.1262899932861328,
+            "_entry_slippage": 0.0,
+            "sleeve": "R2",
+            "strategy": "정배열 R2",
+            "target_price": 105.97364936828612,
+            "max_holding_days": 7
           },
           {
-            "profit_loss": 404.3253741149902,
-            "trade_date": "2026-10-26",
-            "settlement_date": "2026-11-02",
+            "round": 2,
+            "mode": "AG",
             "strategy_id": "dongpa_modified",
             "strategy_context": {
               "strategy_id": "dongpa_modified",
@@ -1460,17 +1465,247 @@
               "profit_reflection_rate": 0.72,
               "loss_reflection_rate": 0.213,
               "reference_seed_renewal_days": 10
-            }
+            },
+            "entry_date": "2026-10-30",
+            "entry_price": 77.05000305175781,
+            "shares": 50,
+            "target_amount": 5360.0,
+            "_entry_cost": 1.9262500762939454,
+            "_entry_slippage": 0.0,
+            "sleeve": "R2",
+            "strategy": "정배열 R2",
+            "target_price": 79.74675315856933,
+            "max_holding_days": 7
+          },
+          {
+            "round": 3,
+            "mode": "AG",
+            "strategy_id": "dongpa_modified",
+            "strategy_context": {
+              "strategy_id": "dongpa_modified",
+              "label": "기본",
+              "safe_mode": {
+                "name": "SF",
+                "max_holding_days": 35,
+                "buy_threshold": 1.035,
+                "sell_threshold": 1.011,
+                "rounds": [
+                  0.049,
+                  0.127,
+                  0.23,
+                  0.257,
+                  0.028,
+                  0.169,
+                  0.14
+                ]
+              },
+              "aggressive_mode": {
+                "name": "AG",
+                "max_holding_days": 7,
+                "buy_threshold": 1.036,
+                "sell_threshold": 1.035,
+                "rounds": [
+                  0.062,
+                  0.134,
+                  0.118,
+                  0.148,
+                  0.15,
+                  0.182,
+                  0.186,
+                  0.02
+                ]
+              },
+              "settlement_delay_days": 7,
+              "profit_reflection_rate": 0.72,
+              "loss_reflection_rate": 0.213,
+              "reference_seed_renewal_days": 10
+            },
+            "entry_date": "2026-11-02",
+            "entry_price": 68.16999816894531,
+            "shares": 59,
+            "target_amount": 4756.78961772962,
+            "_entry_cost": 2.0110149459838866,
+            "_entry_slippage": 0.0,
+            "sleeve": "R2",
+            "strategy": "정배열 R2",
+            "target_price": 70.55594810485839,
+            "max_holding_days": 7
           }
-        ]
+        ],
+        "seed": 40311.776421437455,
+        "reference_seed": 40311.776421437455,
+        "settlements": []
       }
     },
-    "total_assets": 80535.13668561936,
-    "holdings": [],
+    "total_assets": 79333.2328596077,
+    "holdings": [
+      {
+        "round": 1,
+        "mode": "AG",
+        "strategy_id": "dongpa_modified",
+        "strategy_context": {
+          "strategy_id": "dongpa_modified",
+          "label": "기본",
+          "safe_mode": {
+            "name": "SF",
+            "max_holding_days": 35,
+            "buy_threshold": 1.035,
+            "sell_threshold": 1.011,
+            "rounds": [
+              0.049,
+              0.127,
+              0.23,
+              0.257,
+              0.028,
+              0.169,
+              0.14
+            ]
+          },
+          "aggressive_mode": {
+            "name": "AG",
+            "max_holding_days": 7,
+            "buy_threshold": 1.036,
+            "sell_threshold": 1.035,
+            "rounds": [
+              0.062,
+              0.134,
+              0.118,
+              0.148,
+              0.15,
+              0.182,
+              0.186,
+              0.02
+            ]
+          },
+          "settlement_delay_days": 7,
+          "profit_reflection_rate": 0.72,
+          "loss_reflection_rate": 0.213,
+          "reference_seed_renewal_days": 10
+        },
+        "entry_date": "2026-10-29",
+        "entry_price": 102.38999938964844,
+        "shares": 22,
+        "target_amount": 2480.0,
+        "_entry_cost": 1.1262899932861328,
+        "_entry_slippage": 0.0,
+        "sleeve": "R2",
+        "strategy": "정배열 R2",
+        "target_price": 105.97364936828612,
+        "max_holding_days": 7
+      },
+      {
+        "round": 2,
+        "mode": "AG",
+        "strategy_id": "dongpa_modified",
+        "strategy_context": {
+          "strategy_id": "dongpa_modified",
+          "label": "기본",
+          "safe_mode": {
+            "name": "SF",
+            "max_holding_days": 35,
+            "buy_threshold": 1.035,
+            "sell_threshold": 1.011,
+            "rounds": [
+              0.049,
+              0.127,
+              0.23,
+              0.257,
+              0.028,
+              0.169,
+              0.14
+            ]
+          },
+          "aggressive_mode": {
+            "name": "AG",
+            "max_holding_days": 7,
+            "buy_threshold": 1.036,
+            "sell_threshold": 1.035,
+            "rounds": [
+              0.062,
+              0.134,
+              0.118,
+              0.148,
+              0.15,
+              0.182,
+              0.186,
+              0.02
+            ]
+          },
+          "settlement_delay_days": 7,
+          "profit_reflection_rate": 0.72,
+          "loss_reflection_rate": 0.213,
+          "reference_seed_renewal_days": 10
+        },
+        "entry_date": "2026-10-30",
+        "entry_price": 77.05000305175781,
+        "shares": 50,
+        "target_amount": 5360.0,
+        "_entry_cost": 1.9262500762939454,
+        "_entry_slippage": 0.0,
+        "sleeve": "R2",
+        "strategy": "정배열 R2",
+        "target_price": 79.74675315856933,
+        "max_holding_days": 7
+      },
+      {
+        "round": 3,
+        "mode": "AG",
+        "strategy_id": "dongpa_modified",
+        "strategy_context": {
+          "strategy_id": "dongpa_modified",
+          "label": "기본",
+          "safe_mode": {
+            "name": "SF",
+            "max_holding_days": 35,
+            "buy_threshold": 1.035,
+            "sell_threshold": 1.011,
+            "rounds": [
+              0.049,
+              0.127,
+              0.23,
+              0.257,
+              0.028,
+              0.169,
+              0.14
+            ]
+          },
+          "aggressive_mode": {
+            "name": "AG",
+            "max_holding_days": 7,
+            "buy_threshold": 1.036,
+            "sell_threshold": 1.035,
+            "rounds": [
+              0.062,
+              0.134,
+              0.118,
+              0.148,
+              0.15,
+              0.182,
+              0.186,
+              0.02
+            ]
+          },
+          "settlement_delay_days": 7,
+          "profit_reflection_rate": 0.72,
+          "loss_reflection_rate": 0.213,
+          "reference_seed_renewal_days": 10
+        },
+        "entry_date": "2026-11-02",
+        "entry_price": 68.16999816894531,
+        "shares": 59,
+        "target_amount": 4756.78961772962,
+        "_entry_cost": 2.0110149459838866,
+        "_entry_slippage": 0.0,
+        "sleeve": "R2",
+        "strategy": "정배열 R2",
+        "target_price": 70.55594810485839,
+        "max_holding_days": 7
+      }
+    ],
     "maxMdd": {
-      "percent": 0.0011584062862279865,
-      "date": "2026-10-20",
-      "updatedAt": "2026-10-28",
+      "percent": 1.4923968288567901,
+      "date": "2026-11-02",
+      "updatedAt": "2026-11-02",
       "calculationVersion": "banban_full_history_v1"
     },
     "banban_report": {
@@ -1491,21 +1726,21 @@
         "commission_rate": 0.0005
       },
       "start_date": "2026-10-20",
-      "end_date": "2026-10-28",
+      "end_date": "2026-11-02",
       "metrics": {
         "initial_capital": 80000.0,
-        "final_nav": 80535.13668561936,
-        "total_assets": 80535.13668561936,
-        "profit_loss": 535.1366856193636,
-        "return_pct": 0.6689208570242133,
-        "mdd_pct": -0.0011584062862279865,
-        "mdd_date": "2026-10-20",
-        "trading_days": 7,
+        "final_nav": 79333.2328596077,
+        "total_assets": 79333.2328596077,
+        "profit_loss": -666.7671403923014,
+        "return_pct": -0.8334589254903713,
+        "mdd_pct": -1.4923968288567901,
+        "mdd_date": "2026-11-02",
+        "trading_days": 10,
         "total_trades": 3,
         "realized_profit_loss": 535.1366856193542,
-        "available_cash": 80535.13668561936,
-        "position_value": 0.0,
-        "commission_usd": 8.533304920196533
+        "available_cash": 70402.96309947586,
+        "position_value": 8930.269760131836,
+        "commission_usd": 13.596859935760499
       },
       "daily": [
         {
@@ -1589,7 +1824,7 @@
           "position_value": 0.0,
           "drawdown_pct": 0.0,
           "mdd_pct": -0.0011584062862279865,
-          "close_price": 101.08,
+          "close_price": 101.08000183105469,
           "r2_mode": "AG"
         },
         {
@@ -1603,31 +1838,236 @@
           "position_value": 0.0,
           "drawdown_pct": 0.0,
           "mdd_pct": -0.0011584062862279865,
-          "close_price": 107.35,
+          "close_price": 107.3499984741211,
+          "r2_mode": "AG"
+        },
+        {
+          "date": "2026-10-29",
+          "atr_asset": 40000.0,
+          "r2_asset": 40534.01039562607,
+          "account_value": 80534.01039562607,
+          "total_assets": 80534.01039562607,
+          "available_cash": 78281.4304090538,
+          "cash_balance": 78281.4304090538,
+          "position_value": 2252.5799865722656,
+          "drawdown_pct": -0.0013985075827060989,
+          "mdd_pct": -0.0013985075827060989,
+          "close_price": 102.38999938964844,
+          "r2_mode": "AG"
+        },
+        {
+          "date": "2026-10-30",
+          "atr_asset": 40000.0,
+          "r2_asset": 39974.604226116186,
+          "account_value": 79974.60422611618,
+          "total_assets": 79974.60422611618,
+          "available_cash": 74427.00400638962,
+          "cash_balance": 74427.00400638962,
+          "position_value": 5547.6002197265625,
+          "drawdown_pct": -0.6960098195292086,
+          "mdd_pct": -0.6960098195292086,
+          "close_price": 77.05000305175781,
+          "r2_mode": "AG"
+        },
+        {
+          "date": "2026-11-02",
+          "atr_asset": 40073.52199220848,
+          "r2_asset": 39259.71086739922,
+          "account_value": 79333.2328596077,
+          "total_assets": 79333.2328596077,
+          "available_cash": 70402.96309947586,
+          "cash_balance": 70402.96309947586,
+          "position_value": 8930.269760131836,
+          "drawdown_pct": -1.4923968288567901,
+          "mdd_pct": -1.4923968288567901,
+          "close_price": 68.16999816894531,
           "r2_mode": "AG"
         }
       ],
-      "holdings": [],
+      "holdings": [
+        {
+          "round": 1,
+          "mode": "AG",
+          "strategy_id": "dongpa_modified",
+          "strategy_context": {
+            "strategy_id": "dongpa_modified",
+            "label": "기본",
+            "safe_mode": {
+              "name": "SF",
+              "max_holding_days": 35,
+              "buy_threshold": 1.035,
+              "sell_threshold": 1.011,
+              "rounds": [
+                0.049,
+                0.127,
+                0.23,
+                0.257,
+                0.028,
+                0.169,
+                0.14
+              ]
+            },
+            "aggressive_mode": {
+              "name": "AG",
+              "max_holding_days": 7,
+              "buy_threshold": 1.036,
+              "sell_threshold": 1.035,
+              "rounds": [
+                0.062,
+                0.134,
+                0.118,
+                0.148,
+                0.15,
+                0.182,
+                0.186,
+                0.02
+              ]
+            },
+            "settlement_delay_days": 7,
+            "profit_reflection_rate": 0.72,
+            "loss_reflection_rate": 0.213,
+            "reference_seed_renewal_days": 10
+          },
+          "entry_date": "2026-10-29",
+          "entry_price": 102.38999938964844,
+          "shares": 22,
+          "target_amount": 2480.0,
+          "_entry_cost": 1.1262899932861328,
+          "_entry_slippage": 0.0,
+          "sleeve": "R2",
+          "strategy": "정배열 R2",
+          "target_price": 105.97364936828612,
+          "max_holding_days": 7
+        },
+        {
+          "round": 2,
+          "mode": "AG",
+          "strategy_id": "dongpa_modified",
+          "strategy_context": {
+            "strategy_id": "dongpa_modified",
+            "label": "기본",
+            "safe_mode": {
+              "name": "SF",
+              "max_holding_days": 35,
+              "buy_threshold": 1.035,
+              "sell_threshold": 1.011,
+              "rounds": [
+                0.049,
+                0.127,
+                0.23,
+                0.257,
+                0.028,
+                0.169,
+                0.14
+              ]
+            },
+            "aggressive_mode": {
+              "name": "AG",
+              "max_holding_days": 7,
+              "buy_threshold": 1.036,
+              "sell_threshold": 1.035,
+              "rounds": [
+                0.062,
+                0.134,
+                0.118,
+                0.148,
+                0.15,
+                0.182,
+                0.186,
+                0.02
+              ]
+            },
+            "settlement_delay_days": 7,
+            "profit_reflection_rate": 0.72,
+            "loss_reflection_rate": 0.213,
+            "reference_seed_renewal_days": 10
+          },
+          "entry_date": "2026-10-30",
+          "entry_price": 77.05000305175781,
+          "shares": 50,
+          "target_amount": 5360.0,
+          "_entry_cost": 1.9262500762939454,
+          "_entry_slippage": 0.0,
+          "sleeve": "R2",
+          "strategy": "정배열 R2",
+          "target_price": 79.74675315856933,
+          "max_holding_days": 7
+        },
+        {
+          "round": 3,
+          "mode": "AG",
+          "strategy_id": "dongpa_modified",
+          "strategy_context": {
+            "strategy_id": "dongpa_modified",
+            "label": "기본",
+            "safe_mode": {
+              "name": "SF",
+              "max_holding_days": 35,
+              "buy_threshold": 1.035,
+              "sell_threshold": 1.011,
+              "rounds": [
+                0.049,
+                0.127,
+                0.23,
+                0.257,
+                0.028,
+                0.169,
+                0.14
+              ]
+            },
+            "aggressive_mode": {
+              "name": "AG",
+              "max_holding_days": 7,
+              "buy_threshold": 1.036,
+              "sell_threshold": 1.035,
+              "rounds": [
+                0.062,
+                0.134,
+                0.118,
+                0.148,
+                0.15,
+                0.182,
+                0.186,
+                0.02
+              ]
+            },
+            "settlement_delay_days": 7,
+            "profit_reflection_rate": 0.72,
+            "loss_reflection_rate": 0.213,
+            "reference_seed_renewal_days": 10
+          },
+          "entry_date": "2026-11-02",
+          "entry_price": 68.16999816894531,
+          "shares": 59,
+          "target_amount": 4756.78961772962,
+          "_entry_cost": 2.0110149459838866,
+          "_entry_slippage": 0.0,
+          "sleeve": "R2",
+          "strategy": "정배열 R2",
+          "target_price": 70.55594810485839,
+          "max_holding_days": 7
+        }
+      ],
       "sleeves": [
         {
           "sleeve": "ATR",
           "strategy": "ATR Wilder70",
           "target_weight_pct": 50,
-          "cash": 40000.0,
+          "cash": 40073.52199220848,
           "shares": 0,
           "position_value": 0.0,
-          "total_assets": 40000.0,
-          "weight_pct": 49.66776198089267
+          "total_assets": 40073.52199220848,
+          "weight_pct": 50.51290682068221
         },
         {
           "sleeve": "R2",
           "strategy": "정배열 R2",
           "target_weight_pct": 50,
-          "cash": 40535.136685619356,
-          "shares": 0,
-          "position_value": 0.0,
-          "total_assets": 40535.136685619356,
-          "weight_pct": 50.33223801910732
+          "cash": 30329.441107267387,
+          "shares": 131,
+          "position_value": 8930.269760131836,
+          "total_assets": 39259.71086739922,
+          "weight_pct": 49.48709317931779
         }
       ],
       "trades": [
@@ -1812,10 +2252,27 @@
           "sleeve": "R2"
         }
       ],
-      "rebalance_events": [],
+      "rebalance_events": [
+        {
+          "status": "COMPLETED",
+          "plan_id": "4b1bd691ef9f8b37ab1762b11b9b2a1492a517787670456b64bd451cd798e899",
+          "policy": "FIRST_US_SESSION_OPEN_ATR_EXIT_THEN_50_50_V1",
+          "session_date": "2026-11-02",
+          "transfer_to_r2": "-73.521992208481920",
+          "actual_fees": "0",
+          "total_asset": "80147.04398441696384",
+          "atr_asset": "40073.521992208481920",
+          "r2_asset": "40073.521992208481920",
+          "valuation_price": "79.44499969482422",
+          "valuation_at": "2026-11-02T14:30:00+00:00",
+          "fill_deviations": [],
+          "fills": [],
+          "partial_sales": []
+        }
+      ],
       "order_preview": {
-        "session_date": "2026-10-29",
-        "basis_date": "2026-10-28",
+        "session_date": "2026-11-03",
+        "basis_date": "2026-11-02",
         "simulation": true,
         "monthly_rebalance_due": false,
         "ATR": [
@@ -1824,8 +2281,8 @@
             "order_type": "BREAKOUT",
             "quantity": null,
             "price": null,
-            "budget": 40000.0,
-            "cash_now": 40000.0,
+            "budget": 40073.52199220848,
+            "cash_now": 40073.52199220848,
             "trigger_multiplier": 1.015,
             "filter_passed": false,
             "status": "FILTER_BLOCKED"
@@ -1833,12 +2290,42 @@
         ],
         "R2": [
           {
-            "side": "BUY",
+            "side": "SELL",
             "order_type": "LOC",
             "quantity": 22,
-            "price": 111.2146,
-            "budget": 2480.0,
+            "price": 105.97364936828612,
             "round": 1,
+            "entry_date": "2026-10-29",
+            "expiry_date": "2026-11-09",
+            "status": "CONDITIONAL"
+          },
+          {
+            "side": "SELL",
+            "order_type": "LOC",
+            "quantity": 50,
+            "price": 79.74675315856933,
+            "round": 2,
+            "entry_date": "2026-10-30",
+            "expiry_date": "2026-11-10",
+            "status": "CONDITIONAL"
+          },
+          {
+            "side": "SELL",
+            "order_type": "LOC",
+            "quantity": 59,
+            "price": 70.55594810485839,
+            "round": 3,
+            "entry_date": "2026-11-02",
+            "expiry_date": "2026-11-11",
+            "status": "CONDITIONAL"
+          },
+          {
+            "side": "BUY",
+            "order_type": "LOC",
+            "quantity": 84,
+            "price": 70.62411810302734,
+            "budget": 5966.142910372743,
+            "round": 4,
             "mode": "AG",
             "strategy_id": "dongpa_modified",
             "status": "CONDITIONAL"

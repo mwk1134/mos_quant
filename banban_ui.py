@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date, datetime, timezone
 import io
 import json
+import logging
 
 import pandas as pd
 import streamlit as st
@@ -11,26 +12,64 @@ import streamlit as st
 from banban_strategy import normalize_config, replay, report_from_snapshot
 
 
+class BanbanMarketDataError(RuntimeError):
+    """A public data failure with a fixed, useful explanation."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_completed_replay(config_json, basis_date):
     from kmw_order_plan import _KMWPlanTrader
 
+    config = normalize_config(json.loads(config_json))
     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
         provider = _KMWPlanTrader(now=datetime.now(timezone.utc), expected_basis_date=date.fromisoformat(basis_date),
                                   initial_capital=1)
-        market = {symbol: provider.get_stock_data(symbol, "max") for symbol in ("SOXL", "QQQ")}
-    return replay(market, json.loads(config_json), end_date=basis_date)
+        market = {}
+        for symbol in ("SOXL", "QQQ"):
+            try:
+                # The existing 15y path first requests the entire daily history
+                # with explicit dates. range=max silently returns monthly bars.
+                market[symbol] = provider.get_stock_data(symbol, "15y")
+            except ValueError as exc:
+                raise BanbanMarketDataError("DAILY_DATA_UNAVAILABLE",
+                    f"{symbol}의 {basis_date}까지 확정된 일봉을 불러오지 못했습니다.") from exc
+    anchor = "2010-03-11"
+    if (market["SOXL"].index.min().date().isoformat() != anchor
+            or market["QQQ"].index.min().date().isoformat() > anchor):
+        raise BanbanMarketDataError("INCOMPLETE_HISTORY",
+            "SOXL·QQQ의 전체 일봉 이력을 확인하지 못했습니다. 과거 이력이 축소되어 추천 계산을 보류했습니다.")
+    try:
+        return replay(market, config, end_date=basis_date)
+    except ValueError as exc:
+        raise BanbanMarketDataError("INVALID_DAILY_HISTORY",
+            "받아온 일봉의 날짜·가격 이력을 검증하지 못해 추천 계산을 보류했습니다.") from exc
+
+
+def _completed_basis_date():
+    from kmw_order_plan import completed_trading_date, ET
+
+    return completed_trading_date(datetime.now(ET)).isoformat()
 
 
 def load_replay(config):
     """Use the same confirmed US daily-data boundary as the existing strategy."""
-    from kmw_order_plan import completed_trading_date, ET
-
-    basis = completed_trading_date(datetime.now(ET)).isoformat()
+    basis = _completed_basis_date()
     return _load_completed_replay(json.dumps(config, sort_keys=True), basis)
 
 
-def _show_orders(report):
+def _show_orders(report, *, unavailable_reason=None):
+    st.subheader("매수·매도 추천")
+    if unavailable_reason:
+        for label in ("ATR70 주문표", "R2 주문표"):
+            st.subheader(label)
+            st.dataframe(pd.DataFrame([{"매매": "대기", "유형": "-", "기준가격": "-", "수량": "-",
+                                        "조건": unavailable_reason}]), use_container_width=True, hide_index=True)
+        st.caption("최신 확정 일봉 확인 후 매수가·매도가와 수량을 계산합니다.")
+        return
     preview = report.get("order_preview") or {}
     if isinstance(preview, dict):
         order_date = preview.get("order_date") or preview.get("session_date")
@@ -84,21 +123,35 @@ def show_workspace(config):
     try:
         with st.spinner("반반매매의 확정 시세와 보유분을 계산 중입니다..."):
             report = load_replay(config)
-    except Exception:
-        saved = st.session_state.get("positions_snapshot") or {}
-        report = report_from_snapshot(saved)
-        try:
-            compatible = bool(report) and normalize_config(report.get("config")) == normalize_config(config)
-        except (TypeError, ValueError):
-            compatible = False
-        if not compatible:
-            st.warning("반반매매의 확정 시세를 불러오지 못했습니다. 시세 갱신 후 다시 확인해 주세요.")
+    except Exception as exc:
+        logging.getLogger(__name__).exception("KMW3 recommendation refresh failed")
+        reason = str(exc) if isinstance(exc, BanbanMarketDataError) else "반반매매 추천 계산을 완료하지 못했습니다."
+        basis = _completed_basis_date()
+        candidates = []
+        for saved in (st.session_state.get("_kmw3_last_verified_snapshot"),
+                      st.session_state.get("positions_snapshot")):
+            candidate = report_from_snapshot(saved)
+            try:
+                compatible = (bool(candidate) and date.fromisoformat(candidate["end_date"]).isoformat() <= basis
+                              and normalize_config(candidate.get("config")) == normalize_config(config))
+            except (KeyError, TypeError, ValueError):
+                compatible = False
+            if compatible:
+                candidates.append(candidate)
+        if not candidates:
+            st.warning(reason + " 시세 갱신 후 다시 확인해 주세요.")
+            _show_orders({}, unavailable_reason="확정 시세 확인 대기 · 가격·수량 계산 보류")
             _show_settings(config)
             return
-        st.warning(f"최신 확정 시세를 확인하지 못해 {saved.get('as_of_date', '-')}까지의 저장된 모의 결과를 표시합니다.")
-        historical = True
+        report = max(candidates, key=lambda candidate: candidate["end_date"])
+        historical = report["end_date"] != basis
+        if historical:
+            st.warning(f"{reason} {report['end_date']}까지의 저장된 모의 결과를 표시합니다.")
+        else:
+            st.info(f"시세 재조회가 지연되어 {basis} 확정 일봉으로 계산해 둔 추천을 표시합니다.")
     else:
         st.session_state.positions_snapshot = deepcopy(report["snapshot"])
+        st.session_state._kmw3_last_verified_snapshot = deepcopy(report["snapshot"])
 
     snapshot = report.get("snapshot") or st.session_state.get("positions_snapshot") or {}
     st.caption(f"반영일: {snapshot.get('as_of_date', '-')} · 모의 운용")
@@ -139,7 +192,7 @@ def _show_today(report, config, *, historical=False):
                 for row in holdings]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     if historical:
-        st.info("최신 시세 확인 전에는 오늘의 주문안을 표시하지 않습니다. 저장된 자산·보유분과 과거 성과를 확인해 주세요.")
+        _show_orders(report, unavailable_reason="최신 확정 시세 확인 대기 · 저장된 과거 주문안 사용 보류")
     else:
         _show_orders(report)
 
