@@ -88,39 +88,130 @@ def load_replay(config):
 
 
 def _show_orders(report, *, unavailable_reason=None):
-    st.subheader("매수·매도 추천")
-    if unavailable_reason:
-        for label in ("ATR70 주문표", "R2 주문표"):
-            st.subheader(label)
-            st.dataframe(pd.DataFrame([{"매매": "대기", "회차": "-", "유형": "-", "기준가격": "-", "수량": "-",
-                                        "조건": unavailable_reason}]), use_container_width=True, hide_index=True)
-        st.caption("최신 확정 일봉 확인 후 매수가·매도가와 수량을 계산합니다.")
-        return
+    st.subheader("📋 주문일 기준 매매 추천")
     preview = report.get("order_preview") or {}
-    if isinstance(preview, dict):
+    if not unavailable_reason and isinstance(preview, dict):
         order_date = preview.get("order_date") or preview.get("session_date")
+        basis_date = preview.get("basis_date") or report.get("end_date")
         if order_date:
-            st.caption(f"미국 주문일 {order_date} · 모의 보유분 기준")
+            st.caption(f"미국 주문일 {order_date} · 계산 기준: {basis_date or '-'} 종가 · 모의 보유분 기준")
         if preview.get("monthly_rebalance_due"):
             st.info("월초 비중 조정 예정입니다. 시가로 50:50 조정을 마친 뒤 매매 수량을 다시 계산합니다.")
-        tables = preview.get("strategy_order_tables", preview)
-        for strategy, label in (("ATR", "ATR70 주문표"), ("R2", "R2 주문표")):
-            st.subheader(label)
-            table = tables.get(strategy, tables.get(strategy.lower(), {}))
-            if isinstance(table, list):
-                orders = table
-            else:
-                orders = table.get("orders", []) if isinstance(table, dict) else []
-                if isinstance(table, dict) and table.get("message"):
-                    st.info(table["message"])
-            if orders:
-                rows = [_order_row(order) for order in orders]
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-                if strategy == "R2" and not any(order.get("side") == "BUY" for order in orders):
-                    st.caption("R2 가용 회차가 없어 신규 매수는 없습니다. 보유분의 매도 조건은 계속 표시합니다.")
-            else:
-                st.caption("조건 확인 대기 · 신규 주문 없음")
+    groups = _recommendations_by_side(preview) if not unavailable_reason else {"BUY": [], "SELL": []}
+    buy_column, sell_column = st.columns(2)
+    with buy_column:
+        st.subheader("🟢 매수 추천")
+        if unavailable_reason:
+            st.info("⏳ 매수 추천 확인 대기")
+            st.caption(unavailable_reason)
+        elif not groups["BUY"]:
+            st.info("현재 매수 추천이 없습니다.")
+            st.caption("가용 회차와 현금 조건을 확인합니다.")
+        else:
+            for strategy, order in groups["BUY"]:
+                _show_buy_recommendation(strategy, order)
+            if not any(strategy == "R2" for strategy, _ in groups["BUY"]):
+                st.caption("R2 가용 회차가 없어 신규 매수는 없습니다.")
+    with sell_column:
+        st.subheader("🔴 매도 추천")
+        if unavailable_reason:
+            st.info("⏳ 매도 추천 확인 대기")
+            st.caption(unavailable_reason)
+        elif not groups["SELL"]:
+            st.info("현재 매도 추천이 없습니다.")
+            st.caption("매도 대상 보유분이 없습니다.")
+        else:
+            st.info(f"📋 매도 추천: {len(groups['SELL'])}건")
+            for strategy, order in groups["SELL"]:
+                _show_sell_recommendation(strategy, order, report.get("holdings") or [])
     st.caption("확정 일봉으로 계산한 모의 매매표입니다. 실제 계좌의 주문·체결을 나타내지 않습니다.")
+
+
+def _recommendations_by_side(preview):
+    groups = {"BUY": [], "SELL": []}
+    if not isinstance(preview, dict):
+        return groups
+    tables = preview.get("strategy_order_tables", preview)
+    if not isinstance(tables, dict):
+        return groups
+    for strategy in ("ATR", "R2"):
+        table = tables.get(strategy, tables.get(strategy.lower(), {}))
+        orders = table if isinstance(table, list) else table.get("orders", []) if isinstance(table, dict) else []
+        for order in orders:
+            if isinstance(order, dict) and order.get("side") in groups:
+                groups[order["side"]].append((strategy, order))
+    # Put a priced, sized recommendation before conditions still awaiting an
+    # opening quote; a waiting ATR item must not obscure an available R2 buy.
+    groups["BUY"].sort(key=lambda item: (
+        item[1].get("status") == "FILTER_BLOCKED" or item[1].get("quantity") == 0,
+        item[1].get("quantity") is None or item[1].get("status") == "REBALANCE_PENDING",
+    ))
+    return groups
+
+
+def _recommendation_label(strategy, order):
+    label = "ATR70" if strategy == "ATR" else "R2"
+    if order.get("round") is not None:
+        label += f" · {order['round']}회차"
+    return label
+
+
+def _show_buy_recommendation(strategy, order):
+    row = _order_row(order)
+    label = _recommendation_label(strategy, order)
+    pending = order.get("quantity") is None or order.get("status") == "REBALANCE_PENDING"
+    with st.container(border=True):
+        if row["매매"] == "대기":
+            st.info(f"⏸️ {label} · 매수 대기")
+            st.caption(row["조건"])
+            return
+        if pending:
+            st.info(f"⏳ {label} · 매수 조건 확인 대기")
+        else:
+            st.success(f"✅ {label} 매수 추천")
+        kind = "돌파 확인 후 시장가" if order.get("order_type") == "BREAKOUT" else order.get("order_type", "-")
+        st.info(f"💰 매수가: **{row['기준가격']}** ({kind} 주문)")
+        quantity = order.get("quantity")
+        st.info(f"📦 매수주식수: **{quantity:,}주**" if type(quantity) is int else f"📦 매수주식수: **{row['수량']}**")
+        price = order.get("reference_price") or order.get("price")
+        if type(quantity) is int and quantity > 0 and price:
+            st.info(f"💵 매수금액: **${float(price) * quantity:,.2f}**")
+        budget = order.get("budget")
+        if budget is not None:
+            st.caption(f"전략별 주문 예산: ${float(budget):,.2f} · 추정 수수료 포함 한도")
+        mode = order.get("mode")
+        if mode in ("SF", "AG"):
+            st.caption(f"매수 모드: {mode} ({'안전모드' if mode == 'SF' else '공세모드'})")
+        st.caption(row["조건"])
+
+
+def _show_sell_recommendation(strategy, order, holdings):
+    row = _order_row(order)
+    label = _recommendation_label(strategy, order)
+    quantity = order.get("quantity")
+    matches = [lot for lot in holdings if lot.get("sleeve") == strategy
+               and (not order.get("entry_date") or lot.get("entry_date") == order["entry_date"])
+               and (order.get("round") is None or lot.get("round") == order["round"])]
+    lot = matches[0] if len(matches) == 1 else {}
+    with st.container(border=True):
+        if order.get("status") == "REBALANCE_PENDING":
+            st.warning(f"⏳ {label} · 매도 수량 재계산 대기")
+        else:
+            shares = f" · {quantity:,}주" if type(quantity) is int else ""
+            st.warning(f"📦 {label}{shares} 매도 추천")
+        st.info(f"💰 매도가: **{row['기준가격']}** ({order.get('order_type', '-')} 주문)")
+        if type(quantity) is not int:
+            st.info(f"📦 매도주식수: **{row['수량']}**")
+        entry_date = order.get("entry_date") or lot.get("entry_date")
+        if entry_date:
+            st.caption(f"매수체결일: {entry_date}")
+        if lot.get("entry_price") is not None:
+            st.caption(f"매수가: ${float(lot['entry_price']):,.2f}")
+        if lot.get("mode") in ("SF", "AG"):
+            st.caption(f"진입 모드: {lot['mode']} · 진입 당시 매도 규칙 유지")
+        if order.get("expiry_date"):
+            st.caption(f"만기 매도일: {order['expiry_date']}")
+        st.caption(row["조건"])
 
 
 def _order_row(order):
@@ -136,6 +227,8 @@ def _order_row(order):
                     "FILTER_BLOCKED": "변동성 조건 미충족 · 신규 매수 없음",
                     "WAITING_OPEN": "정규장 시가 × 1.015 돌파 확인 후 수량 산정",
                     "REBALANCE_PENDING": "월초 비중 조정 후 수량 재계산"}.get(status, status)
+    if status != "REBALANCE_PENDING" and kind == "MOC" and order.get("side") == "SELL":
+        status_label = "보유 만기 도래 · 정규장 종가 시장가 청산"
     pending_quantity = "비중 조정 후 산정" if status == "REBALANCE_PENDING" else "조건 확인 후 산정"
     return {"매매": "대기" if blocked else "매수" if order.get("side") == "BUY" else "매도",
             "회차": order.get("round") if order.get("round") is not None else "-",

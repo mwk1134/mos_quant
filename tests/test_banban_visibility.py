@@ -1,14 +1,14 @@
-"""Daily orders remain prominent above collapsible portfolio information."""
+"""Side-grouped daily recommendation cards precede collapsible portfolio information."""
 from unittest.mock import patch
 
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from test_banban_ui import sample_report
+from test_banban_ui import sample_report, recommendation_groups, column_text, assert_waiting_recommendations
 
 
 @pytest.mark.parametrize("historical", [False, True])
-def test_daily_order_tables_precede_assets_and_collapsed_holdings(historical):
+def test_daily_buy_sell_cards_precede_assets_and_collapsed_holdings(historical):
     report = sample_report()
     report["order_preview"]["ATR"][0]["status"] = "FILTER_BLOCKED"
     report["order_preview"]["R2"].insert(0, {"side": "SELL", "order_type": "LOC",
@@ -32,16 +32,15 @@ show_workspace(DEFAULT_KMW3_CONFIG)
     today = next(tab for tab in app.tabs if tab.label == "📊 오늘의 매매")
     nodes = list(today)
     recommendation = next(index for index, node in enumerate(nodes)
-                          if node.type == "subheader" and node.value == "매수·매도 추천")
-    order_tables = [(index, node.value) for index, node in enumerate(nodes)
-                    if node.type == "dataframe" and "유형" in node.value.columns]
+                          if node.type == "subheader" and node.value == "📋 주문일 기준 매매 추천")
+    buy, sell = recommendation_groups(app)
+    group_indices = [nodes.index(buy), nodes.index(sell)]
     asset_metrics = [index for index, node in enumerate(nodes) if node.type == "metric"]
-    assert len(order_tables) == 2
     assert asset_metrics
-    assert recommendation < min(index for index, _ in order_tables)
-    assert max(index for index, _ in order_tables) < min(asset_metrics)
+    assert recommendation < min(group_indices)
+    assert max(group_indices) < min(asset_metrics)
     assert [node.value for node in nodes if node.type == "subheader"][:3] == [
-        "매수·매도 추천", "ATR70 주문표", "R2 주문표"]
+        "📋 주문일 기준 매매 추천", "🟢 매수 추천", "🔴 매도 추천"]
 
     portfolios = [node for node in nodes if node.type == "expander"
                   and any(child.type == "markdown" and "모의 보유분" in child.value for child in node)]
@@ -49,10 +48,9 @@ show_workspace(DEFAULT_KMW3_CONFIG)
     assert portfolios[0].proto.expanded is False
     assert recommendation < nodes.index(portfolios[0])
     if historical:
-        assert all(table["매매"].tolist() == ["대기"] for _, table in order_tables)
-        assert all(table["기준가격"].tolist() == ["-"] for _, table in order_tables)
-        assert all(table["수량"].tolist() == ["-"] for _, table in order_tables)
+        assert_waiting_recommendations(app)
+        assert "$110.00" not in column_text(sell) and "200주" not in column_text(sell)
     else:
-        assert order_tables[0][1]["매매"].tolist() == ["대기"]
-        assert order_tables[1][1]["매매"].tolist() == ["매도", "매수"]
-        assert order_tables[1][1]["수량"].tolist() == [200, 10]
+        assert "ATR70" in column_text(buy)
+        assert "10주" in column_text(buy) and "200주" not in column_text(buy)
+        assert "200주" in column_text(sell) and "10주" not in column_text(sell)

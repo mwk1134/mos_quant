@@ -42,6 +42,36 @@ def sample_report():
     }
 
 
+def recommendation_column(app, label):
+    columns = [node for node in app.main if node.type == "column"
+               and any(child.type == "subheader" and child.value == label for child in node)]
+    assert len(columns) == 1
+    return columns[0]
+
+
+def column_text(column):
+    return "\n".join(str(node.value) for node in column
+                     if node.type in {"subheader", "markdown", "caption", "success", "info", "warning"})
+
+
+def recommendation_groups(app):
+    headings = [heading.value for heading in app.subheader]
+    assert "📋 주문일 기준 매매 추천" in headings
+    assert "ATR70 주문표" not in headings and "R2 주문표" not in headings
+    assert not any("유형" in frame.value.columns for frame in app.dataframe)
+    return (recommendation_column(app, "🟢 매수 추천"),
+            recommendation_column(app, "🔴 매도 추천"))
+
+
+def assert_waiting_recommendations(app):
+    buy, sell = recommendation_groups(app)
+    for column in (buy, sell):
+        text = column_text(column)
+        assert "대기" in text or "보류" in text
+        assert "$101.50" not in text and "10주" not in text
+    return buy, sell
+
+
 def test_default_config_survives_app_normalization_and_json_roundtrip():
     tree = ast.parse(APP.read_text())
     wanted = {"_copy_seed_increases", "_normalize_preset_config"}
@@ -131,7 +161,7 @@ def test_full_app_kmw3_button_loads_requested_settings_and_bypasses_legacy_trade
     assert next(widget for widget in app.date_input if widget.label == "📅 투자 시작일").disabled
 
 
-def test_workspace_displays_separate_order_tables_and_simulation_basis():
+def test_workspace_displays_legacy_buy_sell_groups_and_simulation_basis():
     script = """
 import streamlit as st
 from banban_ui import show_workspace
@@ -147,12 +177,111 @@ show_workspace(DEFAULT_KMW3_CONFIG)
     assert not app.exception and not app.error
     headings = [heading.value for heading in app.subheader]
     assert "🔀 KMW3 · 반반매매 (ATR70-R2)" in headings
-    assert "ATR70 주문표" in headings and "R2 주문표" in headings
+    buy, sell = recommendation_groups(app)
+    assert "ATR70" in column_text(buy) and "R2" in column_text(buy)
+    assert "$101.50" in column_text(buy) and "10주" in column_text(buy)
     assert [metric.value for metric in app.metric] == ["$80,200.00", "$60,000.00", "0.25%"]
     assert any("모의 운용" in caption.value for caption in app.caption)
     assert any("2026-10-21" in caption.value for caption in app.caption)
     assert any("$40,000" in markdown.value for markdown in app.markdown)
     assert app.session_state.positions_snapshot == report["snapshot"]
+
+
+def test_atr_and_r2_items_group_by_side_with_lot_details_and_order_terms():
+    report = {"holdings": [
+        {"sleeve": "ATR", "entry_date": "2026-10-20", "entry_price": 99.0, "shares": 7},
+        {"sleeve": "R2", "entry_date": "2026-10-12", "entry_price": 100.0,
+         "round": 2, "shares": 3, "mode": "SF"}],
+        "order_preview": {"session_date": "2026-10-21",
+        "ATR": [{"side": "BUY", "order_type": "BREAKOUT", "quantity": None,
+                 "status": "WAITING_OPEN", "trigger_multiplier": 1.015},
+                {"side": "SELL", "order_type": "MOO", "quantity": 7,
+                 "status": "NEXT_OPEN", "entry_date": "2026-10-20", "exit_rule": "NEXT_OPEN"}],
+        "R2": [{"side": "BUY", "order_type": "LOC", "quantity": 11,
+                "price": 101.5, "round": 4, "status": "CONDITIONAL"},
+               {"side": "SELL", "order_type": "LOC", "quantity": 3, "price": 110.0,
+                "round": 2, "status": "CONDITIONAL", "entry_date": "2026-10-12",
+                "expiry_date": "2026-11-30"}]}}
+    script = f"from banban_ui import _show_orders\n_show_orders({report!r})"
+    app = AppTest.from_string(script).run(timeout=20)
+    assert not app.exception and not app.error
+    buy, sell = recommendation_groups(app)
+    buy_text, sell_text = column_text(buy), column_text(sell)
+    assert "ATR70" in buy_text and "R2" in buy_text
+    assert "ATR70" in sell_text and "R2" in sell_text
+    assert "11주" in buy_text and "$101.50" in buy_text and "4회차" in buy_text
+    assert "7주" not in buy_text and "3주" not in buy_text
+    assert "7주" in sell_text and "3주" in sell_text and "$110.00" in sell_text and "2회차" in sell_text
+    assert "11주" not in sell_text and "$101.50" not in sell_text
+    assert "2026-10-20" in sell_text and "2026-10-12" in sell_text and "2026-11-30" in sell_text
+    assert "$99.00" in sell_text and "$100.00" in sell_text
+    assert "SF" in sell_text and "진입 당시 매도 규칙 유지" in sell_text
+    assert "MOO" in sell_text and "시가" in sell_text and "LOC" in sell_text
+    assert "1.015" in buy_text and "산정" in buy_text
+    assert any(node.type == "success" and "R2" in node.value for node in buy)
+    assert len([node for node in sell if node.type == "warning"]) == 2
+
+
+def test_empty_recommendations_keep_both_side_lists_without_order_cards():
+    report = {"order_preview": {"session_date": "2026-10-21", "ATR": [], "R2": []}}
+    app = AppTest.from_string(f"from banban_ui import _show_orders\n_show_orders({report!r})").run(timeout=20)
+    assert not app.exception and not app.error
+    buy, sell = recommendation_groups(app)
+    assert "없" in column_text(buy) and "없" in column_text(sell)
+    assert not app.success and not app.warning
+
+
+def test_ready_r2_buy_precedes_waiting_atr_without_changing_recommendation_data():
+    report = {"order_preview": {"session_date": "2026-10-21",
+        "ATR": [{"side": "BUY", "order_type": "BREAKOUT", "quantity": None,
+                 "status": "WAITING_OPEN", "trigger_multiplier": 1.015}],
+        "R2": [{"side": "BUY", "order_type": "LOC", "quantity": 10,
+                "price": 101.5, "round": 4, "status": "CONDITIONAL"}]}}
+    app = AppTest.from_string("""
+import streamlit as st
+from banban_ui import _show_orders
+_show_orders(st.session_state.report)
+""")
+    app.session_state.report = deepcopy(report)
+    app.run(timeout=20)
+
+    assert not app.exception and not app.error
+    buy, _ = recommendation_groups(app)
+    nodes = list(buy)
+    ready = next(index for index, node in enumerate(nodes) if node.type == "success" and "R2" in node.value)
+    waiting = next(index for index, node in enumerate(nodes)
+                   if node.type == "info" and "ATR70" in node.value and "대기" in node.value)
+    assert ready < waiting
+    assert "10주" in column_text(buy) and "$101.50" in column_text(buy)
+    assert app.session_state.report == report
+
+
+def test_moc_sell_explains_holding_expiry_and_closing_market_execution():
+    report = {"order_preview": {"session_date": "2026-10-21", "ATR": [],
+        "R2": [{"side": "SELL", "order_type": "MOC", "quantity": 3, "round": 2,
+                "entry_date": "2026-10-12", "expiry_date": "2026-10-21", "status": "CONDITIONAL"}]}}
+    app = AppTest.from_string(f"from banban_ui import _show_orders\n_show_orders({report!r})").run(timeout=20)
+    assert not app.exception and not app.error
+    _, sell = recommendation_groups(app)
+    text = column_text(sell)
+    assert "3주" in text and "MOC" in text and "종가 시장가" in text
+    assert "보유 만기 도래" in text and "2026-10-21" in text
+
+
+@pytest.mark.parametrize("status", ["FILTER_BLOCKED", "REBALANCE_PENDING"])
+def test_filtered_or_monthly_pending_buy_never_claims_an_executable_zero_quantity(status):
+    order = {"side": "BUY", "order_type": "BREAKOUT", "quantity": None,
+             "status": status, "trigger_multiplier": 1.015}
+    report = {"order_preview": {"session_date": "2026-10-21", "ATR": [order], "R2": []}}
+    app = AppTest.from_string(f"from banban_ui import _show_orders\n_show_orders({report!r})").run(timeout=20)
+    assert not app.exception and not app.error
+    buy, _ = recommendation_groups(app)
+    text = column_text(buy)
+    assert "0주" not in text and "$0.00" not in text
+    if status == "FILTER_BLOCKED":
+        assert "미충족" in text and ("없" in text or "보류" in text)
+    else:
+        assert "비중 조정" in text and ("산정" in text or "재계산" in text)
 
 
 def test_workspace_market_failure_shows_saved_simulation_with_its_date():
@@ -171,14 +300,7 @@ show_workspace(DEFAULT_KMW3_CONFIG)
     assert not app.exception and not app.error
     assert any("2026-10-20" in warning.value and "저장된 모의 결과" in warning.value for warning in app.warning)
     assert any(metric.value == "$80,200.00" for metric in app.metric)
-    headings = [heading.value for heading in app.subheader]
-    assert "ATR70 주문표" in headings and "R2 주문표" in headings
-    waiting_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
-    assert len(waiting_tables) == 2
-    assert all(table["매매"].tolist() == ["대기"] for table in waiting_tables)
-    assert all(table["기준가격"].tolist() == ["-"] for table in waiting_tables)
-    assert all(table["수량"].tolist() == ["-"] for table in waiting_tables)
-    assert all(10 not in frame.value["수량"].tolist() for frame in app.dataframe if "수량" in frame.value)
+    assert_waiting_recommendations(app)
 
 
 def test_workspace_market_failure_keeps_valid_saved_current_recommendations():
@@ -195,12 +317,8 @@ show_workspace(DEFAULT_KMW3_CONFIG)
             patch("banban_ui._completed_basis_date", return_value="2026-10-20"):
         app = AppTest.from_string(script).run(timeout=20)
     assert not app.exception and not app.error
-    headings = [heading.value for heading in app.subheader]
-    assert "ATR70 주문표" in headings and "R2 주문표" in headings
-    order_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
-    assert len(order_tables) == 2
-    assert order_tables[1]["수량"].tolist() == [10]
-    assert order_tables[1]["기준가격"].tolist() == ["$101.50"]
+    buy, _ = recommendation_groups(app)
+    assert "10주" in column_text(buy) and "$101.50" in column_text(buy)
     assert any("2026-10-21" in caption.value for caption in app.caption)
 
 
@@ -224,10 +342,10 @@ show_workspace(DEFAULT_KMW3_CONFIG)
             patch("banban_ui._completed_basis_date", return_value="2026-10-21"):
         app = AppTest.from_string(script).run(timeout=20)
     assert not app.exception and not app.error
-    order_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
-    assert len(order_tables) == 2
-    assert order_tables[1]["수량"].tolist() == [10]
-    assert order_tables[1]["기준가격"].tolist() == ["$101.50"]
+    buy, _ = recommendation_groups(app)
+    text = column_text(buy)
+    assert "10주" in text and "$101.50" in text
+    assert "99주" not in text and "$333.00" not in text
     assert any("2026-10-21" in caption.value for caption in app.caption)
     assert not app.warning
 
@@ -249,10 +367,4 @@ show_workspace(DEFAULT_KMW3_CONFIG)
     assert not app.exception and not app.error
     assert not app.metric
     assert any("반반매매 추천 계산을 완료하지 못했습니다" in warning.value for warning in app.warning)
-    headings = [heading.value for heading in app.subheader]
-    assert "ATR70 주문표" in headings and "R2 주문표" in headings
-    waiting_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
-    assert len(waiting_tables) == 2
-    assert all(table["매매"].tolist() == ["대기"] for table in waiting_tables)
-    assert all(table["기준가격"].tolist() == ["-"] for table in waiting_tables)
-    assert all(table["수량"].tolist() == ["-"] for table in waiting_tables)
+    assert_waiting_recommendations(app)

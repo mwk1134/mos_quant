@@ -6,7 +6,8 @@ from unittest.mock import patch
 from streamlit.testing.v1 import AppTest
 
 import soxl_quant_system as strategy
-from test_banban_ui import sample_report
+from test_banban_ui import (sample_report, recommendation_groups, column_text,
+                            assert_waiting_recommendations)
 
 
 WORKSPACE = """
@@ -65,8 +66,8 @@ finally:
     assert not app.exception and not app.error
     assert [call.args[1] for call in loader.call_args_list] == ["2026-10-20", "2026-10-21"]
     assert app.session_state.positions_snapshot["as_of_date"] == "2026-10-21"
-    order_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
-    assert order_tables[1]["수량"].tolist() == [20]
+    buy, _ = recommendation_groups(app)
+    assert "20주" in column_text(buy) and "10주" not in column_text(buy)
     assert any("2026-10-22" in caption.value for caption in app.caption)
     assert not any("미국 주문일 2026-10-21" in caption.value for caption in app.caption)
 
@@ -108,17 +109,14 @@ def test_periodic_retry_recovers_recommendations_after_initial_data_failure():
         app = AppTest.from_string(WORKSPACE).run(timeout=20)
         assert not app.exception and not app.error
         assert not app.metric
-        waiting = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
-        assert len(waiting) == 2
-        assert all(frame["매매"].tolist() == ["대기"] for frame in waiting)
+        assert_waiting_recommendations(app)
         app.run(timeout=20)
 
     assert not app.exception and not app.error
     assert loader.call_count == 2
     assert app.session_state.positions_snapshot["as_of_date"] == "2026-10-20"
-    order_tables = [frame.value for frame in app.dataframe if "유형" in frame.value.columns]
-    assert order_tables[1]["수량"].tolist() == [10]
-    assert order_tables[1]["기준가격"].tolist() == ["$101.50"]
+    buy, _ = recommendation_groups(app)
+    assert "10주" in column_text(buy) and "$101.50" in column_text(buy)
 
 
 def test_registered_workspace_cannot_refresh_after_switching_to_another_preset():
