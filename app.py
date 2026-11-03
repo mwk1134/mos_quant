@@ -2278,7 +2278,11 @@ def show_mobile_settings():
 
     show_atr70_r2_preference_control()
     ma_alignment_placeholder = None
-    show_preset_max_mdd_summary()
+    if st.session_state.get("active_preset") == "KMW3":
+        with st.expander("프리셋별 최고 MDD", expanded=False):
+            show_preset_max_mdd_summary()
+    else:
+        show_preset_max_mdd_summary()
     if st.session_state.get("active_preset") == "KMW3":
         st.caption("반반매매 (ATR70-R2) · ATR70 50% + R2 50% · 매월 첫 미국 거래일 비중 조정")
         st.markdown("</div>", unsafe_allow_html=True)

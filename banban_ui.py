@@ -199,6 +199,10 @@ def show_workspace(config):
 
 
 def _show_today(report, config, *, historical=False):
+    if historical:
+        _show_orders(report, unavailable_reason="최신 확정 시세 확인 대기 · 저장된 과거 주문안 사용 보류")
+    else:
+        _show_orders(report)
     daily = report.get("daily") or []
     snapshot = report.get("snapshot") or st.session_state.get("positions_snapshot") or {}
     latest = daily[-1] if daily else {}
@@ -208,6 +212,11 @@ def _show_today(report, config, *, historical=False):
     first.metric("총자산", f"${float(assets):,.2f}")
     second.metric("현금", f"${float(cash):,.2f}")
     third.metric("원금 대비 수익률", f"{(float(assets) / config['initial_capital'] - 1) * 100:.2f}%")
+    with st.expander("전략별 자산·모의 보유분", expanded=False):
+        _show_portfolio(report)
+
+
+def _show_portfolio(report):
     sleeves = report.get("sleeves") or []
     if isinstance(sleeves, dict):
         sleeves = [{"strategy": key, **value} for key, value in sleeves.items()]
@@ -225,10 +234,6 @@ def _show_today(report, config, *, historical=False):
                  "목표가 ($)": round(row["target_price"], 2) if row.get("target_price") else "다음 거래일 시가"}
                 for row in holdings]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    if historical:
-        _show_orders(report, unavailable_reason="최신 확정 시세 확인 대기 · 저장된 과거 주문안 사용 보류")
-    else:
-        _show_orders(report)
 
 
 def _show_history(report, config):
