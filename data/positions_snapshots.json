@@ -318,15 +318,15 @@
     }
   },
   "JEH": {
-    "available_cash": 19138.89958770752,
+    "available_cash": 23460.07958770752,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-05",
+    "as_of_date": "2026-11-06",
     "compound_seed": 43626.765497863766,
-    "compound_reference_seed": 44175.23148260498,
+    "compound_reference_seed": 43626.765497863766,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "ma_alignment_switch_enabled": false,
@@ -341,12 +341,17 @@
       "peakValue": 34001.511327209475,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 19,
+    "compound_trading_days": 20,
     "compound_settlements": [
       {
         "trade_date": "2026-11-03",
         "settlement_date": "2026-11-10",
         "pnl": 321.75
+      },
+      {
+        "trade_date": "2026-11-06",
+        "settlement_date": "2026-11-13",
+        "pnl": 479.4
       }
     ],
     "broker_sync": {
@@ -581,6 +586,14 @@
           "fees": "0",
           "position_key": "4_2026-11-05",
           "recommended_quantity": 94
+        },
+        "2026-11-06:3178240": {
+          "trade_date": "2026-11-06",
+          "side": "SELL",
+          "quantity": 94,
+          "notional": "4321.1800",
+          "fees": "0",
+          "position_key": "4_2026-11-05"
         }
       }
     },
@@ -618,27 +631,16 @@
       "buy_price": 66.68,
       "amount": 4534.24
     },
-    "4_2026-11-05": {
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7,
-      "strategy_name": "기본",
-      "round": 4,
-      "shares": 94,
-      "buy_price": 40.87,
-      "amount": 3841.78
-    },
     "pending_buy": {
-      "round": 5,
-      "quantity": 156,
-      "target_price": 42.34,
-      "order_date": "2026-11-06",
-      "basis_date": "2026-11-05",
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7,
+      "round": 4,
+      "quantity": 235,
+      "target_price": 47.58,
+      "order_date": "2026-11-09",
+      "basis_date": "2026-11-06",
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
       "strategy_name": "기본"
     }
   },
