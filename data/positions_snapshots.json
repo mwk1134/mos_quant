@@ -912,12 +912,12 @@
     }
   },
   "JEH2": {
-    "available_cash": 4916.5299319458,
+    "available_cash": 5085.1299319458,
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
     ],
-    "as_of_date": "2026-11-06",
+    "as_of_date": "2026-11-09",
     "compound_seed": 5340.594876800537,
     "compound_reference_seed": 5340.594876800537,
     "compound_profit_rate": 0.7,
@@ -934,7 +934,7 @@
       "peakValue": 6394.129971160889,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 20,
+    "compound_trading_days": 21,
     "compound_settlements": [
       {
         "trade_date": "2026-11-03",
@@ -945,6 +945,11 @@
         "trade_date": "2026-11-06",
         "settlement_date": "2026-11-13",
         "pnl": 56.1
+      },
+      {
+        "trade_date": "2026-11-09",
+        "settlement_date": "2026-11-16",
+        "pnl": -138.57
       }
     ],
     "broker_sync": {
@@ -1168,21 +1173,18 @@
           "notional": "505.6700",
           "fees": "0",
           "position_key": "4_2026-11-05"
+        },
+        "2026-11-09:175862": {
+          "trade_date": "2026-11-09",
+          "side": "SELL",
+          "quantity": 3,
+          "notional": "168.6000",
+          "fees": "0",
+          "position_key": "1_2026-10-29"
         }
       }
     },
     "cash_snapshot_date": "2026-10-28",
-    "1_2026-10-29": {
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7,
-      "strategy_name": "기본",
-      "round": 1,
-      "shares": 3,
-      "buy_price": 102.39,
-      "amount": 307.17
-    },
     "2_2026-10-30": {
       "mode": "AG",
       "buy_threshold": 3.6,
@@ -1206,11 +1208,11 @@
       "amount": 533.44
     },
     "pending_buy": {
-      "round": 4,
-      "quantity": 28,
-      "target_price": 47.58,
-      "order_date": "2026-11-09",
-      "basis_date": "2026-11-06",
+      "round": 3,
+      "quantity": 21,
+      "target_price": 58.17,
+      "order_date": "2026-11-10",
+      "basis_date": "2026-11-09",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
