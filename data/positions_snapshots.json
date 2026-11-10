@@ -647,22 +647,11 @@
     }
   },
   "KMW2": {
-    "1_2026-10-29": {
-      "shares": 45,
-      "buy_price": 102.39,
-      "amount": 4607.55,
-      "round": 1,
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7,
-      "strategy_name": "기본"
-    },
-    "available_cash": 62838.95780487059,
+    "available_cash": 65367.95780487059,
     "processed_seed_dates": [],
-    "as_of_date": "2026-11-06",
+    "as_of_date": "2026-11-09",
     "compound_seed": 83130.65925811768,
-    "compound_reference_seed": 81821.79325811769,
+    "compound_reference_seed": 83130.65925811768,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "compound_settlements": [
@@ -675,6 +664,11 @@
         "trade_date": "2026-11-06",
         "settlement_date": "2026-11-13",
         "pnl": 708.9
+      },
+      {
+        "trade_date": "2026-11-09",
+        "settlement_date": "2026-11-16",
+        "pnl": -2078.55
       }
     ],
     "ma_alignment_switch_enabled": false,
@@ -878,10 +872,18 @@
           "notional": "6389.8300",
           "fees": "0",
           "position_key": "3_2026-11-05"
+        },
+        "2026-11-09:176470": {
+          "trade_date": "2026-11-09",
+          "side": "SELL",
+          "quantity": 45,
+          "notional": "2529.0000",
+          "fees": "0",
+          "position_key": "1_2026-10-29"
         }
       }
     },
-    "compound_trading_days": 19,
+    "compound_trading_days": 20,
     "cash_snapshot_date": "2026-10-28",
     "2_2026-10-30": {
       "mode": "AG",
@@ -895,11 +897,11 @@
       "amount": 7936.15
     },
     "pending_buy": {
-      "round": 3,
-      "quantity": 395,
-      "target_price": 47.58,
-      "order_date": "2026-11-09",
-      "basis_date": "2026-11-06",
+      "round": 2,
+      "quantity": 181,
+      "target_price": 58.17,
+      "order_date": "2026-11-10",
+      "basis_date": "2026-11-09",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
