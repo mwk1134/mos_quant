@@ -950,7 +950,19 @@
       }
     },
     "compound_trading_days": 22,
-    "cash_snapshot_date": "2026-11-11"
+    "cash_snapshot_date": "2026-11-11",
+    "pending_buy": {
+      "round": 1,
+      "quantity": 59,
+      "target_price": 68.34,
+      "order_date": "2026-11-12",
+      "basis_date": "2026-11-11",
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본"
+    }
   },
   "JEH2": {
     "available_cash": 4244.2299319458,
