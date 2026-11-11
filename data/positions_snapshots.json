@@ -724,7 +724,7 @@
       "peakValue": 92313.31341552734,
       "soxlPrice": 140.25
     },
-    "atr70_r2_mix_enabled": false,
+    "atr70_r2_mix_enabled": true,
     "broker_sync": {
       "version": 1,
       "baseline_date": "2026-10-12",
@@ -1652,7 +1652,7 @@
       "seed_increases": [],
       "position_edits": {},
       "ma_alignment_switch_enabled": false,
-      "atr70_r2_mix_enabled": false
+      "atr70_r2_mix_enabled": true
     },
     "KHW": {
       "initial_capital": 21199.0,
