@@ -353,10 +353,29 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
             return {"handled": False, "state": "WAITING_FLAT", "orders": []}
         if actual_shares or context.get("legacy_shares", 0) or today_orders or reservations or context.get("broker_confirmed") is not True:
             return {"handled": False, "state": "WAITING_FLAT", "orders": []}
+        activation_request = None
+        if state is not None and "activation_request" in state:
+            activation_request = deepcopy(state["activation_request"])
+            try:
+                if (not isinstance(activation_request, dict)
+                        or activation_request.get("funding_policy") != "FULL_SETTLED"):
+                    raise ValueError
+                requested_session = activation_request["session_date"]
+                if date.fromisoformat(requested_session).isoformat() != requested_session:
+                    raise ValueError
+                requested_cash = _money(activation_request["initial_cash"], positive=True)
+            except (KeyError, TypeError, ValueError, MixedBlocked):
+                raise MixedBlocked("INVALID_ACTIVATION_REQUEST", "반반매매 시작일·초기원금·정산 정책을 확인하세요.") from None
+            if session < requested_session:
+                raise MixedBlocked("ACTIVATION_NOT_STARTED", "요청한 미국 거래일부터 반반매매를 시작합니다.")
         cash = _broker_cash(client)
+        if activation_request is not None and _money(cash) != requested_cash:
+            raise MixedBlocked("ACTIVATION_CASH_MISMATCH", "정산 완료 USD 현금이 요청한 초기원금과 다릅니다. 확인 후 시작하세요.")
         state = core.initial_state("KMW2", session_date=session, broker_cash=cash, broker_shares=0,
                                    open_order_count=0, broker_confirmed=True,
                                    fee_rate=context.get("fee_rate", "0.005"))
+        if activation_request is not None:
+            state["activation_request"] = activation_request
         state["fee_source"] = "configured_reserve"
         persist_state(state)
     core.validate_state(state)

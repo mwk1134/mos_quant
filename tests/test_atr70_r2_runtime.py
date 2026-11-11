@@ -569,3 +569,113 @@ def test_next_session_gate_waits_without_nighttime_date_error(tmp_path):
         assert result["state"] == "WAITING_NEXT_SESSION" and result["orders"] == []
         assert ledger.rows("fake-kmw2") == []
     assert broker.calls == []
+
+
+
+def requested_funding_state():
+    result = core.initial_state(session_date="2026-11-12", broker_cash="74006.54", broker_shares=0,
+                                open_order_count=0, broker_confirmed=False, fee_rate="0.005")
+    result["activation_request"] = {"session_date": "2026-11-12", "initial_cash": "74006.54",
+                                    "funding_policy": "FULL_SETTLED"}
+    return result
+
+
+def funding_context(session="2026-11-12"):
+    from kmw_order_plan import next_trading_date, previous_trading_date
+
+    day = date.fromisoformat(session)
+    return context(session_date=session, previous_session=previous_trading_date(day).isoformat(),
+                   next_session=next_trading_date(day).isoformat(), daily_rows=[], r2_orders=[])
+
+
+@pytest.mark.parametrize("actual,estimated,code", [
+    ("62055.11", "74006.54", "WAITING_CASH"),
+    ("74006.53", "74006.53", "ACTIVATION_CASH_MISMATCH"),
+    ("74006.55", "74006.55", "ACTIVATION_CASH_MISMATCH"),
+])
+def test_requested_full_settlement_never_initializes_with_unsettled_or_changed_cash(tmp_path, actual, estimated, code):
+    broker, waiting, persist = Broker(), requested_funding_state(), Mock()
+    before = deepcopy(waiting)
+    broker.currencies = lambda: [{"crcd": "USD", "frcr_amt": actual, "estm_frcr_amt": estimated}]
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == code
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert waiting == before and broker.calls == []
+
+
+@pytest.mark.parametrize("session", ["2026-11-12", "2026-11-13"])
+def test_requested_full_settlement_allocates_exact_halves_and_retains_request(tmp_path, session):
+    broker, waiting, persist = Broker(), requested_funding_state(), Mock()
+    broker.cash = "74006.54"
+    now = datetime.fromisoformat(session).replace(hour=4, minute=2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        result = run_mixed_tick(broker, waiting, funding_context(session), persist, ledger, now=now,
+                               enabled=True, account="fake-kmw2", exchange_code="0066")
+        assert result["handled"] is True and result["orders"] == []
+        assert ledger.rows("fake-kmw2") == []
+    activated = persist.call_args.args[0]
+    core.validate_state(activated)
+    assert activated["phase"] == "ACTIVE" and activated["activated_session"] == session
+    assert activated["initial_cash"] == "74006.54"
+    assert activated["atr"]["cash"] == activated["r2"]["cash"] == "37003.27"
+    assert activated["r2"]["seed"] == activated["r2"]["reference_seed"] == "37003.27"
+    assert activated["r2"]["trading_days"] == 1
+    assert activated["activation_request"] == waiting["activation_request"]
+    assert activated["activation_request"] is not waiting["activation_request"]
+    assert broker.calls == []
+
+
+def test_requested_start_session_is_an_earliest_activation_date(tmp_path):
+    broker, waiting, persist = Broker(), requested_funding_state(), Mock()
+    waiting["activation_request"]["session_date"] = "2026-11-13"
+    broker.cash = "74006.54"
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "ACTIVATION_NOT_STARTED"
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("invalid", [None, {}, {"funding_policy": "USE_ESTIMATED"},
+    {"session_date": "20261112", "initial_cash": "74006.54", "funding_policy": "FULL_SETTLED"},
+    {"session_date": "2026-11-12", "initial_cash": False, "funding_policy": "FULL_SETTLED"},
+    {"session_date": "2026-11-12", "initial_cash": "0", "funding_policy": "FULL_SETTLED"},
+    {"session_date": "2026-11-12", "initial_cash": "NaN", "funding_policy": "FULL_SETTLED"},
+])
+def test_malformed_activation_request_cannot_fall_back_to_legacy_activation(tmp_path, invalid):
+    broker, waiting, persist = Broker(), requested_funding_state(), Mock()
+    waiting["activation_request"] = invalid
+    broker.cash = "74006.54"
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "INVALID_ACTIVATION_REQUEST"
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert broker.calls == []
+
+
+def test_existing_waiting_state_without_request_uses_verified_settled_cash(tmp_path):
+    broker, persist = Broker(), Mock()
+    waiting = core.initial_state(session_date="2026-11-12", broker_cash="10000", broker_shares=0,
+                                 open_order_count=0, broker_confirmed=False)
+    broker.cash = "12000"
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                       account="fake-kmw2", exchange_code="0066")
+    activated = persist.call_args.args[0]
+    assert activated["initial_cash"] == "12000" and "activation_request" not in activated
+    assert activated["atr"]["cash"] == activated["r2"]["cash"] == "6000"
+    assert broker.calls == []
