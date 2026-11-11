@@ -223,7 +223,7 @@ class KMWBackend:
         code, message = _failure(exc)
         return code, re.sub(r"KMW(?!2)", self.preset, message) if self.preset != "KMW" else message
 
-    def mixed_tick(self, now=None, should_continue=None, *, force=False):
+    def mixed_tick(self, now=None, should_continue=None, *, force=False, r2_not_before=None):
         """Poll the enabled KMW2 mix independently from the legacy daily batch."""
         if self.preset != "KMW2":
             return {"handled": False, "state": "INACTIVE", "orders": []}
@@ -259,6 +259,8 @@ class KMWBackend:
                 self.refresh_preview(now=current)
                 context = store.read(current)
                 state = context.get("state")
+            if r2_not_before is not None:
+                context["r2_not_before"] = _now(r2_not_before).isoformat()
             dispatch = {"order": None}
 
             def may_dispatch():

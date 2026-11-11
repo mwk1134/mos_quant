@@ -130,6 +130,53 @@ def test_review_is_scoped_to_the_selected_preset():
     assert review_id(second) != review_id(plan())
 
 
+@pytest.mark.parametrize("instant,at,expected", [
+    ("2026-11-12T14:00:00+09:00", "18:02", "2026-11-12T18:02:00+09:00"),
+    ("2026-11-12T14:00:00+09:00", "17:01", "2026-11-12T04:00:00-05:00"),
+    ("2026-11-13T01:00:00+09:00", "18:02", "2026-11-12T18:02:00+09:00"),
+    ("2026-07-15T13:30:00+09:00", "16:59", "2026-07-15T04:00:00-04:00"),
+    ("2026-07-15T13:30:00+09:00", "18:02", "2026-07-15T18:02:00+09:00"),
+    ("2026-11-12T18:00:00+09:00", "02:30", "2026-11-13T02:30:00+09:00"),
+])
+def test_mixed_poll_continues_with_r2_release_at_configured_time_and_premarket(tmp_path, instant, at, expected):
+    class Backend:
+        preset = "KMW2"
+
+        def validate_account_configuration(self):
+            return {"ready": True}
+
+        def mixed_tick(self, *, now, should_continue, r2_not_before=None):
+            assert should_continue()
+            self.release = r2_not_before
+            return {"handled": True, "state": "WAITING", "orders": []}
+
+    moment = datetime.fromisoformat(instant)
+    backend = Backend()
+    engine = KMWEngine(backend, tmp_path / "mixed-timing.json", clock=lambda: moment, preset="KMW2")
+    engine.configure(at)
+    engine.enable()
+    assert engine.tick()["handled"]
+    assert backend.release == datetime.fromisoformat(expected)
+    assert engine.status()["enabled"]
+
+
+def test_mixed_r2_release_uses_effective_schedule_without_rewriting_raw_time(tmp_path):
+    moment = [datetime.fromisoformat("2026-10-30T16:00:00+09:00")]
+    backend = Mock()
+    engine = KMWEngine(backend, tmp_path / "effective-mixed.json", clock=lambda: moment[0], preset="KMW2")
+    engine.configure("17:02")
+    engine.configure("18:02", effective_date="2026-11-01")
+    moment[0] = datetime.fromisoformat("2026-11-12T14:00:00+09:00")
+    assert engine._r2_not_before(moment[0]).isoformat() == "2026-11-12T18:02:00+09:00"
+    assert engine.status()["at"] == "18:02"
+    assert json.loads(engine.state_file.read_text())["at"] == "17:02"
+    engine.configure("19:02", effective_date="2026-11-13")
+    moment[0] = datetime.fromisoformat("2026-11-13T01:00:00+09:00")
+    assert engine._r2_not_before(moment[0]).isoformat() == "2026-11-12T18:02:00+09:00"
+    moment[0] = moment[0].replace(hour=14)
+    assert engine._r2_not_before(moment[0]).isoformat() == "2026-11-13T19:02:00+09:00"
+
+
 class SeparateAccountBackend:
     def __init__(self, preset, ready=True):
         self.preset = preset
@@ -453,3 +500,136 @@ def test_refresh_error_stops_before_order_execution_without_stale_fallback(tmp_p
     assert "synthetic-private-refresh-token" not in json.dumps(engine.status())
     backend.execute.assert_not_called()
     backend.preview.assert_not_called()
+
+
+def scheduled_change_engine(tmp_path):
+    moment = [datetime(2026, 10, 26, 16, 0, tzinfo=ZoneInfo('Asia/Seoul'))]
+    backend = Mock()
+    backend.preview.return_value = {**plan(), 'order_date': '2026-11-02',
+                                    'basis_date': '2026-10-30', 'snapshot_date': '2026-10-30'}
+    backend.execute.return_value = {'state': 'DIRECT_ACCEPTED', 'orders': []}
+    engine = KMWEngine(backend, tmp_path / 'dated-engine.json', clock=lambda: moment[0])
+    engine.configure('18:01', effective_date='2026-11-01')
+    engine.enable()
+    return engine, moment, backend
+
+
+def test_future_time_change_preserves_current_schedule_and_survives_restart(tmp_path):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    status = engine.status()
+    change = {'effective_date': '2026-11-01', 'at': '18:01'}
+    assert status['at'] == '17:01'
+    assert status['pending_time_change'] == change
+    assert status['next_run'] == '2026-10-26T17:01:00+09:00'
+    saved = json.loads(engine.state_file.read_text())
+    assert saved['at'] == '17:01' and saved['scheduled_time_change'] == change
+    restored = KMWEngine(backend, engine.state_file, clock=lambda: moment[0])
+    assert restored.status()['pending_time_change'] == change
+    assert restored.status()['enabled'] is True
+    assert restored.status()['last_run'] is None
+    assert restored.status()['scheduled_days'] == []
+    backend.execute.assert_not_called()
+    backend.preview.assert_not_called()
+
+
+@pytest.mark.parametrize('instant,expected_at,expected_next', [
+    ('2026-10-30T16:59:00+09:00', '17:01', '2026-10-30T17:01:00+09:00'),
+    ('2026-10-30T17:02:00+09:00', '17:01', '2026-11-02T18:01:00+09:00'),
+    ('2026-10-31T23:59:00+09:00', '17:01', '2026-11-02T18:01:00+09:00'),
+    ('2026-11-01T00:00:00+09:00', '18:01', '2026-11-02T18:01:00+09:00'),
+    ('2026-11-02T17:59:00+09:00', '18:01', '2026-11-02T18:01:00+09:00'),
+    ('2026-11-02T18:02:00+09:00', '18:01', '2026-11-03T18:01:00+09:00'),
+    ('2027-03-15T17:59:00+09:00', '18:01', '2027-03-15T18:01:00+09:00'),
+    ('2026-11-02T08:59:00+00:00', '18:01', '2026-11-02T18:01:00+09:00'),
+])
+def test_future_time_uses_each_calendar_day_and_fixed_time_after_change(tmp_path, instant, expected_at, expected_next):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    moment[0] = datetime.fromisoformat(instant)
+    restored = KMWEngine(backend, engine.state_file, clock=lambda: moment[0])
+    state = restored.status()
+    assert state['at'] == expected_at
+    assert state['next_run'] == expected_next
+    assert bool(state['pending_time_change']) == (moment[0].astimezone(ZoneInfo('Asia/Seoul')).date().isoformat() < '2026-11-01')
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('resume', ['17:30', '18:02'])
+def test_sleep_across_change_never_dispatches_early_and_runs_session_once(tmp_path, resume):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    assert engine._next.date().isoformat() < '2026-11-01'
+    moment[0] = datetime.fromisoformat(f'2026-11-02T{resume}:00+09:00')
+    result = engine.tick()
+    if resume == '17:30':
+        assert result is None
+        backend.execute.assert_not_called()
+        assert engine.status()['next_run'] == '2026-11-02T18:01:00+09:00'
+        moment[0] = datetime(2026, 11, 2, 18, 1, tzinfo=ZoneInfo('Asia/Seoul'))
+        result = engine.tick()
+    assert result['state'] == 'DIRECT_ACCEPTED'
+    assert backend.execute.call_count == 1
+    assert engine.tick() is None
+    saved = json.loads(engine.state_file.read_text())
+    assert saved['scheduled_days'] == ['2026-11-02']
+    restored = KMWEngine(backend, engine.state_file, clock=lambda: moment[0])
+    assert restored.tick() is None
+    assert backend.execute.call_count == 1
+    assert restored.status()['next_run'] == '2026-11-03T18:01:00+09:00'
+
+
+def test_status_rolls_sleep_target_without_financial_actions(tmp_path):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    moment[0] = datetime(2026, 11, 2, 17, 30, tzinfo=ZoneInfo('Asia/Seoul'))
+    state = engine.status()
+    assert state['at'] == '18:01' and state['pending_time_change'] is None
+    assert state['next_run'] == '2026-11-02T18:01:00+09:00'
+    assert json.loads(engine.state_file.read_text())['at'] == '17:01'
+    backend.preview.assert_not_called()
+    backend.execute.assert_not_called()
+
+
+def test_immediate_configuration_cancels_pending_change_and_preserves_disabled(tmp_path):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    engine.disable()
+    before = engine.status()
+    state = engine.configure('17:20')
+    assert state['at'] == '17:20' and state['scheduled_time_change'] is None
+    assert state['pending_time_change'] is None and state['next_run'] is None
+    assert state['enabled'] is False
+    assert state['scheduled_days'] == before['scheduled_days']
+    assert state['last_run'] == before['last_run']
+    backend.execute.assert_not_called()
+
+
+def test_replacing_an_effective_change_keeps_its_current_time(tmp_path):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    moment[0] = datetime(2026, 11, 2, 17, 30, tzinfo=ZoneInfo('Asia/Seoul'))
+    state = engine.configure('19:01', effective_date='2026-12-01')
+    assert state['at'] == '18:01'
+    assert state['next_run'] == '2026-11-02T18:01:00+09:00'
+    assert state['pending_time_change'] == {'effective_date': '2026-12-01', 'at': '19:01'}
+    assert json.loads(engine.state_file.read_text())['at'] == '18:01'
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('value', ['2026-10-26', '2026-10-25', '2026-11-31', '2026-1-01', '', True, []])
+def test_invalid_or_nonfuture_time_change_is_inert(tmp_path, value):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    before = engine.state_file.read_bytes()
+    with pytest.raises(EngineStateError):
+        engine.configure('18:02', effective_date=value)
+    assert engine.state_file.read_bytes() == before
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('change', [[], {}, {'at': '18:01'},
+    {'effective_date': '2026-11-01', 'at': '24:01'},
+    {'effective_date': '2026-02-30', 'at': '18:01'},
+    {'effective_date': '2026-11-01', 'at': '18:01', 'extra': True}])
+def test_malformed_persisted_time_change_fails_closed(tmp_path, change):
+    engine, moment, backend = scheduled_change_engine(tmp_path)
+    saved = json.loads(engine.state_file.read_text())
+    saved['scheduled_time_change'] = change
+    engine.state_file.write_text(json.dumps(saved))
+    with pytest.raises(EngineStateError):
+        KMWEngine(backend, engine.state_file, clock=lambda: moment[0])
+    backend.execute.assert_not_called()

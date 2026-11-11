@@ -14,6 +14,7 @@ import threading
 from zoneinfo import ZoneInfo
 
 import atr70_r2 as core
+from banban_research.atr_sessions import exchange_calendar
 from kmw_autotrade import OrderBlocked, OrderLedger, symbol
 from kmw_order_plan import completed_trading_date
 from meritz_api import AmbiguousSubmission, MeritzError, SubmissionStopped
@@ -51,6 +52,13 @@ def _quantity(value):
     return int(number)
 
 
+def _session_bounds(session_date):
+    calendar = exchange_calendar()
+    opened = calendar.session_open(session_date).to_pydatetime()
+    closed = calendar.session_close(session_date).to_pydatetime()
+    return opened, closed
+
+
 def normalize_trade_message(message, *, key, now):
     """Validate the official regular-session WS event, including exchange time."""
     if isinstance(message, (str, bytes)):
@@ -68,12 +76,13 @@ def normalize_trade_message(message, *, key, now):
         session = datetime.strptime(str(body["acpl_bsop_date"]), "%Y%m%d").date()
         stamp = datetime.strptime(str(body["korea_date"]) + str(body["korea_hour"]).zfill(6),
                                   "%Y%m%d%H%M%S").replace(tzinfo=KST)
+        opened, closed = _session_bounds(session.isoformat())
     except (KeyError, ValueError, TypeError):
         raise MixedBlocked("STALE_QUOTE", "실시간 체결의 날짜와 시각을 확인할 수 없습니다.") from None
     age = (now - stamp).total_seconds()
     if (session != market_now.date() or stamp.astimezone(ET).date() != session
             or not is_us_equity_trading_day(session) or age < -2 or age > 15
-            or not time(9, 30) <= stamp.astimezone(ET).time().replace(tzinfo=None) < time(16)):
+            or not opened <= stamp < closed or not opened <= now < closed):
         raise MixedBlocked("STALE_QUOTE", "SOXL 실시간 정규장 체결이 15초 이내인지 확인하세요.")
     return {"symbol": "SOXL", "session_date": session.isoformat(),
             "last_price": str(_money(body.get("prpr"), positive=True)),
@@ -88,6 +97,7 @@ def fresh_quote(quote, now, session_date):
     try:
         stamp = datetime.fromisoformat(quote["timestamp"])
         received = datetime.fromisoformat(quote["received_at"])
+        opened, closed = _session_bounds(session_date)
         if stamp.tzinfo is None or received.tzinfo is None:
             raise ValueError
     except (ValueError, KeyError, TypeError):
@@ -95,7 +105,8 @@ def fresh_quote(quote, now, session_date):
     if (quote.get("symbol") != "SOXL" or quote.get("session_date") != session_date
             or stamp.astimezone(ET).date().isoformat() != session_date
             or not -2 <= (now - stamp).total_seconds() <= 15
-            or not -2 <= (now - received).total_seconds() <= 15):
+            or not -2 <= (now - received).total_seconds() <= 15
+            or not opened <= stamp < closed or not opened <= now < closed):
         raise MixedBlocked("STALE_QUOTE", "실시간 체결이 오래되었거나 거래일이 다릅니다.")
     _money(quote["last_price"], positive=True)
     _money(quote["regular_open"], positive=True)
@@ -161,16 +172,20 @@ def mixed_order_window(now, order):
         raise MixedBlocked("ORDER_DATE", "혼합 주문의 미국 거래일을 확인하세요.")
     current = market.time().replace(tzinfo=None)
     kind = order.get("order_type")
+    if kind in {"MOO", "LOC", "MOC"} and current < time(4):
+        raise MixedBlocked("PREMARKET_WINDOW", "혼합 경매 주문은 미국시간 04:00 이후에 접수합니다.")
     if kind == "MOO":
         if order.get("side") != "SELL" or current >= time(9, 25):
             raise MixedBlocked("MOO_WINDOW", "익일 시가 매도는 미국시간 09:25 전에 접수해야 합니다.")
     elif kind == "MARKET":
-        if not time(9, 30) <= current < time(16):
+        opened, closed = _session_bounds(market.date().isoformat())
+        if not opened <= market < closed:
             raise MixedBlocked("MARKET_WINDOW", "혼합 시장가 주문은 미국 정규장에서만 접수합니다.")
     elif kind in {"LOC", "MOC"}:
-        # Submit well before both normal and half-day closing-auction cutoffs.
-        if current >= time(12, 45):
-            raise MixedBlocked("CLOSE_WINDOW", "혼합 종가 주문의 접수 마감 시간을 지났습니다.")
+        # Closing-auction orders stop ten minutes before the actual session close.
+        _, closed = _session_bounds(market.date().isoformat())
+        if market >= closed - timedelta(minutes=10):
+            raise MixedBlocked("CLOSE_WINDOW", "혼합 종가 주문은 해당 거래일 장 마감 10분 전까지만 접수합니다.")
     else:
         raise MixedBlocked("ORDER_TYPE", "지원하지 않는 혼합 주문 유형입니다.")
 
@@ -318,6 +333,15 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
             or context.get("session_date", session) != session):
         return {"handled": bool(state and state.get("phase") == "ACTIVE"),
                 "state": "WAITING_NEXT_SESSION", "orders": []}
+    r2_not_before = context.get("r2_not_before")
+    if r2_not_before is not None:
+        try:
+            r2_not_before = datetime.fromisoformat(r2_not_before)
+            if (r2_not_before.tzinfo is None or r2_not_before.utcoffset() is None
+                    or r2_not_before.astimezone(ET).date().isoformat() != session):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise MixedBlocked("R2_RELEASE_TIME", "R2 주문 시작 시각과 미국 거래일을 확인하세요.") from None
     ledger.unresolved(account)
     if state is None or state["phase"] == "WAITING_FLAT":
         actual_shares = _held(client.holdings())
@@ -399,6 +423,9 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
     sent = []
     for order in plan["orders"]:
         if order["side"] == "BUY" and not enabled:
+            continue
+        if (order["strategy"] == "R2" and order["order_type"] in {"LOC", "MOC"}
+                and r2_not_before is not None and current_time() < r2_not_before):
             continue
         if should_continue is not None and not should_continue():
             break

@@ -1611,19 +1611,22 @@ class SOXLQuantTrader:
                                         latest_date = df.loc[latest_idx, 'Date'].date()
                                         regular_price = meta.get('regularMarketPrice')
                                         regular_time = meta.get('regularMarketTime')
-                                        gmtoffset = int(meta.get('gmtoffset', 0) or 0)
                                         regular_dt_et = None
                                         if regular_time:
-                                            regular_dt_et = datetime.utcfromtimestamp(int(regular_time)) + timedelta(seconds=gmtoffset)
+                                            regular_dt_et = datetime.fromtimestamp(int(regular_time), timezone.utc).astimezone(US_EASTERN_TZ)
 
-                                        is_prior_bar = latest_date < self.get_today_date().date()
+                                        from banban_research.atr_sessions import exchange_calendar
+                                        market_now = self.get_us_eastern_now()
+                                        if market_now.tzinfo is None:
+                                            market_now = market_now.replace(tzinfo=US_EASTERN_TZ)
+                                        closed_at = exchange_calendar().session_close(latest_date.isoformat()).to_pydatetime()
                                         is_regular_close_tick = (
                                             regular_dt_et is not None
                                             and regular_dt_et.date() == latest_date
-                                            and (regular_dt_et.hour > 16 or (regular_dt_et.hour == 16 and regular_dt_et.minute >= 0))
+                                            and closed_at <= regular_dt_et <= market_now
                                         )
 
-                                        if regular_price is not None and (is_prior_bar or is_regular_close_tick):
+                                        if regular_price is not None and is_regular_close_tick:
                                             df.loc[latest_idx, 'Close'] = float(regular_price)
                                             adjclose_data = result.get('indicators', {}).get('adjclose', [])
                                             if adjclose_data and adjclose_data[0].get('adjclose'):

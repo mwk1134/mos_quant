@@ -16,6 +16,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from soxl_quant_system import SOXLQuantTrader, recommendation_buy_order_terms
+from banban_research.atr_sessions import exchange_calendar
 from us_market_calendar import is_us_equity_trading_day
 
 
@@ -128,13 +129,14 @@ def next_trading_date(day: date) -> date:
 
 
 def completed_trading_date(et_now: datetime) -> date:
-    """Match the web app's latest completed session at its 16:00 ET cutoff."""
-    if (
-        is_us_equity_trading_day(et_now.date())
-        and et_now.time().replace(tzinfo=None) >= time(16)
-    ):
-        return et_now.date()
-    return previous_trading_date(et_now.date())
+    """Return the latest completed exchange session, including early closes."""
+    market_now = et_now.astimezone(ET) if et_now.tzinfo is not None else et_now.replace(tzinfo=ET)
+    day = market_now.date()
+    if is_us_equity_trading_day(day):
+        closed = exchange_calendar().session_close(day.isoformat()).to_pydatetime()
+        if market_now >= closed:
+            return day
+    return previous_trading_date(day)
 
 
 class _KMWPlanTrader(SOXLQuantTrader):
@@ -153,6 +155,11 @@ class _KMWPlanTrader(SOXLQuantTrader):
         # plan still validates daily data through its exact completed session,
         # so it must not accept the general UI's weekly-RSI cache threshold.
         return self._expected_basis_date
+
+    def _drop_unfinished_daily_bar(self, stock_data):
+        if stock_data is None or stock_data.empty:
+            return stock_data
+        return stock_data[stock_data.index.date <= self._expected_basis_date].copy()
 
     def get_stock_data(self, ticker: str, *args: Any, **kwargs: Any):
         data = super().get_stock_data(ticker, *args, **kwargs)

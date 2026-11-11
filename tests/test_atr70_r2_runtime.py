@@ -445,3 +445,127 @@ def test_backend_executes_through_cas_store_real_runtime_and_mock_feed(tmp_path,
     assert saved[0]["orders"][next(iter(saved[0]["orders"]))]["status"] == "ACCEPTED"
     notifications.assert_called_once()
     backend.close()
+
+
+@pytest.mark.parametrize("kind", ["LOC", "MOC"])
+@pytest.mark.parametrize("session,cutoff", [("2026-10-30", 15), ("2026-11-27", 12)])
+def test_close_orders_follow_normal_and_early_close_session_deadlines(kind, session, cutoff):
+    order = {"session_date": session, "side": "SELL", "order_type": kind}
+    now = datetime.fromisoformat(session).replace(tzinfo=ET, hour=cutoff, minute=49, second=59)
+    mixed_order_window(now, order)
+    with pytest.raises(MixedBlocked) as blocked:
+        mixed_order_window(now + timedelta(seconds=1), order)
+    assert blocked.value.code == "CLOSE_WINDOW"
+
+
+def test_market_orders_stop_at_the_early_close():
+    order = {"session_date": "2026-11-27", "side": "SELL", "order_type": "MARKET"}
+    now = datetime(2026, 11, 27, 12, 59, 59, tzinfo=ET)
+    mixed_order_window(now, order)
+    with pytest.raises(MixedBlocked) as blocked:
+        mixed_order_window(now + timedelta(seconds=1), order)
+    assert blocked.value.code == "MARKET_WINDOW"
+
+
+
+@pytest.mark.parametrize("session,close_hour", [("2026-11-12", 16), ("2026-11-27", 13)])
+def test_recent_quotes_expire_at_the_actual_session_close(session, close_hour):
+    last_instant = datetime.fromisoformat(session).replace(tzinfo=ET, hour=close_hour - 1, minute=59, second=59)
+    latest = quote(last_instant)
+    assert fresh_quote(latest, last_instant, session) == latest
+    with pytest.raises(MixedBlocked) as blocked:
+        fresh_quote(latest, last_instant + timedelta(seconds=1), session)
+    assert blocked.value.code == "STALE_QUOTE"
+    with pytest.raises(MixedBlocked):
+        fresh_quote(quote(last_instant + timedelta(seconds=1)), last_instant, session)
+
+
+@pytest.mark.parametrize("now", [
+    datetime(2026, 11, 12, 3, 0, tzinfo=ET),
+    datetime(2026, 11, 12, 9, 29, 59, tzinfo=ET),
+    datetime(2026, 11, 26, 10, 0, tzinfo=ET),
+    datetime(2026, 11, 27, 13, 0, tzinfo=ET),
+])
+def test_websocket_and_quote_reject_nonregular_market_instants(now):
+    stamp = now.astimezone(ZoneInfo("Asia/Seoul"))
+    message = {"header": {"tr_cd": "ohhts_exst_cntg", "tr_key": "AX@SOXL"},
+        "body": {"iscd": "AX@SOXL", "dely_yn": "0", "acpl_bsop_date": now.strftime("%Y%m%d"),
+                 "korea_date": stamp.strftime("%Y%m%d"), "korea_hour": stamp.strftime("%H%M%S"),
+                 "oprc": "100", "prpr": "103"}}
+    with pytest.raises(MixedBlocked) as blocked:
+        normalize_trade_message(message, key="AX@SOXL", now=now)
+    assert blocked.value.code == "STALE_QUOTE"
+    with pytest.raises(MixedBlocked) as blocked:
+        fresh_quote(quote(now), now, now.date().isoformat())
+    assert blocked.value.code == "STALE_QUOTE"
+
+
+@pytest.mark.parametrize("instant,expected", [
+    ("2026-11-12T15:59:59-05:00", "2026-11-11"),
+    ("2026-11-12T16:00:00-05:00", "2026-11-12"),
+    ("2026-11-27T12:59:59-05:00", "2026-11-25"),
+    ("2026-11-27T13:00:00-05:00", "2026-11-27"),
+    ("2026-11-26T16:00:00-05:00", "2026-11-25"),
+    ("2026-11-29T10:00:00-05:00", "2026-11-27"),
+    ("2026-03-09T16:00:00-04:00", "2026-03-09"),
+])
+def test_shared_completed_session_uses_exchange_close_and_market_timezone(instant, expected):
+    from kmw_order_plan import completed_trading_date
+
+    now = datetime.fromisoformat(instant)
+    assert completed_trading_date(now).isoformat() == expected
+    assert completed_trading_date(now.astimezone(ZoneInfo("Asia/Seoul"))).isoformat() == expected
+    assert completed_trading_date(now.replace(tzinfo=None)).isoformat() == expected
+
+
+@pytest.mark.parametrize("kind", ["MOO", "LOC", "MOC"])
+def test_auction_orders_wait_for_broker_premarket_start(kind):
+    order = {"session_date": "2026-11-12", "side": "SELL", "order_type": kind}
+    now = datetime(2026, 11, 12, 3, 59, 59, tzinfo=ET)
+    with pytest.raises(MixedBlocked) as blocked:
+        mixed_order_window(now, order)
+    assert blocked.value.code == "PREMARKET_WINDOW"
+    mixed_order_window(now + timedelta(seconds=1), order)
+
+
+def test_r2_release_gate_does_not_reserve_cash_and_keeps_atr_monitoring(tmp_path):
+    broker, saved = Broker(), [state()]
+    r2 = {"ticker": "SOXL", "side": "BUY", "quantity": 2, "price": "105", "order_type": "LOC",
+          "round": 1, "lot_id": "R2:2026-10-30", "frozen_rules": core.r2_rules("SF", True)}
+    release = NOW + timedelta(minutes=2)
+    ctx = context(r2_orders=[r2], r2_not_before=release.isoformat())
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        first = run(broker, saved, ctx, ledger, now=NOW, market_quote=quote(NOW))
+        assert len(first["orders"]) == 1 and first["orders"][0]["order"]["strategy"] == "ATR"
+        assert not any(order["strategy"] == "R2" for order in saved[0]["orders"].values())
+        assert core.available_cash(saved[0], "R2") == Decimal("5000")
+        assert len(ledger.rows("fake-kmw2")) == 1
+        second = run(broker, saved, ctx, ledger, now=release, market_quote=quote(release))
+        assert len(second["orders"]) == 1 and second["orders"][0]["order"]["strategy"] == "R2"
+        assert len(ledger.rows("fake-kmw2")) == 2
+        assert [order["order_type"] for order in broker.calls] == ["MARKET", "LOC"]
+
+
+@pytest.mark.parametrize("invalid", ["2026-10-30T10:02:00", "2026-10-31T10:02:00-04:00", "", 4])
+def test_r2_release_time_must_be_aware_and_match_its_order_session(tmp_path, invalid):
+    broker, saved = Broker(), [state()]
+    before = deepcopy(saved[0])
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run(broker, saved, context(r2_not_before=invalid), ledger, market_quote=quote())
+        assert blocked.value.code == "R2_RELEASE_TIME"
+        assert ledger.rows("fake-kmw2") == []
+    assert broker.calls == [] and saved[0] == before
+
+
+
+def test_next_session_gate_waits_without_nighttime_date_error(tmp_path):
+    broker, saved = Broker(), [state()]
+    now = NOW.replace(hour=16, minute=1)
+    ctx = context(session_date="2026-11-02", previous_session="2026-10-30", next_session="2026-11-03",
+                  r2_not_before=datetime(2026, 11, 2, 4, 2, tzinfo=ET).isoformat())
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        result = run(broker, saved, ctx, ledger, now=now)
+        assert result["state"] == "WAITING_NEXT_SESSION" and result["orders"] == []
+        assert ledger.rows("fake-kmw2") == []
+    assert broker.calls == []

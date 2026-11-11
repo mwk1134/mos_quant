@@ -114,6 +114,40 @@ def test_failed_switch_save_does_not_look_enabled_or_write_local_account():
     local.assert_not_called()
 
 
+@pytest.mark.parametrize("fresh_document,sha", [({}, None), ({"KMW2": {}}, None)])
+def test_snapshot_save_requires_fresh_document_and_sha_before_any_write(fresh_document, sha):
+    state = Session(_gh_snapshot_all={"KMW2": {"cached_partial": True}}, _gh_snapshot_sha="cached-sha")
+    before = deepcopy(state)
+    save, local = Mock(), Mock()
+    scope = functions("save_preset_snapshot", st=SimpleNamespace(session_state=state),
+                      _gh_load_all_snapshots=Mock(return_value=(fresh_document, sha)),
+                      _gh_save_all_snapshots=save, _write_local_all_snapshots=local)
+    ok, error = scope["save_preset_snapshot"]("KMW2", {"new_snapshot": True})
+    assert not ok and "최신 원본과 버전" in error
+    save.assert_not_called()
+    local.assert_not_called()
+    assert state == before
+
+
+def test_snapshot_conflict_read_failure_stops_without_cached_or_local_retry():
+    document = {"KMW2": {"old": True}, "KMW": {"other_account": True}}
+    state = Session(_gh_snapshot_all={"KMW2": {"cached_partial": True}}, _gh_snapshot_sha="cached-sha")
+    before = deepcopy(state)
+    save = Mock(return_value=(False, "GitHub API (409)"))
+    local = Mock()
+    scope = functions("save_preset_snapshot", st=SimpleNamespace(session_state=state),
+                      _gh_load_all_snapshots=Mock(side_effect=[(document, "fresh-sha"), ({}, None)]),
+                      _gh_save_all_snapshots=save, _write_local_all_snapshots=local,
+                      _broker_snapshot_write_allowed=Mock(return_value=True),
+                      _is_manual_cash_locked_snapshot=Mock(return_value=False),
+                      _merge_snapshot_max_mdd=lambda current, previous: current)
+    ok, error = scope["save_preset_snapshot"]("KMW2", {"new_snapshot": True})
+    assert not ok and "최신 원본과 버전" in error
+    save.assert_called_once_with({"KMW2": {"new_snapshot": True}, "KMW": {"other_account": True}}, "fresh-sha")
+    local.assert_not_called()
+    assert state == before
+
+
 @pytest.mark.parametrize("preset", ["KMW", "JEH", "JEH2", "KHW", "kmw2", ""])
 def test_switch_rejects_every_other_preset_without_reading_or_saving(preset):
     scope, _, save, load, local = switch_helpers()
@@ -184,13 +218,17 @@ def test_sleeve_display_keeps_strategy_ownership_and_actual_quantities():
             scope["_atr70_r2_sleeve_rows"](bad)
 
 
-def component_script(active="KMW2", running=False, fee_rate="0.005"):
+def component_script(active="KMW2", running=False, fee_rate="0.005", *, enabled=None,
+                     real_snapshot_loader=False, flat_waiting=False):
     """Run the real changed Streamlit functions with an entirely fake backend."""
     names = {"_copy_seed_increases", "_normalize_preset_config", "_preset_state_key", "save_preset_atr70_r2_setting",
-             "_atr70_r2_ui_selected", "show_atr70_r2_preference_control",
+             "_atr70_r2_ui_selected", "_atr70_r2_live_start", "_atr70_r2_waiting_message",
+             "show_atr70_r2_preference_control",
              "_atr70_r2_sleeve_rows",
              "_atr70_r2_readonly_plan", "_atr70_r2_order_tables", "show_atr70_r2_order_tables",
              "show_atr70_r2_recommendation", "show_daily_recommendation"}
+    if real_snapshot_loader:
+        names.add("load_preset_snapshot")
     tree = ast.parse(APP.read_text())
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     for node in nodes:
@@ -199,17 +237,21 @@ def component_script(active="KMW2", running=False, fee_rate="0.005"):
             if isinstance(child, ast.arg):
                 child.annotation = None
     doc = document()
-    doc["_preset_configs"]["KMW2"][FLAG] = running
+    doc["_preset_configs"]["KMW2"][FLAG] = running if enabled is None else enabled
     if running:
         doc["KMW2"]["atr70_r2"]["fee_rate"] = fee_rate
     if not running:
         doc["KMW2"].pop("atr70_r2")
         doc["KMW2"]["1_2026-10-30"] = {"round": 1, "shares": 3, "buy_price": 100}
+        if flat_waiting:
+            doc["KMW2"].pop("1_2026-10-30")
+            doc["KMW2"]["atr70_r2"] = {"phase": "WAITING_FLAT", "initial_cash": "74006.54"}
     prelude = f'''
 import streamlit as st
 import pandas as pd
 import re
 from copy import deepcopy
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 MA_ALIGNMENT_SWITCH_KEY={MA!r}
 ATR70_R2_SWITCH_KEY={FLAG!r}
@@ -228,6 +270,9 @@ if '_stored' not in st.session_state:
 def _gh_load_all_snapshots():
     return deepcopy(st.session_state._stored), 'fake-sha'
 def _gh_save_all_snapshots(value, sha):
+    st.session_state.save_attempts=st.session_state.get('save_attempts',0)+1
+    if st.session_state.get('_save_error'):
+        return False, st.session_state._save_error
     st.session_state._stored=deepcopy(value)
     st.session_state.save_count=st.session_state.get('save_count',0)+1
     return True, ''
@@ -243,6 +288,7 @@ placeholder=None
 if _atr70_r2_ui_selected():
     show_daily_recommendation(placeholder)
 '''
+
 
 
 def test_streamlit_switch_on_waits_for_actual_zero_with_only_the_mixed_switch():
@@ -278,6 +324,19 @@ def test_streamlit_active_mixed_off_keeps_lots_and_shows_exit_management():
         assert len(app.dataframe) == 2
         assert len(order_html_boards(app)) == 2
         assert [toggle.label for toggle in app.toggle] == ["반반매매 (ATR70-R2) 적용"]
+
+
+def test_flat_account_waits_for_start_conditions_and_settled_usd():
+    from streamlit.testing.v1 import AppTest
+    with patch("kmw_order_plan.build_kmw_plan", side_effect=ValueError("Data unavailable")):
+        app = AppTest.from_string(component_script(flat_waiting=True, enabled=True)).run(timeout=20)
+    assert not app.exception
+    assert any("실계좌 시작 조건 확인 대기" in warning.value for warning in app.warning)
+    assert not any("전량 매도 대기" in warning.value for warning in app.warning)
+    assert any("USD 예수금과 추정 예수금 일치" in caption.value for caption in app.caption)
+    assert any("실제 SOXL 잔고 0주·미체결 및 활성 예약 없음" in text.value for text in app.markdown)
+    assert "save_attempts" not in app.session_state
+    assert app.session_state._stored["KMW2"]["atr70_r2"]["phase"] == "WAITING_FLAT"
 
 
 @pytest.mark.parametrize("fee_rate", ["NaN", "Infinity", "-0.005", "1", True])
@@ -352,7 +411,11 @@ def test_full_webapp_mixed_waiting_and_active_render_without_network_or_writes(r
     from streamlit.testing.v1 import AppTest
     doc = document()
     doc["_preset_configs"]["KMW2"][FLAG] = True
-    if not running:
+    doc["_preset_configs"]["KMW2"].update(initial_capital=74006.54, session_start_date="2026-11-12")
+    if running:
+        doc["KMW2"]["atr70_r2"].update(activated_session="2026-11-12", initial_cash="74006.54")
+        doc["_preset_configs"]["KMW2"].update(initial_capital=67612.0, session_start_date="2026-04-29")
+    else:
         doc["KMW2"].pop("atr70_r2")
         doc["KMW2"]["1_2026-10-30"] = {"round": 1, "shares": 3, "buy_price": 100,
                                         "amount": 300, "mode": "SF"}
@@ -384,6 +447,28 @@ def test_full_webapp_mixed_waiting_and_active_render_without_network_or_writes(r
     assert app.session_state.trader.ma_alignment_switch_enabled is False
     assert next(widget for widget in app.number_input if widget.label == "💰 초기 투자금 (달러)").disabled
     assert next(widget for widget in app.date_input if widget.label == "📅 투자 시작일").disabled
+    assert next(widget for widget in app.number_input if widget.label == "💰 초기 투자금 (달러)").value == 74006.54
+    assert next(widget for widget in app.date_input if widget.label == "📅 투자 시작일").value.isoformat() == "2026-11-12"
+    if running:
+        assert any("실계좌 운용 시작일 2026-11-12 · 시작자금 $74,006.54" in caption.value for caption in app.caption)
+        assert any(heading.value == "🔀 KMW2 · 반반매매 (ATR70-R2)" for heading in app.subheader)
+        assert app.session_state.initial_capital == 10000.0
+        assert app.session_state.session_start_date == "2026-10-01"
+        assert app.session_state.positions_snapshot["atr70_r2"] == doc["KMW2"]["atr70_r2"]
+
+
+@pytest.mark.parametrize("metadata", [
+    {}, {"activated_session": "2026-11-12", "initial_cash": None},
+    {"activated_session": "2026-11-12", "initial_cash": "NaN"},
+    {"activated_session": "2026-11-12", "initial_cash": True},
+    {"activated_session": "invalid", "initial_cash": "74006.54"},
+])
+def test_older_or_invalid_mixed_start_metadata_keeps_existing_settings(metadata):
+    snapshot = {"atr70_r2": {**mixed_state(), **metadata}}
+    before = deepcopy(snapshot)
+    scope = functions("_atr70_r2_live_start")
+    assert scope["_atr70_r2_live_start"](snapshot) is None
+    assert snapshot == before
 
 
 def preview_tables():
@@ -548,3 +633,76 @@ def test_streamlit_html_keeps_accepted_partial_buy_visible_after_switch_off():
     assert "미국 주문일 2026-11-02" in boards[1]
     assert "$90.00" in boards[1] and "$100.00" not in boards[1]
     assert all("기접수 주문은 유지됩니다" in board for board in boards)
+
+
+@pytest.mark.parametrize("initial_enabled", [False, True])
+def test_remote_switch_change_syncs_existing_widget_without_writing_it_back(initial_enabled):
+    from streamlit.testing.v1 import AppTest
+    with patch("kmw_order_plan.build_kmw_plan", side_effect=ValueError("Data unavailable")):
+        app = AppTest.from_string(component_script(
+            running=True, enabled=initial_enabled, real_snapshot_loader=True)).run(timeout=20)
+        assert not app.exception
+        assert app.toggle[0].value is initial_enabled
+        before = deepcopy(app.session_state._stored)
+
+        # Another browser changes the setting. The real snapshot loader reads
+        # it after rendering the switch, matching the full app's execution order.
+        remote_enabled = not initial_enabled
+        app.session_state._stored["_preset_configs"]["KMW2"][FLAG] = remote_enabled
+        app.run(timeout=20)
+        assert not app.exception
+        assert app.session_state.kmw2_preset[FLAG] is remote_enabled
+        app.run(timeout=20)
+        assert not app.exception
+        assert app.toggle[0].value is remote_enabled
+        assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is remote_enabled
+        assert "save_attempts" not in app.session_state
+        expected = deepcopy(before)
+        expected["_preset_configs"]["KMW2"][FLAG] = remote_enabled
+        assert app.session_state._stored == expected
+
+        # An actual user click remains a save request after synchronization.
+        app.toggle[0].set_value(initial_enabled).run(timeout=20)
+        assert not app.exception
+        assert app.toggle[0].value is initial_enabled
+        assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is initial_enabled
+        assert app.session_state.save_attempts == app.session_state.save_count == 1
+        assert app.session_state._stored["KMW2"]["atr70_r2"] == before["KMW2"]["atr70_r2"]
+        app.run(timeout=20)
+        assert not app.exception
+        assert app.session_state.save_attempts == 1
+
+
+
+@pytest.mark.parametrize("initial_enabled", [False, True])
+def test_failed_switch_click_restores_selection_without_retrying_on_rerun(initial_enabled):
+    from streamlit.testing.v1 import AppTest
+    with patch("kmw_order_plan.build_kmw_plan", side_effect=ValueError("Data unavailable")):
+        app = AppTest.from_string(component_script(
+            running=True, enabled=initial_enabled, real_snapshot_loader=True)).run(timeout=20)
+        assert not app.exception
+        before = deepcopy(app.session_state._stored)
+        app.session_state._save_error = "Synthetic save failure"
+        app.toggle[0].set_value(not initial_enabled).run(timeout=20)
+        assert not app.exception
+        assert app.toggle[0].value is initial_enabled
+        assert app.session_state.kmw2_preset[FLAG] is initial_enabled
+        assert app.session_state._stored == before
+        assert app.session_state.save_attempts == 1
+        assert "save_count" not in app.session_state
+        assert any("설정을 저장하지 못해 기존 선택을 유지합니다" in error.value for error in app.error)
+        app.run(timeout=20)
+        assert not app.exception
+        assert app.toggle[0].value is initial_enabled
+        assert app.session_state.save_attempts == 1
+        assert app.session_state._stored == before
+
+        # Recovery still requires an explicit new click.
+        del app.session_state._save_error
+        app.toggle[0].set_value(not initial_enabled).run(timeout=20)
+        assert not app.exception
+        assert app.toggle[0].value is not initial_enabled
+        assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is not initial_enabled
+        assert app.session_state.save_attempts == 2
+        assert app.session_state.save_count == 1
+        assert app.session_state._stored["KMW2"]["atr70_r2"] == before["KMW2"]["atr70_r2"]

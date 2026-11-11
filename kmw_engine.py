@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import date, datetime, time as clock_time, timedelta
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ import threading
 import time
 from typing import Callable
 
-from kmw_autotrade import ET, KST, ROOT, next_run
+from kmw_autotrade import ET, KST, ROOT
 from kmw_order_plan import SUPPORTED_PRESETS
 from us_market_calendar import is_us_equity_trading_day
 
@@ -31,6 +32,25 @@ def validate_time(at: str) -> str:
     if not isinstance(at, str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", at):
         raise EngineStateError("주문 시간은 한국시간 HH:MM 형식으로 입력하세요.")
     return at
+
+
+def validate_effective_date(value: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        raise EngineStateError("변경 시작일은 YYYY-MM-DD 형식으로 입력하세요.")
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        raise EngineStateError("변경 시작일을 확인하세요.") from None
+    return value
+
+
+def validate_time_change(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"effective_date", "at"}:
+        raise EngineStateError("예약된 주문 시간 변경을 확인하세요.")
+    return {"effective_date": validate_effective_date(value["effective_date"]),
+            "at": validate_time(value["at"])}
 
 
 def review_id(plan: dict | None) -> str | None:
@@ -69,7 +89,8 @@ class KMWEngine:
 
     def _read_state(self):
         default = {"version": 1, "preset": self.preset, "enabled": False, "at": "17:01", "phase": "INACTIVE",
-                   "plan": None, "last_run": None, "scheduled_days": [], "events": []}
+                   "plan": None, "last_run": None, "scheduled_days": [], "events": [],
+                   "scheduled_time_change": None}
         if not self.state_file.exists():
             return default
         try:
@@ -81,6 +102,7 @@ class KMWEngine:
             if type(saved.get("enabled")) is not bool:
                 raise ValueError()
             validate_time(saved.get("at"))
+            validate_time_change(saved.get("scheduled_time_change"))
             if not isinstance(saved.get("scheduled_days"), list) or not isinstance(saved.get("events"), list):
                 raise ValueError()
             default.update({key: saved[key] for key in default if key in saved})
@@ -111,17 +133,55 @@ class KMWEngine:
         events = self._state["events"][-49:] + [{"at": self.clock().isoformat(), "text": text}]
         self._commit(events=events, **changes)
 
+    def _schedule_at(self, day):
+        change = self._state["scheduled_time_change"]
+        if change is not None and day.isoformat() >= change["effective_date"]:
+            return change["at"]
+        return self._state["at"]
+
+
+    def _roll_time_change(self, now):
+        """A wake from sleep cannot dispatch an old time after the change."""
+        change = self._state["scheduled_time_change"]
+        if change is None:
+            return
+        local = now.astimezone(KST)
+        effective = date.fromisoformat(change["effective_date"])
+        if local.date() >= effective and self._next.astimezone(KST).date() < effective:
+            start = datetime.combine(local.date(), clock_time.min, tzinfo=KST) - timedelta(microseconds=1)
+            self._next = self._next_target(start)
+
+
     def _next_target(self, now):
-        at = datetime.strptime(self._state["at"], "%H:%M").time()
-        target = next_run(now, at)
-        # Retiming or restarting cannot repeat an automatic session already tried.
-        while (not is_us_equity_trading_day(target.astimezone(ET).date())
-               or target.astimezone(ET).date().isoformat() in self._state["scheduled_days"]):
-            target += timedelta(days=1)
-        return target
+        local = now.astimezone(KST)
+        day = local.date()
+        while True:
+            at = datetime.strptime(self._schedule_at(day), "%H:%M").time()
+            target = datetime.combine(day, at, tzinfo=KST)
+            session = target.astimezone(ET).date()
+            # Resolve each day's time before classifying its actual US session.
+            if (target > local and is_us_equity_trading_day(session)
+                    and session.isoformat() not in self._state["scheduled_days"]):
+                return target
+            day += timedelta(days=1)
+
+
+    def _r2_not_before(self, now):
+        session = now.astimezone(ET).date()
+        target_day = session
+        at = datetime.strptime(self._schedule_at(target_day), "%H:%M").time()
+        target = datetime.combine(session, at, tzinfo=KST)
+        if target.astimezone(ET).date() < session:
+            target_day += timedelta(days=1)
+            at = datetime.strptime(self._schedule_at(target_day), "%H:%M").time()
+            target = datetime.combine(target_day, at, tzinfo=KST)
+        premarket = datetime.combine(session, clock_time(4), tzinfo=ET)
+        return max(target, premarket)
 
     def status(self):
         with self._lock:
+            now = self.clock().astimezone(KST)
+            self._roll_time_change(now)
             state = deepcopy(self._state)
             account_ready = True
             if callable(getattr(type(self.backend), "validate_account_configuration", None)):
@@ -129,19 +189,33 @@ class KMWEngine:
                     account_ready = self.backend.validate_account_configuration().get("ready") is True
                 except Exception:
                     account_ready = False
-            state.update(running=self._running, timezone="Asia/Seoul",
+            change = state["scheduled_time_change"]
+            state.update(at=self._schedule_at(now.date()),
+                         pending_time_change=deepcopy(change) if change and now.date().isoformat() < change["effective_date"] else None,
+                         running=self._running, timezone="Asia/Seoul",
                          preset=self.preset, account_ready=account_ready,
                          next_run=self._next.isoformat() if state["enabled"] else None,
                          review_id=review_id(state["plan"]), broker_status=deepcopy(self._broker_status))
             return state
 
-    def configure(self, at):
+    def configure(self, at, *, effective_date=None):
         at = validate_time(at)
+        if effective_date is not None:
+            effective_date = validate_effective_date(effective_date)
         with self._lock:
-            self._event(f"주문 시간을 한국시간 {at}로 저장했습니다.", at=at)
+            today = self.clock().astimezone(KST).date()
+            if effective_date is not None:
+                if effective_date <= today.isoformat():
+                    raise EngineStateError("변경 시작일은 오늘 이후로 지정하세요.")
+                change = {"effective_date": effective_date, "at": at}
+                self._event(f"{effective_date}부터 주문 시간을 한국시간 {at}로 변경하도록 예약했습니다.",
+                            at=self._schedule_at(today), scheduled_time_change=change)
+            else:
+                self._event(f"주문 시간을 한국시간 {at}로 저장했습니다.", at=at, scheduled_time_change=None)
             self._next = self._next_target(self.clock())
         self._wake.set()
         return self.status()
+
 
     def enable(self):
         if callable(getattr(type(self.backend), "validate_account_configuration", None)):
@@ -268,12 +342,17 @@ class KMWEngine:
         now = now or self.clock()
         if self.preset == "KMW2" and callable(getattr(type(self.backend), "mixed_tick", None)):
             with self._lock:
+                self._roll_time_change(now)
                 enabled = self._state["enabled"] and not self._stop.is_set()
                 generation = self._generation
+                r2_not_before = self._r2_not_before(now)
             if enabled and self._run_lock.acquire(blocking=False):
                 try:
+                    options = {}
+                    if "r2_not_before" in inspect.signature(self.backend.mixed_tick).parameters:
+                        options["r2_not_before"] = r2_not_before
                     result = self.backend.mixed_tick(now=now,
-                        should_continue=lambda: self._may_continue(generation))
+                        should_continue=lambda: self._may_continue(generation), **options)
                     if result.get("handled"):
                         if result.get("orders") or result.get("state") in {"BLOCKED", "UNKNOWN"}:
                             with self._lock:
@@ -288,6 +367,7 @@ class KMWEngine:
                 finally:
                     self._run_lock.release()
         with self._lock:
+            self._roll_time_change(now)
             due = self._state["enabled"] and now >= self._next
         if due:
             try:

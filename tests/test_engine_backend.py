@@ -82,6 +82,37 @@ def setup_backend(tmp_path, monkeypatch):
     return engine, client, notifier, create_client
 
 
+def test_mixed_backend_passes_aware_r2_start_to_runtime_without_submitting(tmp_path, monkeypatch):
+    import atr70_r2_adapter
+    import atr70_r2_runtime
+
+    store = Mock()
+    store.read.return_value = {"state": {"phase": "ACTIVE"}, "enabled": True}
+    feed = Mock()
+    feed.latest.return_value = None
+    runtime = Mock(return_value={"handled": True, "state": "WAITING", "orders": []})
+    monkeypatch.setattr(atr70_r2_adapter, "MixedSnapshotStore", Mock(return_value=store))
+    monkeypatch.setattr(atr70_r2_runtime, "MeritzTradeFeed", Mock(return_value=feed))
+    monkeypatch.setattr(atr70_r2_runtime, "run_mixed_tick", runtime)
+    client = broker()
+    monkeypatch.setattr(backend_module.MeritzClient, "from_env", Mock(return_value=client))
+    instant = datetime(2026, 11, 12, 14, tzinfo=ZoneInfo("Asia/Seoul"))
+    target = instant.replace(hour=18, minute=2)
+    backend = KMWBackend(env_file=None, ledger_path=tmp_path / "mixed.sqlite3", preset="KMW2", clock=lambda: instant)
+    backend._load_credentials = lambda: {
+        "MERITZ_ACCOUNT_PRESET": "KMW2", "MERITZ_APP_KEY": "fake-key",
+        "MERITZ_APP_SECRET": "fake-secret", "MERITZ_MAC_ADDRESS": "001122334455",
+        "MERITZ_SOXL_EXCHANGE_CODE": "0066",
+    }
+    result = backend.mixed_tick(now=instant, r2_not_before=target, force=True)
+    assert result["state"] == "WAITING"
+    assert runtime.call_args.args[2]["r2_not_before"] == "2026-11-12T18:02:00+09:00"
+    feed.start.assert_called_once()
+    client.submit_order.assert_not_called()
+    client.submit_mixed_order.assert_not_called()
+    backend.close()
+
+
 def ledger_rows(engine):
     ledger = OrderLedger(engine.ledger_path)
     try:

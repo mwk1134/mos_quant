@@ -5,11 +5,9 @@ of truth; the legacy backtest must never reconstruct its positions or cash.
 """
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_FLOOR
-import io
 import re
 
 import pandas as pd
@@ -94,11 +92,19 @@ def _frame_rows(frame):
 def load_market_rows(now, basis_date):
     """Keep the same full-history anchor for Wilder on every execution day."""
     from kmw_order_plan import _KMWPlanTrader
-    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-        provider = _KMWPlanTrader(now=now, expected_basis_date=date.fromisoformat(basis_date), initial_capital=1)
-        soxl = provider.get_stock_data("SOXL", "max")
-        qqq = provider.get_stock_data("QQQ", "max")
-    return _validated_rows(_frame_rows(soxl), basis_date), _validated_rows(_frame_rows(qqq), basis_date)
+    provider = _KMWPlanTrader(now=now, expected_basis_date=date.fromisoformat(basis_date), initial_capital=1)
+    # This existing path first requests period1=0 with interval=1d.
+    # Yahoo can silently return monthly candles for range=max.
+    soxl = provider.get_stock_data("SOXL", "15y")
+    qqq = provider.get_stock_data("QQQ", "15y")
+    daily, qqq_daily = _validated_rows(_frame_rows(soxl), basis_date), _validated_rows(_frame_rows(qqq), basis_date)
+    # The provider can fall back to shorter ranges, and its shared cache can
+    # also contain them. A changed Wilder seed or stateful RSI mode history
+    # must stop new entries rather than silently change the strategy.
+    for symbol, rows, anchor in (("SOXL", daily, "2010-03-11"), ("QQQ", qqq_daily, "1999-03-10")):
+        if rows[0]["date"] != anchor:
+            raise ValueError(f"Incomplete {symbol} daily history; expected {anchor} anchor")
+    return daily, qqq_daily
 
 
 def r2_market_context(qqq_rows, session_date):

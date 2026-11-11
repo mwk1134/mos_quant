@@ -1,13 +1,16 @@
 """Offline integration at the legacy/mixed boundary and atomic state store."""
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
+import pandas as pd
 import pytest
 
 import atr70_r2 as core
 import atr70_r2_adapter as adapter
+import soxl_quant_system as strategy
 from kmw_order_plan import _KMWPlanTrader, build_kmw_plan
 from preset_snapshot_refresh import SnapshotRefreshBlocked, refresh_preset_snapshot
 from tests.test_kmw_order_plan import NOW, recommendation, two_preset_snapshots
@@ -107,6 +110,75 @@ def test_market_history_requires_every_completed_session_and_exact_basis():
     for changed in (valid[:-1], valid[:30] + valid[31:], valid + [valid[-1]]):
         with pytest.raises(ValueError):
             adapter._validated_rows(changed, "2026-10-09")
+
+
+@pytest.fixture(scope="module")
+def full_daily_histories():
+    histories = {}
+    for symbol, anchor in (("SOXL", "2010-03-11"), ("QQQ", "1999-03-10")):
+        sessions = pd.DatetimeIndex([day for day in pd.date_range(anchor, "2026-10-09")
+                                    if is_us_equity_trading_day(day.date())])
+        prices = [50 + index * .01 for index in range(len(sessions))]
+        histories[symbol] = pd.DataFrame({"Open": prices, "High": [price + 1 for price in prices],
+            "Low": [price - 1 for price in prices], "Close": prices, "Volume": 1000000}, index=sessions)
+    return histories
+
+
+def _yahoo_daily_payload(frame, granularity="1d"):
+    return {"chart": {"result": [{"meta": {"dataGranularity": granularity},
+        "timestamp": [int(stamp.tz_localize("America/New_York").replace(hour=9, minute=30).timestamp())
+                      for stamp in frame.index],
+        "indicators": {"quote": [{column.lower(): frame[column].tolist() for column in frame}]}}]}}
+
+
+def test_market_loader_uses_full_daily_dates_when_max_returns_monthly(full_daily_histories):
+    calls = []
+
+    def fake_get(url, **kwargs):
+        assert url.startswith(("https://query1.finance.yahoo.com/v8/finance/chart/",
+                               "https://query2.finance.yahoo.com/v8/finance/chart/"))
+        symbol = url.rsplit("/", 1)[-1]
+        params = kwargs["params"]
+        calls.append((symbol, deepcopy(params)))
+        frame = full_daily_histories[symbol]
+        monthly = params.get("range") == "max"
+        response = Mock(status_code=200)
+        response.json.return_value = _yahoo_daily_payload(frame.iloc[::21] if monthly else frame,
+                                                         "1mo" if monthly else "1d")
+        return response
+
+    saved, github = store(document(active_state()), loader=adapter.load_market_rows)
+    with patch.dict(strategy._SHARED_STOCK_DATA_CACHE, {}, clear=True), \
+            patch.dict(strategy._SHARED_STOCK_DATA_RETRY_AFTER, {}, clear=True), \
+            patch("requests.get", side_effect=fake_get), \
+            patch("requests.Session.request", side_effect=AssertionError("No real transport")), \
+            patch("requests.put", side_effect=AssertionError("No account writes")), \
+            patch("soxl_quant_system.time.sleep"):
+        context = saved.read(NOW)
+
+    assert "market_error" not in context
+    assert {symbol for symbol, _ in calls} == {"SOXL", "QQQ"}
+    assert all(params.get("period1") == 0 and params.get("period2") and params["interval"] == "1d"
+               for _, params in calls)
+    for symbol, key in (("SOXL", "daily_rows"), ("QQQ", "qqq_rows")):
+        assert [row["date"] for row in context[key]] == full_daily_histories[symbol].index.strftime("%Y-%m-%d").tolist()
+    assert any(order["side"] == "BUY" for order in context["r2_orders"])
+    assert github.writes == []
+
+
+@pytest.mark.parametrize("shortened_symbol", ["SOXL", "QQQ"])
+def test_market_loader_rejects_a_shortened_full_history_anchor(full_daily_histories, shortened_symbol):
+    frames = dict(full_daily_histories)
+    frames[shortened_symbol] = frames[shortened_symbol].iloc[1:]
+
+    def get_history(provider, symbol, period):
+        assert period == "15y"
+        return frames[symbol]
+
+    with patch.object(_KMWPlanTrader, "get_stock_data", autospec=True, side_effect=get_history), \
+            patch("requests.get", side_effect=AssertionError("No network")):
+        with pytest.raises(ValueError, match=f"Incomplete {shortened_symbol} daily history"):
+            adapter.load_market_rows(NOW, "2026-10-09")
 
 
 def test_r2_rules_use_completed_data_and_frozen_entry_exit():
@@ -262,3 +334,96 @@ def test_atr_exit_preview_after_moo_cutoff_uses_market_and_never_recommends_dupl
     atr_rows = plan["strategy_order_tables"]["ATR"]["orders"]
     assert any(order["side"] == "SELL" and order["order_type"] == "MARKET" for order in atr_rows)
     assert not any(order["side"] == "BUY" for order in atr_rows)
+
+
+@pytest.mark.parametrize("hour,minute,basis,expected_rows", [
+    (12, 59, "2026-11-25", 1),
+    (13, 1, "2026-11-27", 2),
+])
+def test_plan_provider_keeps_completed_early_close_bar_and_drops_partial_bar(hour, minute, basis, expected_rows):
+    frame = pd.DataFrame({"Open": [100., 101.], "High": [102., 103.], "Low": [99., 100.],
+                          "Close": [101., 102.], "Volume": [1000000, 1000000]},
+                         index=pd.to_datetime(["2026-11-25", "2026-11-27"]))
+    response = Mock(status_code=200)
+    response.json.return_value = _yahoo_daily_payload(frame)
+    now = datetime(2026, 11, 27, hour, minute, tzinfo=ZoneInfo("America/New_York"))
+    provider = _KMWPlanTrader(now=now, expected_basis_date=date.fromisoformat(basis), initial_capital=1)
+    with patch.dict(strategy._SHARED_STOCK_DATA_CACHE, {}, clear=True), \
+            patch.dict(strategy._SHARED_STOCK_DATA_RETRY_AFTER, {}, clear=True), \
+            patch("requests.get", return_value=response), \
+            patch("requests.Session.request", side_effect=AssertionError("No real transport")):
+        result = provider.get_stock_data("SOXL", "15y")
+    pd.testing.assert_frame_equal(result, frame.iloc[:expected_rows], check_names=False)
+
+
+def test_plan_provider_basis_cutoff_excludes_provider_future_bar_without_mutating_input():
+    frame = pd.DataFrame({"Close": [100., 101., 999.]},
+                         index=pd.to_datetime(["2026-11-25", "2026-11-27", "2026-11-30"]))
+    before = frame.copy(deep=True)
+    provider = _KMWPlanTrader(now=datetime(2026, 11, 27, 13, 1, tzinfo=ZoneInfo("America/New_York")),
+                              expected_basis_date=date(2026, 11, 27), initial_capital=1)
+    pd.testing.assert_frame_equal(provider._drop_unfinished_daily_bar(frame), frame.iloc[:2])
+    pd.testing.assert_frame_equal(frame, before)
+
+
+def test_pending_r2_buy_keeps_semantic_identity_when_reserved_cash_changes_quantity():
+    from kmw_order_plan import next_trading_date, previous_trading_date
+
+    state = core.initial_state(session_date="2026-11-05", broker_cash="80000", broker_shares=0,
+                               open_order_count=0, broker_confirmed=True, fee_rate="0.005")
+    entries = [("2026-11-05", 19), ("2026-11-06", 50), ("2026-11-09", 91),
+               ("2026-11-10", 102), ("2026-11-11", 11)]
+    for round_number, (session, quantity) in enumerate(entries, 1):
+        day = date.fromisoformat(session)
+        raw = {"side": "BUY", "quantity": quantity, "price": "100", "order_type": "LOC",
+               "round": round_number, "lot_id": "R2:" + session, "frozen_rules": core.r2_rules("SF", True)}
+        intent = core.build_runtime_plan(state, session_date=session,
+            previous_session=previous_trading_date(day).isoformat(), next_session=next_trading_date(day).isoformat(),
+            r2_orders=[raw])["orders"][0]
+        broker_id = str(round_number)
+        state = core.register_order(state, intent, broker_id)
+        state = core.reconcile_fills(state, [{"order_id": intent["intent_id"], "broker_order_id": broker_id,
+            "cumulative_quantity": quantity, "cumulative_notional": str(quantity * 100),
+            "cumulative_fee": str(Decimal(quantity * 100) * Decimal("0.005")), "status": "FILLED"}])
+    state = core.advance_r2_session(state, "2026-11-12")
+    daily = rows("2026-11-11")
+    first_raw = adapter.build_r2_orders(state, session_date="2026-11-12", daily_rows=daily, qqq_rows=daily)
+    first = core.build_runtime_plan(state, session_date="2026-11-12", previous_session="2026-11-11",
+                                    next_session="2026-11-13", r2_orders=first_raw)
+    buy = next(order for order in first["orders"] if order["side"] == "BUY")
+    state = core.register_order(state, buy, "91")
+    second_raw = adapter.build_r2_orders(state, session_date="2026-11-12", daily_rows=daily, qqq_rows=daily)
+    smaller_buy = next(order for order in second_raw if order["side"] == "BUY")
+    assert 0 < smaller_buy["quantity"] < buy["quantity"]
+    second = core.build_runtime_plan(state, session_date="2026-11-12", previous_session="2026-11-11",
+                                     next_session="2026-11-13", r2_orders=second_raw)
+    assert not any(order["side"] == "BUY" for order in second["orders"])
+
+
+def test_partial_r2_exit_is_not_resubmitted_with_a_smaller_same_day_quantity():
+    state = active_state()
+    raw = {"side": "BUY", "quantity": 5, "price": "100", "order_type": "LOC", "round": 1,
+           "lot_id": "R2:2026-10-09", "frozen_rules": core.r2_rules("SF", True)}
+    buy = core.build_runtime_plan(state, session_date="2026-10-09", previous_session="2026-10-08",
+                                 next_session="2026-10-12", r2_orders=[raw])["orders"][0]
+    state = core.register_order(state, buy, "11")
+    state = core.reconcile_fills(state, [{"order_id": buy["intent_id"], "broker_order_id": "11",
+        "cumulative_quantity": 5, "cumulative_notional": "500", "cumulative_fee": "2.5", "status": "FILLED"}])
+    raw_exits = adapter.build_r2_exit_orders(state, session_date="2026-10-12")
+    sell = core.build_runtime_plan(state, session_date="2026-10-12", previous_session="2026-10-09",
+                                  next_session="2026-10-13", r2_orders=raw_exits)["orders"][0]
+    state = core.register_order(state, sell, "21")
+    state = core.reconcile_fills(state, [{"order_id": sell["intent_id"], "broker_order_id": "21",
+        "cumulative_quantity": 2, "cumulative_notional": "206", "cumulative_fee": "1.03", "status": "OPEN"}])
+    remaining_exits = adapter.build_r2_exit_orders(state, session_date="2026-10-12")
+    assert remaining_exits[0]["quantity"] == 3
+    for status in ("OPEN", "CANCELLED"):
+        state = core.mark_order(state, sell["intent_id"], status=status)
+        plan = core.build_runtime_plan(state, session_date="2026-10-12", previous_session="2026-10-09",
+                                       next_session="2026-10-13", r2_orders=remaining_exits)
+        assert not plan["orders"]
+    next_day_exits = adapter.build_r2_exit_orders(state, session_date="2026-10-13")
+    plan = core.build_runtime_plan(state, session_date="2026-10-13", previous_session="2026-10-12",
+                                   next_session="2026-10-14", r2_orders=next_day_exits)
+    assert len(plan["orders"]) == 1 and plan["orders"][0]["quantity"] == 3
+    assert plan["orders"][0]["intent_id"] != sell["intent_id"]

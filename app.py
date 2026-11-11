@@ -1243,9 +1243,8 @@ def auto_save_all_preset_snapshots_if_needed(current_snapshot: dict, ttl_seconds
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
     all_data, sha = _gh_load_all_snapshots()
-    if not all_data:
-        all_data = getattr(st.session_state, '_gh_snapshot_all', None) or {}
-        sha = getattr(st.session_state, '_gh_snapshot_sha', None)
+    if not isinstance(all_data, dict) or not all_data or not isinstance(sha, str) or not sha:
+        return False, "전체 프리셋의 최신 원본과 버전을 확인하지 못해 저장을 중단했습니다. 다시 불러온 뒤 시도해 주세요."
     previous_snapshot = (all_data or {}).get(preset_name, {})
     if not _broker_snapshot_write_allowed(snapshot, previous_snapshot):
         return False, "실제 체결 기록 또는 보유내역 반영일이 맞지 않습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
@@ -1257,6 +1256,8 @@ def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     ok, err = _gh_save_all_snapshots(all_data, sha)
     if not ok and "GitHub API" in str(err) and "(409)" in str(err):
         latest_data, latest_sha = _gh_load_all_snapshots()
+        if not isinstance(latest_data, dict) or not latest_data or not isinstance(latest_sha, str) or not latest_sha:
+            return False, "전체 프리셋의 최신 원본과 버전을 확인하지 못해 저장을 중단했습니다. 다시 불러온 뒤 시도해 주세요."
         latest_previous = (latest_data or {}).get(preset_name, {})
         if not _broker_snapshot_write_allowed(snapshot, latest_previous):
             return False, "실제 체결 기록 또는 보유내역 반영일이 맞지 않습니다. 프리셋을 다시 열어 최신 상태를 확인하세요."
@@ -1616,6 +1617,37 @@ def _atr70_r2_ui_selected(snapshot=None) -> bool:
     if snapshot is None:
         snapshot = st.session_state.get("positions_snapshot") or {}
     return bool(preset.get("atr70_r2_mix_enabled", False) or "atr70_r2" in snapshot)
+
+
+def _atr70_r2_live_start(snapshot):
+    """Read the confirmed mixed ledger's starting capital and session."""
+    state = snapshot.get(ATR70_R2_STATE_KEY) if isinstance(snapshot, dict) else None
+    if not isinstance(state, dict) or state.get("phase") != "ACTIVE":
+        return None
+    try:
+        started = state["activated_session"]
+        if datetime.strptime(started, "%Y-%m-%d").strftime("%Y-%m-%d") != started:
+            return None
+        if isinstance(state["initial_cash"], bool):
+            return None
+        capital = Decimal(str(state["initial_cash"]))
+        if not capital.is_finite() or capital <= 0:
+            return None
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        return None
+    return float(capital), started
+
+
+def _atr70_r2_waiting_message(snapshot):
+    legacy_held = any(
+        re.fullmatch(r"[1-9][0-9]*_\d{4}-\d{2}-\d{2}", key)
+        and isinstance(lot, dict) and lot.get("shares", 0)
+        for key, lot in snapshot.items()
+    )
+    if legacy_held:
+        return "기존 보유분 전량 매도 대기 · 신규 매수 중단"
+    return "실계좌 시작 조건 확인 대기 · 신규 매수 중단"
+
 
 def _snapshot_position_keys(snapshot: dict) -> list:
     keys = []
@@ -2098,39 +2130,44 @@ def show_atr70_r2_preference_control():
     if feedback:
         (st.success if feedback[0] else st.error)(feedback[1])
     toggle_key = "atr70_r2_opt_in_kmw2"
-    pending = st.session_state.pop("_atr70_r2_widget_sync", None)
-    if pending is not None:
-        st.session_state[toggle_key] = bool(pending)
-    if toggle_key not in st.session_state:
-        st.session_state[toggle_key] = enabled
-    selected = st.toggle(
+
+    def save_selected_setting():
+        selected = bool(st.session_state[toggle_key])
+        ok, err = save_preset_atr70_r2_setting("KMW2", selected)
+        if ok:
+            message = "KMW2 혼합매매 전환을 예약했습니다. 기존 보유분 전량 매도 확인 전에는 혼합 매수를 시작하지 않습니다." if selected else "혼합매매 신규 매수를 중단했습니다. 기존 혼합 보유분의 매도 관리는 계속합니다."
+            st.session_state.trader = None
+        else:
+            st.session_state[toggle_key] = bool(
+                (st.session_state.get("kmw2_preset") or {}).get(ATR70_R2_SWITCH_KEY, False)
+            )
+            message = f"설정을 저장하지 못해 기존 선택을 유지합니다: {err}"
+        st.session_state._atr70_r2_save_feedback = (ok, message)
+
+    # A remote change is display synchronization, not a request to write the
+    # widget's previous value back. Streamlit runs on_change before this render.
+    st.session_state[toggle_key] = enabled
+    st.toggle(
         "반반매매 (ATR70-R2) 적용",
         key=toggle_key,
+        on_change=save_selected_setting,
         help="기존 보유분은 원래 매도 규칙으로 관리하고 신규 매수를 중단합니다. 실제 전량 매도와 미체결 해소를 확인한 후 ATR70·정배열 R2에 각각 50%를 배분합니다.",
     )
     st.caption("ATR70 50% + 정배열 R2 50% · 월초 비중조정 · KMW2 전용")
     mixed_state = snapshot.get("atr70_r2")
     if isinstance(mixed_state, dict) and mixed_state.get("phase") == "WAITING_FLAT":
-        st.warning("기존 보유분 전량 매도 대기 · 신규 매수 중단. 실제 잔고 0주와 미체결 해소를 확인한 뒤 혼합 전략을 시작합니다.")
+        st.warning(_atr70_r2_waiting_message(snapshot))
+        st.caption("실제 SOXL 잔고 0주·미체결 및 활성 예약 없음·USD 예수금과 추정 예수금 일치를 확인한 뒤 시작합니다.")
     elif "atr70_r2" in snapshot:
         if enabled:
             st.info("혼합 전략 관리 중입니다. ATR 돌파 매수와 익일 시가 청산, R2 종가 주문을 각 전략의 자금으로 관리합니다.")
         else:
             st.warning("혼합매매 신규 매수 중단 · 기존 혼합 보유분의 청산 관리는 유지합니다. 기존 동파법으로 자동 복귀하지 않습니다.")
     elif enabled:
-        st.warning("기존 보유분 전량 매도 대기 · 신규 매수 중단. 실제 잔고 0주와 미체결 해소를 확인한 뒤 혼합 전략을 시작합니다.")
+        st.warning(_atr70_r2_waiting_message(snapshot))
+        st.caption("실제 SOXL 잔고 0주·미체결 및 활성 예약 없음·USD 예수금과 추정 예수금 일치를 확인한 뒤 시작합니다.")
     else:
         st.caption("스위치를 켜면 기존 보유분 매도를 기다립니다. 자동매매 엔진의 활성화 상태는 별도로 유지됩니다.")
-    if bool(selected) != enabled:
-        ok, err = save_preset_atr70_r2_setting("KMW2", bool(selected))
-        st.session_state._atr70_r2_widget_sync = bool(selected) if ok else enabled
-        if ok:
-            message = "KMW2 혼합매매 전환을 예약했습니다. 기존 보유분 전량 매도 확인 전에는 혼합 매수를 시작하지 않습니다." if selected else "혼합매매 신규 매수를 중단했습니다. 기존 혼합 보유분의 매도 관리는 계속합니다."
-        else:
-            message = f"설정을 저장하지 못해 기존 선택을 유지합니다: {err}"
-        st.session_state._atr70_r2_save_feedback = (ok, message)
-        st.session_state.trader = None
-        st.rerun()
 
 
 
@@ -2141,18 +2178,30 @@ def show_mobile_settings():
     <div class="mobile-settings-panel">
     """, unsafe_allow_html=True)
     
+    display_capital = st.session_state.initial_capital
+    display_start = st.session_state.session_start_date
+    live_start = None
+    if st.session_state.get("active_preset") == "KMW2" and _atr70_r2_ui_selected():
+        preset = st.session_state.get("kmw2_preset") or {}
+        display_capital = preset.get("initial_capital", display_capital)
+        display_start = preset.get("session_start_date", display_start)
+        live_start = _atr70_r2_live_start(st.session_state.get("positions_snapshot"))
+        if live_start:
+            display_capital, display_start = live_start
+    settings_readonly = _atr70_r2_ui_selected() or st.session_state.get("active_preset") == "KMW3"
+
     # 투자원금 설정
     initial_capital = st.number_input(
         "💰 초기 투자금 (달러)",
         min_value=1000.0,
         max_value=1000000.0,
-        value=float(st.session_state.initial_capital),
+        value=float(display_capital),
         step=1000.0,
-        format="%.0f",
-        disabled=_atr70_r2_ui_selected() or st.session_state.get("active_preset") == "KMW3",
+        format="%.2f" if _atr70_r2_ui_selected() else "%.0f",
+        disabled=settings_readonly,
     )
     
-    if initial_capital != st.session_state.initial_capital:
+    if not settings_readonly and initial_capital != st.session_state.initial_capital:
         st.session_state.initial_capital = initial_capital
         st.session_state.positions_snapshot = {}
         if st.session_state.get('active_preset'):
@@ -2164,14 +2213,14 @@ def show_mobile_settings():
     
     # 시작일 설정
     # session_state에 값이 있으면 사용, 없으면 기본값
-    default_start_date = datetime.strptime(st.session_state.session_start_date, '%Y-%m-%d') if st.session_state.session_start_date else datetime(2025, 8, 27)
+    default_start_date = datetime.strptime(display_start, '%Y-%m-%d') if display_start else datetime(2025, 8, 27)
     
     # 날짜 입력
     session_start_date = st.date_input(
         "📅 투자 시작일",
         value=default_start_date,
         max_value=datetime.now(),
-        disabled=_atr70_r2_ui_selected() or st.session_state.get("active_preset") == "KMW3",
+        disabled=settings_readonly,
     )
     
     # 프리셋별 투자 설정과 전략을 함께 불러온다.
@@ -2211,7 +2260,7 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
     with pr_col3:
-        if st.button("KMW2", help="초기설정: 67612달러, 시작일 2026/04/29", use_container_width=True):
+        if st.button("KMW2", help="KMW2의 저장된 설정과 실계좌 보유분 불러오기", use_container_width=True):
             kmw2 = st.session_state.kmw2_preset
             st.session_state.initial_capital = kmw2['initial_capital']
             st.session_state.session_start_date = kmw2['session_start_date']
@@ -2800,10 +2849,14 @@ def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
         ma_alignment_placeholder.info("KMW2 반반매매 (ATR70-R2) · R2 정배열 판단은 혼합 전략에서 관리합니다.")
     enabled = bool((st.session_state.get("kmw2_preset") or {}).get(ATR70_R2_SWITCH_KEY, False))
     state = snapshot.get(ATR70_R2_STATE_KEY)
-    st.subheader("🔀 ATR70 50% + 정배열 R2 50%")
+    st.subheader("🔀 KMW2 · 반반매매 (ATR70-R2)")
+    live_start = _atr70_r2_live_start(snapshot)
+    if live_start:
+        capital, started = live_start
+        st.caption(f"실계좌 운용 시작일 {started} · 시작자금 ${capital:,.2f} · ATR70 50% + R2 50%")
     if state is None or (isinstance(state, dict) and state.get("phase") == "WAITING_FLAT"):
-        st.warning("기존 보유분 전량 매도 대기 · 신규 매수 중단")
-        st.write("기존 포지션은 원래 매도 조건을 유지합니다. 자동매매 엔진이 실제 잔고 0주와 미체결 해소를 확인한 뒤 운용자금을 반반 배분합니다.")
+        st.warning(_atr70_r2_waiting_message(snapshot))
+        st.write("자동매매 엔진이 실제 SOXL 잔고 0주·미체결 및 활성 예약 없음·USD 예수금과 추정 예수금 일치를 확인한 뒤 운용자금을 반반 배분합니다.")
         rows = [{"회차": value.get("round"), "매수일": key.split("_", 1)[1],
                  "수량": value.get("shares"), "매수가": value.get("buy_price"),
                  "매도 조건": "기존 목표가·보유기한 유지"}
