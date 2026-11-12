@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, InvalidOperation
 import json
 import threading
 from zoneinfo import ZoneInfo
@@ -210,6 +210,45 @@ def _broker_cash(client):
     return str(actual)
 
 
+def _activation_funds(client, state, *, session_date):
+    """Verify the requested USD funding and return its cap and outside surplus."""
+    activation_request = state.get("activation_request") if state is not None else None
+    requested_cash = None
+    if state is not None and "activation_request" in state:
+        try:
+            if (not isinstance(activation_request, dict)
+                    or activation_request.get("funding_policy") not in {"FULL_SETTLED", "USD_BUYING_POWER_CAP"}):
+                raise ValueError
+            requested_session = activation_request["session_date"]
+            if date.fromisoformat(requested_session).isoformat() != requested_session:
+                raise ValueError
+            requested_cash = _money(activation_request["initial_cash"], positive=True)
+        except (KeyError, TypeError, ValueError, MixedBlocked):
+            raise MixedBlocked("INVALID_ACTIVATION_REQUEST", "반반매매 시작일·초기원금·자금 정책을 확인하세요.") from None
+        if date.fromisoformat(session_date) < date.fromisoformat(requested_session):
+            raise MixedBlocked("ACTIVATION_NOT_STARTED", "요청한 미국 거래일부터 반반매매를 시작합니다.")
+        if activation_request["funding_policy"] == "USD_BUYING_POWER_CAP":
+            currencies = [row for row in client.currencies() if row.get("crcd") == "USD"]
+            estimates = [row for row in client.order_estimate(integrated_margin=False) if row.get("crcd") == "USD"]
+            if len(currencies) != 1 or len(estimates) != 1:
+                raise MixedBlocked("BUYING_POWER", "초기원금에 사용할 독립 USD 예수금·주문가능금액을 확인하세요.")
+            _money(currencies[0].get("frcr_amt"))
+            estimated_cash = _money(currencies[0].get("estm_frcr_amt"))
+            orderable_cash = _money(estimates[0].get("oder_crnc_oder_able_camt"))
+            other_collateral = _money(estimates[0].get("othr_crnc_evdn_camt"))
+            if other_collateral or estimated_cash < requested_cash or orderable_cash < requested_cash:
+                raise MixedBlocked("BUYING_POWER", "다른 통화 담보 없이 요청한 초기원금을 충족하는 USD 주문가능금액이 필요합니다.")
+            try:
+                surplus = estimated_cash - requested_cash
+            except DecimalException:
+                raise MixedBlocked("INVALID_BROKER_FACT", "USD 예수금 잔여 금액을 확인할 수 없습니다.") from None
+            return requested_cash, surplus
+    cash = _money(_broker_cash(client))
+    if requested_cash is not None and cash != requested_cash:
+        raise MixedBlocked("ACTIVATION_CASH_MISMATCH", "정산 완료 USD 현금이 요청한 초기원금과 다릅니다. 확인 후 시작하세요.")
+    return cash, Decimal(0)
+
+
 def reconcile_broker(state, client, *, now, reservation_start_date="2026-04-29"):
     """Map only owned broker IDs and use cumulative actual execution amounts."""
     from preset_snapshot_sync import _apply_confirmed_cancellations, _completed_auction_order, normalize_confirmed_fills
@@ -353,29 +392,15 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
             return {"handled": False, "state": "WAITING_FLAT", "orders": []}
         if actual_shares or context.get("legacy_shares", 0) or today_orders or reservations or context.get("broker_confirmed") is not True:
             return {"handled": False, "state": "WAITING_FLAT", "orders": []}
-        activation_request = None
-        if state is not None and "activation_request" in state:
-            activation_request = deepcopy(state["activation_request"])
-            try:
-                if (not isinstance(activation_request, dict)
-                        or activation_request.get("funding_policy") != "FULL_SETTLED"):
-                    raise ValueError
-                requested_session = activation_request["session_date"]
-                if date.fromisoformat(requested_session).isoformat() != requested_session:
-                    raise ValueError
-                requested_cash = _money(activation_request["initial_cash"], positive=True)
-            except (KeyError, TypeError, ValueError, MixedBlocked):
-                raise MixedBlocked("INVALID_ACTIVATION_REQUEST", "반반매매 시작일·초기원금·정산 정책을 확인하세요.") from None
-            if session < requested_session:
-                raise MixedBlocked("ACTIVATION_NOT_STARTED", "요청한 미국 거래일부터 반반매매를 시작합니다.")
-        cash = _broker_cash(client)
-        if activation_request is not None and _money(cash) != requested_cash:
-            raise MixedBlocked("ACTIVATION_CASH_MISMATCH", "정산 완료 USD 현금이 요청한 초기원금과 다릅니다. 확인 후 시작하세요.")
-        state = core.initial_state("KMW2", session_date=session, broker_cash=cash, broker_shares=0,
+        cash, surplus = _activation_funds(client, state, session_date=session)
+        activation_request = deepcopy(state.get("activation_request")) if state is not None else None
+        state = core.initial_state("KMW2", session_date=session, broker_cash=str(cash), broker_shares=0,
                                    open_order_count=0, broker_confirmed=True,
                                    fee_rate=context.get("fee_rate", "0.005"))
         if activation_request is not None:
             state["activation_request"] = activation_request
+            if activation_request["funding_policy"] == "USD_BUYING_POWER_CAP":
+                state["unallocated_cost_cash"] = str(surplus)
         state["fee_source"] = "configured_reserve"
         persist_state(state)
     core.validate_state(state)

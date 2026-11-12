@@ -679,3 +679,127 @@ def test_existing_waiting_state_without_request_uses_verified_settled_cash(tmp_p
     assert activated["initial_cash"] == "12000" and "activation_request" not in activated
     assert activated["atr"]["cash"] == activated["r2"]["cash"] == "6000"
     assert broker.calls == []
+
+
+
+def buying_power_funding_state():
+    result = requested_funding_state()
+    result["activation_request"].update(initial_cash="74006", funding_policy="USD_BUYING_POWER_CAP")
+    return result
+
+
+def buying_power_broker():
+    broker = Broker()
+    broker.currencies = Mock(return_value=[{"crcd": "USD", "frcr_amt": "62055.11", "estm_frcr_amt": "74006.54"}])
+    broker.order_estimate = Mock(return_value=[{"crcd": "USD", "oder_crnc_oder_able_camt": "74006.54",
+                                               "othr_crnc_evdn_camt": "0"}])
+    return broker
+
+
+def test_usd_buying_power_cap_initializes_only_requested_cap_and_excludes_surplus(tmp_path):
+    broker, waiting, persist = buying_power_broker(), buying_power_funding_state(), Mock()
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        result = run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                               account="fake-kmw2", exchange_code="0066")
+        assert result["handled"] is True and result["orders"] == []
+        assert ledger.rows("fake-kmw2") == []
+    broker.order_estimate.assert_called_once_with(integrated_margin=False)
+    activated = persist.call_args.args[0]
+    core.validate_state(activated)
+    assert activated["phase"] == "ACTIVE" and activated["activated_session"] == "2026-11-12"
+    assert activated["initial_cash"] == "74006"
+    assert activated["atr"]["cash"] == activated["r2"]["cash"] == "37003"
+    assert activated["r2"]["seed"] == activated["r2"]["reference_seed"] == "37003"
+    assert activated["unallocated_cash"] == "0" and activated["unallocated_cost_cash"] == "0.54"
+    assert activated["activation_request"] == waiting["activation_request"]
+    assert core.available_cash(activated, "ATR") == core.available_cash(activated, "R2") == Decimal("37003")
+    plan = core.plan_monthly_rebalance(activated, session_date="2026-12-01", valuation_price="100")
+    rebalanced = core.settle_monthly_rebalance(activated, plan)
+    assert rebalanced["atr"]["cash"] == rebalanced["r2"]["cash"] == "37003"
+    assert rebalanced["unallocated_cost_cash"] == "0.54"
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("source,field,value", [
+    ("currencies", "estm_frcr_amt", "74005.99"),
+    ("order_estimate", "oder_crnc_oder_able_camt", "74005.99"),
+    ("order_estimate", "othr_crnc_evdn_camt", "1"),
+])
+def test_usd_cap_blocks_underfunded_or_other_currency_backed_funds(tmp_path, source, field, value):
+    broker, waiting, persist = buying_power_broker(), buying_power_funding_state(), Mock()
+    getattr(broker, source).return_value[0][field] = value
+    before = deepcopy(waiting)
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "BUYING_POWER"
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert waiting == before and broker.calls == []
+
+
+@pytest.mark.parametrize("source", ["currencies", "order_estimate"])
+@pytest.mark.parametrize("row_count", [0, 2])
+def test_usd_cap_requires_exactly_one_usd_currency_and_orderable_row(tmp_path, source, row_count):
+    broker, waiting, persist = buying_power_broker(), buying_power_funding_state(), Mock()
+    mock = getattr(broker, source)
+    mock.return_value = mock.return_value * row_count
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "BUYING_POWER"
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("source,field", [
+    ("currencies", "frcr_amt"), ("currencies", "estm_frcr_amt"),
+    ("order_estimate", "oder_crnc_oder_able_camt"), ("order_estimate", "othr_crnc_evdn_camt"),
+])
+@pytest.mark.parametrize("invalid", [None, False, "NaN", "-1"])
+def test_usd_cap_rejects_invalid_broker_money_before_activation(tmp_path, source, field, invalid):
+    broker, waiting, persist = buying_power_broker(), buying_power_funding_state(), Mock()
+    getattr(broker, source).return_value[0][field] = invalid
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "INVALID_BROKER_FACT"
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert broker.calls == []
+
+
+def test_activation_funds_helper_reuses_policy_and_validates_request_date():
+    from atr70_r2_runtime import _activation_funds
+
+    broker, waiting = buying_power_broker(), buying_power_funding_state()
+    assert _activation_funds(broker, waiting, session_date="2026-11-12") == (Decimal("74006"), Decimal("0.54"))
+    broker.order_estimate.assert_called_once_with(integrated_margin=False)
+    waiting["activation_request"]["session_date"] = "2026-11-13"
+    with pytest.raises(MixedBlocked) as blocked:
+        _activation_funds(broker, waiting, session_date="2026-11-12")
+    assert blocked.value.code == "ACTIVATION_NOT_STARTED"
+    broker.order_estimate.assert_called_once()
+
+
+
+def test_usd_cap_rejects_overflowing_broker_surplus_before_any_write(tmp_path):
+    broker, waiting, persist = buying_power_broker(), buying_power_funding_state(), Mock()
+    broker.currencies.return_value[0]["estm_frcr_amt"] = "1e9999999"
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, waiting, funding_context(), persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "INVALID_BROKER_FACT"
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert broker.calls == []
