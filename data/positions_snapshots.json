@@ -1,12 +1,12 @@
 {
   "KMW": {
-    "available_cash": 44801.8493765259,
+    "available_cash": 73392.8393765259,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-10",
+    "as_of_date": "2026-11-11",
     "compound_seed": 110163.39550396726,
     "compound_reference_seed": 109602.06550396726,
     "compound_profit_rate": 0.7,
@@ -23,7 +23,7 @@
       "peakValue": 97923.902661438,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 21,
+    "compound_trading_days": 22,
     "compound_settlements": [
       {
         "trade_date": "2026-11-06",
@@ -39,6 +39,11 @@
         "trade_date": "2026-11-10",
         "settlement_date": "2026-11-17",
         "pnl": -2917.61
+      },
+      {
+        "trade_date": "2026-11-11",
+        "settlement_date": "2026-11-18",
+        "pnl": 4317.01
       }
     ],
     "broker_sync": {
@@ -297,6 +302,14 @@
           "fees": "0",
           "position_key": "3_2026-11-10",
           "recommended_quantity": 433
+        },
+        "2026-11-11:1465755": {
+          "trade_date": "2026-11-11",
+          "side": "SELL",
+          "quantity": 433,
+          "notional": "28590.9900",
+          "fees": "0",
+          "position_key": "3_2026-11-10"
         }
       }
     },
@@ -312,23 +325,12 @@
       "buy_price": 66.68,
       "amount": 11402.28
     },
-    "3_2026-11-10": {
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
-      "strategy_name": "기본",
-      "round": 3,
-      "shares": 433,
-      "buy_price": 56.06,
-      "amount": 24273.98
-    },
     "pending_buy": {
-      "round": 3,
-      "quantity": 434,
-      "target_price": 58.02,
-      "order_date": "2026-11-11",
-      "basis_date": "2026-11-10",
+      "round": 2,
+      "quantity": 203,
+      "target_price": 68.34,
+      "order_date": "2026-11-12",
+      "basis_date": "2026-11-11",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
