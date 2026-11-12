@@ -339,13 +339,13 @@
     }
   },
   "JEH": {
-    "available_cash": 18249.85958770752,
+    "available_cash": 29607.01958770752,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-10",
+    "as_of_date": "2026-11-11",
     "compound_seed": 43851.990497863764,
     "compound_reference_seed": 43626.765497863766,
     "compound_profit_rate": 0.7,
@@ -362,7 +362,7 @@
       "peakValue": 34001.511327209475,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 22,
+    "compound_trading_days": 23,
     "compound_settlements": [
       {
         "trade_date": "2026-11-06",
@@ -378,6 +378,11 @@
         "trade_date": "2026-11-10",
         "settlement_date": "2026-11-17",
         "pnl": -1154.45
+      },
+      {
+        "trade_date": "2026-11-11",
+        "settlement_date": "2026-11-18",
+        "pnl": 1714.84
       }
     ],
     "broker_sync": {
@@ -645,6 +650,14 @@
           "fees": "0",
           "position_key": "3_2026-11-10",
           "recommended_quantity": 172
+        },
+        "2026-11-11:1468111": {
+          "trade_date": "2026-11-11",
+          "side": "SELL",
+          "quantity": 172,
+          "notional": "11357.1600",
+          "fees": "0",
+          "position_key": "3_2026-11-10"
         }
       }
     },
@@ -660,23 +673,12 @@
       "buy_price": 66.68,
       "amount": 4534.24
     },
-    "3_2026-11-10": {
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
-      "strategy_name": "기본",
-      "round": 3,
-      "shares": 172,
-      "buy_price": 56.06,
-      "amount": 9642.32
-    },
     "pending_buy": {
-      "round": 3,
-      "quantity": 172,
-      "target_price": 58.02,
-      "order_date": "2026-11-11",
-      "basis_date": "2026-11-10",
+      "round": 2,
+      "quantity": 81,
+      "target_price": 68.34,
+      "order_date": "2026-11-12",
+      "basis_date": "2026-11-11",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
