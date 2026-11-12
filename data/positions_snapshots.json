@@ -978,7 +978,48 @@
         "settlements": [],
         "mode": "SF"
       },
-      "orders": {},
+      "orders": {
+        "6ee99b8092d225093c58807c6faf7c02198a27c00935c631a6e7c30dc04e30c6": {
+          "intent_id": "6ee99b8092d225093c58807c6faf7c02198a27c00935c631a6e7c30dc04e30c6",
+          "strategy": "R2",
+          "ticker": "SOXL",
+          "side": "BUY",
+          "quantity": 26,
+          "price": "68.34",
+          "order_type": "LOC",
+          "session_date": "2026-11-12",
+          "lot_id": "R2:2026-11-12",
+          "position_key": "R2:2026-11-12",
+          "round": 1,
+          "event": "R2_ENTRY",
+          "frozen_rules": {
+            "buy_multiplier": "1.035",
+            "sell_multiplier": "1.011",
+            "max_holding_days": 35,
+            "round_weights": [
+              "0.049",
+              "0.127",
+              "0.23",
+              "0.257",
+              "0.028",
+              "0.169",
+              "0.14"
+            ],
+            "profit_reflection_rate": "0.72",
+            "loss_reflection_rate": "0.213",
+            "reference_seed_renewal_days": 10,
+            "settlement_delay_days": 7,
+            "mode": "SF",
+            "ma_aligned": false,
+            "strategy_id": "dongpa_modified"
+          },
+          "status": "PLANNED",
+          "broker_order_id": null,
+          "cumulative_quantity": 0,
+          "cumulative_notional": "0",
+          "cumulative_fee": "0"
+        }
+      },
       "last_atr_entry_session": null,
       "rebalance_months": [
         "2026-11"
@@ -1000,7 +1041,7 @@
       "unallocated_cost_cash": "0.540",
       "fee_source": "configured_reserve"
     },
-    "mixed_updated_at": "2026-11-12T08:52:09.802824+00:00",
+    "mixed_updated_at": "2026-11-12T18:02:08.119716+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
