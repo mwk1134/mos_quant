@@ -2744,7 +2744,7 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
         source = "최신 표시용 주문안"
         if waiting:
             orders = []
-            message = ("스위치 OFF · " if not enabled else "") + "기존 보유분 전량 매도 확인 대기 · 혼합 신규 주문 없음"
+            message = ("스위치 OFF · " if not enabled else "") + "실계좌 시작 조건 확인 대기 · 혼합 신규 주문 없음"
         elif not signal_available:
             orders = [{**deepcopy(order), "existing_order": True}
                       for order in registered if isinstance(order, dict) and order.get("strategy") == strategy

@@ -504,7 +504,7 @@ def test_waiting_and_unmet_conditions_still_get_two_explicit_no_order_tables():
     for enabled in (True, False):
         waiting = scope["_atr70_r2_order_tables"](preview_tables(), None, enabled=enabled, waiting=True, signal_available=True)
         assert all(table["rows"][0]["매매"] == "대기" for table in waiting.values())
-        assert all("전량 매도 확인 대기" in table["rows"][0]["조건·상태"] for table in waiting.values())
+        assert all("실계좌 시작 조건 확인 대기" in table["rows"][0]["조건·상태"] for table in waiting.values())
     plan = preview_tables()
     for table in plan["strategy_order_tables"].values():
         table.update(status="FILTER_NOT_MET", message="조건 미충족 · 신규 주문 없음", orders=[])
