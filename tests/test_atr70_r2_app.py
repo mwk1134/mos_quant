@@ -481,7 +481,8 @@ def preview_tables():
                                     "status": "시가·돌파 확인 대기", "display_only": True}]},
                 "R2": {"label": "R2 주문표", "status": "READY", "message": "R2 LOC 매수 조건",
                        "orders": [{"side": "BUY", "order_type": "LOC", "reference_price": "100.00",
-                                   "quantity": 2, "condition": "전일 확정 종가 기준", "status": "종가 조건 대기",
+                                   "quantity": 2, "round": 1, "ticker": "SOXL", "frozen_rules": {"mode": "SF"},
+                                   "condition": "전일 확정 종가 기준", "status": "종가 조건 대기",
                                    "display_only": True}]}}}
 
 
@@ -496,6 +497,7 @@ def test_order_tables_keep_atr_unknown_open_distinct_from_known_r2_loc_terms():
     assert atr["수량"] == "시가 확정 후 산정" and "$0" not in atr["기준가격"]
     assert "시가 확정 후 산정" in atr["기준가격"] and "1.015" in atr["조건·상태"]
     assert r2["수량"] == 2 and r2["기준가격"] == "$100.00" and r2["유형"] == "LOC"
+    assert r2["회차"] == 1 and r2["모드"] == "SF" and r2["주문일"] == "2026-11-02"
     assert plan == original
 
 
@@ -556,6 +558,22 @@ def test_moo_is_never_presented_as_a_zero_dollar_sell_price():
     assert tables["ATR"]["rows"][0]["기준가격"] == "시가 시장가"
 
 
+def test_sell_card_entry_details_are_matched_by_strategy_and_lot_identity():
+    scope = functions("_atr70_r2_order_tables")
+    state = mixed_state()
+    state["atr"]["lots"] = [{"lot_id": "atr-lot", "entry_date": "2026-10-29", "entry_price": "90"}]
+    state["r2"]["lots"][0]["lot_id"] = "r2-lot"
+    plan = {"orders": [{"strategy": "R2", "side": "SELL", "order_type": "LOC", "price": "101.50",
+                        "quantity": 10, "lot_id": "r2-lot"}]}
+    row = scope["_atr70_r2_order_tables"](plan, state, enabled=True, waiting=False,
+                                          signal_available=True)["R2"]["rows"][0]
+    assert row["매수일"] == "2026-10-30" and row["매수가"] == "$100.00"
+    plan["orders"][0]["lot_id"] = "atr-lot"
+    row = scope["_atr70_r2_order_tables"](plan, state, enabled=True, waiting=False,
+                                          signal_available=True)["R2"]["rows"][0]
+    assert row["매수일"] is None and row["매수가"] == ""
+
+
 @pytest.mark.parametrize("price,expected", [("110", "시장가 · 예산 기준 $110.00"),
                                             ("0", "시장가 · 접수 가격 없음 · 체결 별도 확인"),
                                             (None, "시장가 · 접수 가격 없음 · 체결 별도 확인")])
@@ -601,6 +619,18 @@ def test_streamlit_always_displays_two_separate_current_strategy_order_tables():
     builder.assert_called_once()
     assert any("미국 주문일 2026-11-02" in caption.value for caption in app.caption)
     assert any("확인된 보유분" in text.value for text in app.markdown)
+    headings = [heading.value for heading in app.subheader]
+    assert headings.index("📋 주문일 기준 매매 추천") < headings.index("💼 포트폴리오 현황")
+    columns = [column for column in app.get("column")
+               if any(heading.value in {"🟢 매수 추천", "🔴 매도 추천"}
+                      for heading in column.get("subheader"))]
+    assert len(columns) == 2
+    buy_text = "\n".join(element.value for kind in ("success", "info", "caption")
+                         for element in columns[0].get(kind))
+    assert "R2 · 1회차 매수 추천" in buy_text and "2주" in buy_text and "$100.00" in buy_text
+    assert "SF (안전모드)" in buy_text
+    details = next(expander for expander in app.expander if expander.label == "📑 전략별 주문 상세")
+    assert details.proto.expanded is False
 
 
 def test_streamlit_source_failure_still_displays_both_tables_and_warning():

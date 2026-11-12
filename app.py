@@ -2807,10 +2807,33 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
                 if session:
                     status += f" · 미국 주문일 {session}"
             details = " · ".join(text for text in (condition, status) if text)
+            round_number = order.get("round")
+            rules = order.get("frozen_rules")
+            rules = rules if isinstance(rules, dict) else {}
+            sleeve = state.get(strategy.lower())
+            lots = sleeve.get("lots", []) if isinstance(sleeve, dict) else []
+            lots = list(lots.values()) if isinstance(lots, dict) else lots
+            lot_id = order.get("lot_id") or order.get("position_key")
+            matches = [lot for lot in lots if isinstance(lot, dict) and lot_id and lot.get("lot_id") == lot_id] if isinstance(lots, list) else []
+            lot = matches[0] if len(matches) == 1 else {}
+            entry_price = ""
+            if side == "SELL" and lot:
+                try:
+                    entry_value = Decimal(str(lot.get("entry_price")))
+                    if entry_value.is_finite() and entry_value > 0:
+                        entry_price = f"${entry_value:,.2f}"
+                except (ValueError, TypeError, InvalidOperation):
+                    pass
             rows.append({"매매": "매수" if side == "BUY" else "매도", "유형": kind,
                          "기준가격": price_text, "수량": quantity, "조건·상태": details,
                          "조건": condition, "상태": status, "기존주문": existing,
-                         "가격설명": market_price_note})
+                         "가격설명": market_price_note,
+                         "회차": round_number if type(round_number) is int and round_number > 0 else None,
+                         "종목": order.get("ticker", "SOXL"), "모드": rules.get("mode"),
+                         "주문일": session or plan.get("order_date"),
+                         "주문번호": order.get("broker_order_id"),
+                         "매수일": lot.get("entry_date") if side == "SELL" else None,
+                         "매수가": entry_price})
         if not rows:
             awaiting_open = strategy == "ATR" and enabled and not waiting and signal_available and entry.get("status") in {"WAITING_BREAKOUT", "WAITING_OPEN"}
             rows = [{"매매": "대기", "유형": "-", "기준가격": "시가 확정 후 산정" if awaiting_open else "-",
@@ -2822,25 +2845,26 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
 
 
 def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_available=True):
-    """Always render two strategy order tables, including explicit no-order rows."""
+    """Match the standard buy/sell view while retaining strategy order details."""
+    from kmw2_order_ui import show_order_recommendations
     from order_table_ui import ORDER_TABLE_CSS, render_order_table_html
 
     tables = _atr70_r2_order_tables(plan, state, enabled=enabled, waiting=waiting, signal_available=signal_available)
-    if not signal_available:
-        st.warning("최신 신호 확인 불가 · 저장된 접수내역은 현재 신규 주문 추천이 아닙니다.")
-    elif isinstance(plan, dict):
+    if signal_available and isinstance(plan, dict):
         if plan.get("order_date"):
             st.caption("표시용 주문안 · 미국 주문일 " + str(plan["order_date"]))
         if plan.get("generated_at"):
             st.caption("주문안 계산 시각: " + str(plan["generated_at"]))
         if plan.get("snapshot_fresh") is False:
             st.caption("과거 저장 장부의 미리보기입니다. 실제 주문 전 확정 체결과 잔고를 갱신합니다.")
-    st.markdown(ORDER_TABLE_CSS, unsafe_allow_html=True)
-    for strategy in ("ATR", "R2"):
-        table = tables[strategy]
-        st.subheader(table["label"])
-        st.markdown(render_order_table_html(table, strategy), unsafe_allow_html=True)
-    st.caption("두 표는 전략별 조건·접수 상태를 확인하는 표시용 주문표입니다. 실제 주문 전송과 체결 상태는 자동매매 관리 화면에서 확인합니다.")
+    show_order_recommendations(tables, waiting=waiting, signal_available=signal_available)
+    with st.expander("📑 전략별 주문 상세", expanded=False):
+        st.markdown(ORDER_TABLE_CSS, unsafe_allow_html=True)
+        for strategy in ("ATR", "R2"):
+            table = tables[strategy]
+            st.subheader(table["label"])
+            st.markdown(render_order_table_html(table, strategy), unsafe_allow_html=True)
+    st.caption("실제 주문 전송과 체결 상태는 자동매매 관리 화면에서 확인합니다. 접수된 주문은 신규 추천과 구분해 표시합니다.")
 
 
 def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
@@ -2889,6 +2913,13 @@ def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
         st.success("혼합 전략 설정 켜짐 · 각 전략의 현금과 보유수량을 따로 관리합니다. 자동매매 실행 상태는 관리 화면에서 확인합니다.")
     else:
         st.warning("혼합매매 신규 매수 중단 · 기존 보유분 청산 관리 유지. 기존 동파법으로 자동 복귀하지 않습니다.")
+    try:
+        preview = _atr70_r2_readonly_plan(snapshot)
+        signal_available = True
+    except Exception:
+        preview, signal_available = None, False
+    show_atr70_r2_order_tables(preview, state, enabled=enabled, signal_available=signal_available)
+    st.subheader("💼 포트폴리오 현황")
     if summary:
         st.write("**전략별 장부 현금·보유수량**")
         st.dataframe(pd.DataFrame(summary), use_container_width=True, hide_index=True)
@@ -2916,12 +2947,6 @@ def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
             st.caption("엔진 상태: " + labels[status["state"]])
         if status.get("error_code"):
             st.warning("자동매매 관리 화면에서 실행 상태를 확인해 주세요.")
-    try:
-        preview = _atr70_r2_readonly_plan(snapshot)
-        signal_available = True
-    except Exception:
-        preview, signal_available = None, False
-    show_atr70_r2_order_tables(preview, state, enabled=enabled, signal_available=signal_available)
     st.caption("월중 비중은 변동하며 매월 첫 미국 거래일에 50:50을 목표로 조정합니다. 실시간 잔고와 체결 상태는 자동매매 관리 화면에서 확인합니다.")
 
 
