@@ -969,8 +969,8 @@
         "lots": [],
         "seed": "37003",
         "reference_seed": "37003",
-        "trading_days": 0,
-        "last_seed_session": null,
+        "trading_days": 1,
+        "last_seed_session": "2026-11-12",
         "settlements": [],
         "mode": "SF"
       },
@@ -996,7 +996,7 @@
       "unallocated_cost_cash": "0.540",
       "fee_source": "configured_reserve"
     },
-    "mixed_updated_at": "2026-11-12T09:26:39.982508+09:00",
+    "mixed_updated_at": "2026-11-12T14:00:13.899539+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
