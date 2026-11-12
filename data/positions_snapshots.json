@@ -1010,12 +1010,12 @@
     }
   },
   "JEH2": {
-    "available_cash": 4244.2299319458,
+    "available_cash": 5630.8599319458,
     "processed_seed_dates": [
       "2026-01-15",
       "2026-06-16"
     ],
-    "as_of_date": "2026-11-10",
+    "as_of_date": "2026-11-11",
     "compound_seed": 5364.8498768005375,
     "compound_reference_seed": 5340.594876800537,
     "compound_profit_rate": 0.7,
@@ -1032,7 +1032,7 @@
       "peakValue": 6394.129971160889,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 22,
+    "compound_trading_days": 23,
     "compound_settlements": [
       {
         "trade_date": "2026-11-06",
@@ -1048,6 +1048,11 @@
         "trade_date": "2026-11-10",
         "settlement_date": "2026-11-17",
         "pnl": -125.94
+      },
+      {
+        "trade_date": "2026-11-11",
+        "settlement_date": "2026-11-18",
+        "pnl": 209.37
       }
     ],
     "broker_sync": {
@@ -1296,6 +1301,14 @@
           "fees": "0",
           "position_key": "3_2026-11-10",
           "recommended_quantity": 21
+        },
+        "2026-11-11:1468969": {
+          "trade_date": "2026-11-11",
+          "side": "SELL",
+          "quantity": 21,
+          "notional": "1386.6300",
+          "fees": "0",
+          "position_key": "3_2026-11-10"
         }
       }
     },
@@ -1311,23 +1324,12 @@
       "buy_price": 66.68,
       "amount": 533.44
     },
-    "3_2026-11-10": {
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
-      "strategy_name": "기본",
-      "round": 3,
-      "shares": 21,
-      "buy_price": 56.06,
-      "amount": 1177.26
-    },
     "pending_buy": {
-      "round": 3,
-      "quantity": 21,
-      "target_price": 58.02,
-      "order_date": "2026-11-11",
-      "basis_date": "2026-11-10",
+      "round": 2,
+      "quantity": 9,
+      "target_price": 68.34,
+      "order_date": "2026-11-12",
+      "basis_date": "2026-11-11",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
