@@ -683,7 +683,7 @@
     }
   },
   "KMW2": {
-    "available_cash": 74006.54,
+    "available_cash": 74006.0,
     "processed_seed_dates": [],
     "as_of_date": "2026-11-11",
     "compound_seed": 83546.45925811768,
@@ -955,20 +955,20 @@
       "schema_version": 1,
       "strategy_id": "atr70_r2_mix",
       "preset": "KMW2",
-      "phase": "WAITING_FLAT",
-      "activated_session": null,
+      "phase": "ACTIVE",
+      "activated_session": "2026-11-12",
       "fee_rate": "0.005",
-      "initial_cash": "74006.54",
-      "unallocated_cash": "74006.54",
+      "initial_cash": "74006",
+      "unallocated_cash": "0",
       "atr": {
-        "cash": "0",
+        "cash": "37003",
         "lots": []
       },
       "r2": {
-        "cash": "0",
+        "cash": "37003",
         "lots": [],
-        "seed": "0",
-        "reference_seed": "0",
+        "seed": "37003",
+        "reference_seed": "37003",
         "trading_days": 0,
         "last_seed_session": null,
         "settlements": [],
@@ -976,21 +976,33 @@
       },
       "orders": {},
       "last_atr_entry_session": null,
-      "rebalance_months": [],
+      "rebalance_months": [
+        "2026-11"
+      ],
       "activation_request": {
         "session_date": "2026-11-12",
-        "initial_cash": "74006.54",
-        "funding_policy": "FULL_SETTLED",
-        "requested_at": "2026-11-12T08:52:38.744727+09:00"
-      }
+        "initial_cash": "74006",
+        "funding_policy": "USD_BUYING_POWER_CAP",
+        "requested_at": "2026-11-12T09:24:40.189724+09:00",
+        "verification": {
+          "checked_at": "2026-11-12T09:24:40.189724+09:00",
+          "funding_source": "INDEPENDENT_USD_BUYING_POWER",
+          "current_cash": "62055.110",
+          "estimated_cash": "74006.540",
+          "orderable_cash": "74006.5400",
+          "other_currency_collateral": "0.0000"
+        }
+      },
+      "unallocated_cost_cash": "0.540",
+      "fee_source": "configured_reserve"
     },
-    "mixed_updated_at": "2026-11-12T08:52:38.744727+09:00",
+    "mixed_updated_at": "2026-11-12T09:24:40.189724+09:00",
     "atr70_r2_status": {
-      "state": "WAITING_CASH",
-      "checked_at": "2026-11-12T08:52:38.744727+09:00",
-      "settled_usd": "62055.110",
-      "estimated_usd": "74006.540",
-      "pending_settlement_usd": "11951.430"
+      "state": "ACTIVE",
+      "checked_at": "2026-11-12T09:24:40.189724+09:00",
+      "funding_source": "INDEPENDENT_USD_BUYING_POWER",
+      "strategy_cap": "74006",
+      "outside_budget_cash": "0.540"
     }
   },
   "JEH2": {
@@ -1676,7 +1688,7 @@
       "ma_alignment_switch_enabled": false
     },
     "KMW2": {
-      "initial_capital": 74006.54,
+      "initial_capital": 74006.0,
       "session_start_date": "2026-11-12",
       "seed_increases": [],
       "position_edits": {},
