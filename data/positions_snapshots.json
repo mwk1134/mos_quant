@@ -687,9 +687,9 @@
     }
   },
   "KMW2": {
-    "available_cash": 74006.0,
+    "available_cash": 72293.7011,
     "processed_seed_dates": [],
-    "as_of_date": "2026-11-11",
+    "as_of_date": "2026-11-12",
     "compound_seed": 83546.45925811768,
     "compound_reference_seed": 83130.65925811768,
     "compound_profit_rate": 0.7,
@@ -969,12 +969,47 @@
         "lots": []
       },
       "r2": {
-        "cash": "37003",
-        "lots": [],
+        "cash": "35290.7011000",
+        "lots": [
+          {
+            "lot_id": "R2:2026-11-12",
+            "strategy": "R2",
+            "shares": 26,
+            "entered_shares": 26,
+            "entry_date": "2026-11-12",
+            "entry_price": "65.5300",
+            "entry_fee": "8.5189000",
+            "frozen_rules": {
+              "buy_multiplier": "1.035",
+              "sell_multiplier": "1.011",
+              "max_holding_days": 35,
+              "round_weights": [
+                "0.049",
+                "0.127",
+                "0.23",
+                "0.257",
+                "0.028",
+                "0.169",
+                "0.14"
+              ],
+              "profit_reflection_rate": "0.72",
+              "loss_reflection_rate": "0.213",
+              "reference_seed_renewal_days": 10,
+              "settlement_delay_days": 7,
+              "mode": "SF",
+              "ma_aligned": false,
+              "strategy_id": "dongpa_modified"
+            },
+            "round": 1,
+            "entry_notional": "1703.7800",
+            "remaining_cost": "1712.2989000",
+            "entry_fee_source": "CONFIGURED_RESERVE"
+          }
+        ],
         "seed": "37003",
         "reference_seed": "37003",
-        "trading_days": 1,
-        "last_seed_session": "2026-11-12",
+        "trading_days": 2,
+        "last_seed_session": "2026-11-13",
         "settlements": [],
         "mode": "SF"
       },
@@ -1013,11 +1048,12 @@
             "ma_aligned": false,
             "strategy_id": "dongpa_modified"
           },
-          "status": "ACCEPTED",
+          "status": "FILLED",
           "broker_order_id": "2186806",
-          "cumulative_quantity": 0,
-          "cumulative_notional": "0",
-          "cumulative_fee": "0"
+          "cumulative_quantity": 26,
+          "cumulative_notional": "1703.7800",
+          "cumulative_fee": "8.5189000",
+          "fee_source": "CONFIGURED_RESERVE"
         }
       },
       "last_atr_entry_session": null,
@@ -1041,7 +1077,7 @@
       "unallocated_cost_cash": "0.540",
       "fee_source": "configured_reserve"
     },
-    "mixed_updated_at": "2026-11-12T18:02:12.938151+09:00",
+    "mixed_updated_at": "2026-11-13T14:00:12.661834+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
