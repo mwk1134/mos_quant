@@ -1108,7 +1108,7 @@
           "position_key": "R2:2026-11-12",
           "round": 1,
           "event": "R2_EXIT",
-          "status": "PLANNED",
+          "status": "SENDING",
           "broker_order_id": null,
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -1136,7 +1136,7 @@
       "unallocated_cost_cash": "0.540",
       "fee_source": "configured_reserve"
     },
-    "mixed_updated_at": "2026-11-13T18:02:07.206263+09:00",
+    "mixed_updated_at": "2026-11-13T18:02:08.998368+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
