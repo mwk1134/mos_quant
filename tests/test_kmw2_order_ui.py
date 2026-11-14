@@ -2,6 +2,8 @@
 from copy import deepcopy
 from unittest.mock import patch
 
+import pytest
+
 from streamlit.testing.v1 import AppTest
 
 
@@ -68,7 +70,7 @@ def test_saved_partial_and_uncertain_orders_keep_status_and_are_not_counted_as_r
          "가격설명": "예산 기준 $70.00", "상태": "접수 여부 확인 필요", "기존주문": True}]
     app = render(value, signal_available=False)
     buy = text(app.columns[0])
-    assert "저장된 매수 주문 2건" in buy and "신규 추천 건수에 포함하지 않습니다" in buy
+    assert "저장된 매수 주문: 2건" in buy and "신규 추천 건수에 포함하지 않으며" in buy
     assert "부분체결 · 체결 3/10주" in buy and "접수 여부 확인 필요" in buy
     assert "시장가 · 예산 기준 $70.00" in buy
     assert "매수금액" not in buy and "$280" not in buy
@@ -98,3 +100,21 @@ def test_waiting_state_never_shows_supplied_new_order_as_a_recommendation():
     assert "실계좌 시작 조건 확인 대기" in shown
     assert "$68.34" not in shown and "26주" not in shown
     assert not app.success
+
+
+@pytest.mark.parametrize("waiting,signal_available", [(False, True), (False, False), (True, True)])
+def test_saved_buy_and_sell_orders_never_show_the_empty_recommendation_notice(waiting, signal_available):
+    value = {"ATR": {"rows": []}, "R2": {"rows": [
+        {"매매": "매수", "유형": "LOC", "기준가격": "$67.72", "수량": 69,
+         "상태": "접수 확인 · 체결 대기", "기존주문": True},
+        {"매매": "매도", "유형": "LOC", "기준가격": "$66.25", "수량": 26,
+         "상태": "부분체결 · 체결 3/26주", "기존주문": True}]}}
+    app = render(value, waiting=waiting, signal_available=signal_available)
+    for side, column in zip(("매수", "매도"), app.columns):
+        shown = text(column)
+        assert f"저장된 {side} 주문: 1건" in shown
+        assert f"현재 {side} 추천이 없습니다." not in shown
+        assert f"{side} 추천 확인 대기" not in shown
+        assert not column.get("success")
+    assert "69주" in text(app.columns[0])
+    assert "부분체결 · 체결 3/26주" in text(app.columns[1])

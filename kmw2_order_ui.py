@@ -99,7 +99,7 @@ def show_order_recommendations(tables, *, waiting=False, signal_available=True):
             pending = [item for item in drafts if _is_pending(item[2])]
             if ready:
                 st.info(f"📋 {side} 추천: {len(ready)}건")
-            elif not pending:
+            elif not pending and not receipts:
                 if waiting or not signal_available:
                     st.info(f"⏳ {side} 추천 확인 대기")
                 else:
@@ -108,7 +108,8 @@ def show_order_recommendations(tables, *, waiting=False, signal_available=True):
             for strategy, table, row in ready + pending:
                 _show_order(strategy, table, row)
             if receipts:
-                st.caption(f"저장된 {side} 주문 {len(receipts)}건 · 신규 추천 건수에 포함하지 않습니다.")
+                st.info(f"📋 저장된 {side} 주문: {len(receipts)}건")
+                st.caption("저장된 주문 기록입니다. 신규 추천 건수에 포함하지 않으며, 접수·체결 상태를 확인해 주세요.")
                 for strategy, table, row in receipts:
                     _show_order(strategy, table, row, existing=True)
 
