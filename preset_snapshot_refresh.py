@@ -150,6 +150,9 @@ def _buy_key(event, snapshot, previous, buy_rules):
     day_text = event["trade_date"]
     pending = snapshot.get("pending_buy")
     pending = pending if isinstance(pending, dict) else {}
+    # A newer recommendation cannot identify or override an earlier fill.
+    if pending.get("order_date") != day_text:
+        pending = {}
     supplied_key = event.get("position_key") or previous.get("position_key")
     if supplied_key is not None:
         match = _LOT.fullmatch(str(supplied_key))

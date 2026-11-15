@@ -353,6 +353,13 @@ class KMWEngine:
                         options["r2_not_before"] = r2_not_before
                     result = self.backend.mixed_tick(now=now,
                         should_continue=lambda: self._may_continue(generation), **options)
+                    if result.get("state") == "DONGPA_RESUMED" or result.get("dongpa_transition_started"):
+                        with self._lock:
+                            self._next = self._next_target(now)
+                            self._event("기본 동파매매로 현금 배정을 전환했습니다. 기존 반반매매 보유분은 원래 규칙으로 관리하며 동파 주문은 다음 예약 시각부터 실행합니다.",
+                                plan=result.get("plan"), phase="WAITING")
+                        if result.get("state") == "DONGPA_RESUMED":
+                            return result
                     if result.get("handled"):
                         if result.get("orders") or result.get("state") in {"BLOCKED", "UNKNOWN"}:
                             with self._lock:
@@ -363,7 +370,8 @@ class KMWEngine:
                                     last_run={**result, "trigger": "mixed", "finished_at": self.clock().isoformat()},
                                     enabled=self._state["enabled"] and not uncertain,
                                     phase="INACTIVE" if uncertain else "BLOCKED" if result.get("state") == "BLOCKED" else "WAITING")
-                        return result
+                        if not result.get("allow_legacy_schedule"):
+                            return result
                 finally:
                     self._run_lock.release()
         with self._lock:

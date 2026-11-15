@@ -1,10 +1,12 @@
 """Read-only KMW-style recommendation cards for the live KMW2 account."""
 
+from decimal import Decimal, InvalidOperation
+
 import streamlit as st
 
 
 def _label(strategy, row):
-    label = "ATR70" if strategy == "ATR" else "R2"
+    label = {"ATR": "ATR70", "R2": "R2", "DONGPA": "기본 동파"}.get(strategy, strategy)
     if row.get("회차") not in (None, "", "-"):
         label += f" · {row['회차']}회차"
     return label
@@ -66,7 +68,7 @@ def show_order_recommendations(tables, *, waiting=False, signal_available=True):
     """Present supplied rows without querying, mutating or dispatching anything."""
     tables = tables if isinstance(tables, dict) else {}
     entries = []
-    for strategy in ("ATR", "R2"):
+    for strategy in (("DONGPA",) if "DONGPA" in tables else ()) + ("ATR", "R2"):
         table = tables.get(strategy)
         if not isinstance(table, dict):
             table = {}
@@ -116,8 +118,41 @@ def show_order_recommendations(tables, *, waiting=False, signal_available=True):
             shown = {strategy for strategy, _, _ in drafts + receipts}
             for strategy, table, _ in entries:
                 if strategy not in shown:
-                    label = "ATR70" if strategy == "ATR" else "R2"
+                    label = {"ATR": "ATR70", "R2": "R2", "DONGPA": "기본 동파"}.get(strategy, strategy)
                     message = (table.get("message") or "현재 주문이 없습니다."
                                if side == "매수" or waiting or not signal_available
                                else "현재 매도 주문안이 없습니다.")
                     st.caption(f"{label}: {message}")
+
+
+def dongpa_order_table(plan, snapshot, *, signal_available=True):
+    """Present the independent default-strategy plan beside carried exits."""
+    plan = plan if isinstance(plan, dict) else {}
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    rows = []
+    for order in (plan.get("orders") or []) if signal_available else []:
+        if not isinstance(order, dict) or order.get("side") not in {"BUY", "SELL"}:
+            continue
+        buying = order["side"] == "BUY"
+        kind = order.get("order_type")
+        price = "종가 시장가" if kind == "MOC" else "-"
+        try:
+            amount = Decimal(str(order.get("price")))
+            if kind == "LOC" and amount.is_finite() and amount > 0:
+                price = f"${amount:,.2f}"
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+        position = snapshot.get(order.get("position_key"), {}) if not buying else {}
+        position = position if isinstance(position, dict) else {}
+        entry = plan.get("buy_entry_rules", {}) if buying else position
+        entry = entry if isinstance(entry, dict) else {}
+        rows.append({"매매": "매수" if buying else "매도", "유형": kind, "기준가격": price,
+                     "수량": order.get("quantity"), "회차": order.get("round"), "종목": order.get("ticker", "SOXL"),
+                     "모드": entry.get("mode", plan.get("mode") if buying else None),
+                     "주문일": plan.get("order_date"), "기존주문": False,
+                     "매수일": order.get("buy_date") or (order.get("position_key", "").split("_", 1)[-1] if position else None),
+                     "조건": "종가가 주문가 이하이면 매수" if buying else "보유 만기 종가 청산" if kind == "MOC" else "종가가 주문가 이상이면 매도",
+                     "상태": "기본 동파매매 표시용 주문안 · 실제 접수·체결 별도 확인"})
+    return {"label": "기본 동파 주문표", "source": "기본 동파 표시용 주문안", "rows": rows,
+            "message": "배정된 현금으로 기본 동파매매를 운용합니다." if signal_available else "최신 기본 동파 주문안 확인 대기",
+            "order_date": plan.get("order_date")}

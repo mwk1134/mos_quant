@@ -270,6 +270,36 @@ def test_missed_month_start_does_not_skip_rebalance_after_restart():
     assert result["phase"] == "WAITING_OPEN_REBALANCE"
 
 
+def test_disabled_rebalance_preserves_r2_exit_without_new_monthly_sales_or_transfer():
+    state = rebalance_state()
+    before = deepcopy(state)
+    exit_order = {"side": "SELL", "quantity": 60, "price": "40.60", "order_type": "LOC",
+                  "lot_id": "sixty", "round": 1}
+    for opening in (None, 100):
+        result = core.build_runtime_plan(state, session_date="2026-11-02", previous_session="2026-10-30",
+                                         next_session="2026-11-03", regular_open=opening,
+                                         first_session_of_month=True, r2_orders=[exit_order], allow_rebalance=False)
+        assert result["phase"] == "READY" and result["rebalance"] is None
+        assert len(result["orders"]) == 1
+        assert result["orders"][0]["event"] == "R2_EXIT"
+        assert result["orders"][0]["lot_id"] == "sixty" and result["orders"][0]["quantity"] == 60
+    assert state == before and "2026-11" not in state["rebalance_months"]
+
+
+def test_disabled_rebalance_still_exits_atr_next_session():
+    state = filled(active(), intent(strategy="ATR", quantity=2, price=10, lot="atr-lot"), 20)
+    result = core.build_runtime_plan(state, session_date="2026-11-02", previous_session="2026-10-30",
+                                     next_session="2026-11-03", allow_rebalance=False)
+    assert result["phase"] == "ATR_EXIT" and result["rebalance"] is None
+    assert result["orders"][0]["event"] == "ATR_EXIT" and result["orders"][0]["quantity"] == 2
+
+
+@pytest.mark.parametrize("invalid", [None, 0, 1, "false"])
+def test_rebalance_permission_must_be_boolean(invalid):
+    with pytest.raises(ValueError, match="permission"):
+        plan(active(), allow_rebalance=invalid)
+
+
 def test_cash_only_rebalance_plan_can_be_persisted_before_settlement():
     state = active()
     monthly = core.plan_monthly_rebalance(state, session_date="2026-11-02", valuation_price=100)
@@ -277,6 +307,163 @@ def test_cash_only_rebalance_plan_can_be_persisted_before_settlement():
     state = core.settle_monthly_rebalance(state, monthly)
     assert "2026-11" in state["rebalance_months"]
     assert Decimal(state["atr"]["cash"]) == Decimal(state["r2"]["cash"])
+
+
+def test_cash_transfer_is_pure_and_preserves_the_original_capital_rules_and_sizing_history():
+    state = active()
+    state["r2"]["settlements"] = [{"settlement_date": "2026-10-09", "profit_loss": "12.34",
+                                     "frozen_rules": core.r2_rules("SF")}]
+    before = deepcopy(state)
+    result = core.transfer_cash(state, strategy="R2", amount="123.45", transfer_id="off:1:R2",
+                                session_date="2026-10-02")
+    assert state == before and "cash_transfers" not in state
+    assert result["r2"]["cash"] == "4876.55" and result["atr"] == state["atr"]
+    assert {key: value for key, value in result["r2"].items() if key != "cash"} == {
+        key: value for key, value in state["r2"].items() if key != "cash"}
+    assert result["initial_cash"] == state["initial_cash"] == "10000"
+    assert result["orders"] == state["orders"]
+    assert result["cash_transfers"] == [{"id": "off:1:R2", "strategy": "R2", "amount": "123.45",
+                                         "session_date": "2026-10-02", "sink": "DONGPA"}]
+    core.validate_state(result)
+
+
+def test_cash_transfers_leave_pending_buy_reserves_and_follow_confirmed_partial_fills():
+    state = active(fee="0.005")
+    buy = intent(quantity=100, price="10", lot="reserved")
+    state = core.register_order(state, buy, broker_order_id="buy-1")
+    state = core.transfer_cash(state, strategy="R2", amount="3995", transfer_id="cash:initial",
+                               session_date="2026-10-02")
+    assert state["r2"]["cash"] == "1005" and core.available_cash(state, "R2") == 0
+    with pytest.raises(ValueError, match="unreserved"):
+        core.transfer_cash(state, strategy="R2", amount="0.01", transfer_id="cash:over",
+                           session_date="2026-10-02")
+    state = core.reconcile_fills(state, [fill(buy, 40, "360", fee="1.8", status="OPEN", broker="buy-1")])
+    assert core.available_cash(state, "R2") == Decimal("40.200")
+    state = core.transfer_cash(state, strategy="R2", amount=core.available_cash(state, "R2"),
+                               transfer_id="cash:partial", session_date="2026-10-02")
+    assert core.available_cash(state, "R2") == 0 and Decimal(state["r2"]["cash"]) == Decimal("603")
+    state = core.reconcile_fills(state, [fill(buy, 100, "900", fee="4.5", broker="buy-1")])
+    assert core.available_cash(state, "R2") == Decimal("60.300")
+    state = core.transfer_cash(state, strategy="R2", amount=core.available_cash(state, "R2"),
+                               transfer_id="cash:filled", session_date="2026-10-02")
+    assert Decimal(state["r2"]["cash"]) == 0 and state["r2"]["lots"][0]["shares"] == 100
+    assert state["r2"]["seed"] == state["r2"]["reference_seed"] == "5000"
+    assert sum(Decimal(item["amount"]) for item in state["cash_transfers"]) == Decimal("4095.5")
+    core.validate_state(state)
+
+
+def test_cash_transfer_of_partial_sale_proceeds_never_changes_owned_shares_or_requeues_pnl():
+    state = filled(active(fee="0"), intent(quantity=10, price="100", lot="owned"), "1000")
+    state = core.transfer_cash(state, strategy="R2", amount="4000", transfer_id="cash:free",
+                               session_date="2026-10-02")
+    sale = intent(side="SELL", quantity=10, price="110", day="2026-10-05", lot="owned")
+    state = core.register_order(state, sale, broker_order_id="sell-1")
+    state = core.reconcile_fills(state, [fill(sale, 4, "440", fee="2", status="OPEN", broker="sell-1")])
+    original = deepcopy(state)
+    state = core.transfer_cash(state, strategy="R2", amount="438", transfer_id="sale:partial",
+                               session_date="2026-10-05")
+    assert state["r2"]["lots"] == original["r2"]["lots"] and state["r2"]["lots"][0]["shares"] == 6
+    assert state["r2"]["settlements"] == original["r2"]["settlements"]
+    assert state["orders"] == original["orders"]
+    state = core.reconcile_fills(state, [fill(sale, 10, "1100", fee="5", broker="sell-1")])
+    assert Decimal(state["r2"]["cash"]) == Decimal("657")
+    pending_pnl = deepcopy(state["r2"]["settlements"])
+    state = core.transfer_cash(state, strategy="R2", amount="657", transfer_id="sale:filled",
+                               session_date="2026-10-05")
+    assert Decimal(state["r2"]["cash"]) == 0 and state["r2"]["lots"][0]["shares"] == 0
+    assert state["r2"]["settlements"] == pending_pnl and len(pending_pnl) == 1
+    assert Decimal(pending_pnl[0]["profit_loss"]) == Decimal("95")
+    assert state["r2"]["seed"] == state["r2"]["reference_seed"] == "5000"
+    core.validate_state(state)
+
+
+def test_cash_transfer_retry_is_idempotent_but_identity_reuse_cannot_change_terms():
+    state = core.transfer_cash(active(), strategy="ATR", amount="100", transfer_id="same",
+                               session_date="2026-10-02")
+    retried = core.transfer_cash(state, strategy="ATR", amount="100.00", transfer_id="same",
+                                 session_date="2026-10-02")
+    assert retried == state and retried is not state and retried["cash_transfers"] is not state["cash_transfers"]
+    for changed in ({"strategy": "R2"}, {"amount": "101"}, {"session_date": "2026-10-05"}):
+        arguments = {"strategy": "ATR", "amount": "100", "transfer_id": "same", "session_date": "2026-10-02"}
+        with pytest.raises(ValueError, match="changed terms"):
+            core.transfer_cash(state, **{**arguments, **changed})
+
+
+@pytest.mark.parametrize("status", ["SENDING", "UNKNOWN"])
+def test_cash_transfer_is_blocked_by_uncertain_orders_in_either_sleeve(status):
+    state = core.register_order(active(), intent(quantity=1))
+    state = core.mark_order(state, intent()["intent_id"], status=status)
+    before = deepcopy(state)
+    with pytest.raises(ValueError, match="uncertain"):
+        core.transfer_cash(state, strategy="ATR", amount="100", transfer_id="blocked",
+                           session_date="2026-10-02")
+    assert state == before
+
+
+def test_cash_transfer_cannot_invalidate_a_pending_rebalance_plan():
+    state = active()
+    state["pending_rebalance"] = core.plan_monthly_rebalance(state, session_date="2026-11-02", valuation_price="100")
+    before = deepcopy(state)
+    with pytest.raises(ValueError, match="pending rebalance"):
+        core.transfer_cash(state, strategy="ATR", amount="100", transfer_id="blocked",
+                           session_date="2026-11-02")
+    assert state == before
+
+
+@pytest.mark.parametrize("change", [
+    {"strategy": "DONGPA"}, {"amount": "0"}, {"amount": "-1"}, {"amount": "NaN"},
+    {"amount": "Infinity"}, {"amount": True}, {"amount": "5000.01"},
+    {"transfer_id": ""}, {"transfer_id": " "}, {"transfer_id": "bad\nidentity"},
+    {"session_date": "20261002"}, {"session_date": "2026-09-30"},
+])
+def test_invalid_cash_transfer_request_never_changes_state(change):
+    state = active()
+    before = deepcopy(state)
+    arguments = {"strategy": "ATR", "amount": "100", "transfer_id": "request", "session_date": "2026-10-02"}
+    with pytest.raises(ValueError):
+        core.transfer_cash(state, **{**arguments, **change})
+    assert state == before
+
+
+@pytest.mark.parametrize("corrupt", [
+    lambda state: state.update(cash_transfers=None),
+    lambda state: state.update(cash_transfers={}),
+    lambda state: state["cash_transfers"].append(deepcopy(state["cash_transfers"][0])),
+    lambda state: state["cash_transfers"][0].update(sink="OTHER"),
+    lambda state: state["cash_transfers"][0].update(strategy="OTHER"),
+    lambda state: state["cash_transfers"][0].update(amount=100),
+    lambda state: state["cash_transfers"][0].update(amount="0"),
+    lambda state: state["cash_transfers"][0].update(amount="NaN"),
+    lambda state: state["cash_transfers"][0].update(amount="101"),
+    lambda state: state["cash_transfers"][0].update(session_date="2026-09-30"),
+    lambda state: state["cash_transfers"][0].update(extra="unrecognized"),
+    lambda state: state["cash_transfers"][0].pop("sink"),
+    lambda state: state["atr"].update(cash="5000"),
+])
+def test_corrupt_cash_transfer_history_or_missing_debit_fails_validation(corrupt):
+    state = core.transfer_cash(active(), strategy="ATR", amount="100", transfer_id="record",
+                               session_date="2026-10-02")
+    corrupt(state)
+    with pytest.raises(ValueError):
+        core.validate_state(state)
+
+
+def test_optional_transfer_history_preserves_old_active_and_waiting_states():
+    old = active()
+    assert "cash_transfers" not in old and core.validate_state(old) is old
+    empty = deepcopy(old)
+    empty["cash_transfers"] = []
+    assert core.validate_state(empty) is empty
+    waiting = core.initial_state(session_date="2026-10-01", broker_cash="10000", broker_shares=1,
+                                 open_order_count=0, broker_confirmed=True)
+    assert core.validate_state(waiting) is waiting
+    with pytest.raises(ValueError, match="active"):
+        core.transfer_cash(waiting, strategy="ATR", amount="100", transfer_id="waiting",
+                           session_date="2026-10-02")
+    waiting["cash_transfers"] = [{"id": "waiting", "strategy": "ATR", "amount": "100",
+                                  "session_date": "2026-10-02", "sink": "DONGPA"}]
+    with pytest.raises(ValueError, match="active"):
+        core.validate_state(waiting)
 
 
 def test_cash_and_ownership_tampering_fail_conservation_checks():

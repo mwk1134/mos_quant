@@ -186,6 +186,24 @@ def test_waiting_switch_also_protects_legacy_lots_from_a_stale_simulating_page()
     assert scope["_broker_snapshot_write_allowed"](stale, previous) is False
 
 
+def test_returned_dongpa_checkpoint_cannot_be_replaced_by_a_stale_mixed_page():
+    scope = functions("_broker_snapshot_write_allowed", "_preserve_broker_snapshot_metadata")
+    latest = {"available_cash": 9000, "as_of_date": "2026-10-30",
+              "broker_sync": {"version": 1, "baseline_date": "2026-10-30", "executions": {}},
+              "strategyTransition": {"id": "latest-transition", "mode": "DONGPA"},
+              "strategyHistory": [{"mixed_state": mixed_state()}]}
+    assert scope["_broker_snapshot_write_allowed"](deepcopy(latest), latest)
+    stale = deepcopy(latest)
+    stale["atr70_r2"] = mixed_state()
+    assert scope["_broker_snapshot_write_allowed"](stale, latest) is False
+    stale = deepcopy(latest)
+    stale.pop("strategyHistory")
+    assert scope["_broker_snapshot_write_allowed"](stale, latest) is False
+    preserved = scope["_preserve_broker_snapshot_metadata"]({"available_cash": 9000}, latest)
+    assert preserved["strategyHistory"] == latest["strategyHistory"]
+    assert preserved["strategyTransition"] == latest["strategyTransition"]
+
+
 def test_active_mixed_snapshot_is_never_built_from_legacy_trader():
     scope = functions("_build_snapshot_from_positions")
     original = document()["KMW2"]
@@ -219,7 +237,7 @@ def test_sleeve_display_keeps_strategy_ownership_and_actual_quantities():
 
 
 def component_script(active="KMW2", running=False, fee_rate="0.005", *, enabled=None,
-                     real_snapshot_loader=False, flat_waiting=False):
+                     real_snapshot_loader=False, flat_waiting=False, hybrid=False):
     """Run the real changed Streamlit functions with an entirely fake backend."""
     names = {"_copy_seed_increases", "_normalize_preset_config", "_preset_state_key", "save_preset_atr70_r2_setting",
              "_atr70_r2_ui_selected", "_atr70_r2_live_start", "_atr70_r2_waiting_message",
@@ -240,6 +258,20 @@ def component_script(active="KMW2", running=False, fee_rate="0.005", *, enabled=
     doc["_preset_configs"]["KMW2"][FLAG] = running if enabled is None else enabled
     if running:
         doc["KMW2"]["atr70_r2"]["fee_rate"] = fee_rate
+    if hybrid:
+        assert running
+        snapshot = doc["KMW2"]
+        snapshot["strategyTransition"] = {"mode": "DONGPA", "transferred_cash": "8750"}
+        snapshot["available_cash"] = 8750
+        snapshot["atr70_r2"]["atr"]["cash"] = "0"
+        snapshot["atr70_r2"]["r2"]["cash"] = "250"
+        snapshot["atr70_r2"]["r2"]["lots"][0].update(lot_id="R2:2026-10-30", round=2,
+            frozen_rules={"mode": "SF", "sell_multiplier": "1.02", "max_holding_days": 35})
+        snapshot["atr70_r2"]["orders"] = {"reserved-buy": {
+            "strategy": "R2", "side": "BUY", "session_date": "2026-11-02", "order_type": "LOC",
+            "price": "90", "quantity": 2, "status": "ACCEPTED", "broker_order_id": "202"}}
+        snapshot["1_2026-10-29"] = {"round": 1, "shares": 3, "buy_price": 70, "mode": "AG",
+                                        "sell_threshold": 6.8, "max_hold_days": 7}
     if not running:
         doc["KMW2"].pop("atr70_r2")
         doc["KMW2"]["1_2026-10-30"] = {"round": 1, "shares": 3, "buy_price": 100}
@@ -321,6 +353,7 @@ def test_streamlit_active_mixed_off_keeps_lots_and_shows_exit_management():
         assert app.session_state._stored["_preset_configs"]["KMW2"][FLAG] is False
         assert app.session_state._stored["KMW2"]["atr70_r2"] == mixed_state()
         assert any("청산 관리" in warning.value for warning in app.warning)
+        assert any("기본 동파매매 전환 확인 중" in warning.value for warning in app.warning)
         assert len(app.dataframe) == 2
         assert len(order_html_boards(app)) == 2
         assert [toggle.label for toggle in app.toggle] == ["반반매매 (ATR70-R2) 적용"]
@@ -736,3 +769,92 @@ def test_failed_switch_click_restores_selection_without_retrying_on_rerun(initia
         assert app.session_state.save_attempts == 2
         assert app.session_state.save_count == 1
         assert app.session_state._stored["KMW2"]["atr70_r2"] == before["KMW2"]["atr70_r2"]
+
+
+def hybrid_preview(*, enabled=False):
+    orders = [{"ticker": "SOXL", "side": "SELL", "order_type": "LOC", "price": "74.76",
+               "quantity": 3, "round": 1, "position_key": "1_2026-10-29"}]
+    if not enabled:
+        orders.insert(0, {"ticker": "SOXL", "side": "BUY", "order_type": "LOC", "price": "71.20",
+                          "quantity": 5, "round": 2, "position_key": "2_2026-11-02"})
+    return {"preset": "KMW2", "status": "ready", "order_date": "2026-11-02", "mode": "AG",
+            "buy_entry_rules": {"mode": "AG"}, "snapshot_fresh": True, "dongpa_transition_managed": True,
+            "orders": orders, "carried_mixed_tables": {
+                "ATR": {"orders": [], "message": "기존 ATR 보유분 없음"},
+                "R2": {"orders": [
+                    {"ticker": "SOXL", "strategy": "R2", "side": "BUY", "order_type": "LOC", "price": "90",
+                     "quantity": 2, "status": "ACCEPTED", "existing_order": True, "broker_order_id": "202",
+                     "session_date": "2026-11-02", "condition": "기접수 주문 유지 · 예약금 보존"},
+                    {"ticker": "SOXL", "strategy": "R2", "side": "SELL", "order_type": "LOC", "price": "102",
+                     "quantity": 10, "round": 2, "lot_id": "R2:2026-10-30",
+                     "frozen_rules": {"mode": "SF", "sell_multiplier": "1.02", "max_holding_days": 35},
+                     "condition": "진입 당시 R2 목표가 $102.00 · 35거래일 원래 규칙 유지",
+                     "status": "종가 조건 확인 대기"}]}}}
+
+
+def column_text(block):
+    return "\n".join(element.value for kind in ("subheader", "success", "warning", "info", "caption")
+                     for element in block.get(kind))
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_streamlit_hybrid_keeps_carried_sell_rules_and_cash_separate_while_respecting_dongpa_buy_plan(enabled):
+    from streamlit.testing.v1 import AppTest
+
+    plan = hybrid_preview(enabled=enabled)
+    original = deepcopy(plan)
+    seen = []
+
+    def build(document, **kwargs):
+        seen.append(deepcopy(document))
+        assert document["_preset_configs"]["KMW2"][FLAG] is enabled
+        return deepcopy(plan)
+
+    with patch("requests.Session.request", side_effect=AssertionError("No real account access")), \
+            patch("requests.get", side_effect=AssertionError("No market network")), \
+            patch("kmw_order_plan.build_kmw_plan", side_effect=build):
+        app = AppTest.from_string(component_script(running=True, enabled=enabled, hybrid=True)).run(timeout=20)
+        assert not app.exception
+        before = deepcopy(app.session_state._stored)
+        app.run(timeout=20)
+    assert not app.exception and not app.error
+    assert app.session_state._stored == before and plan == original
+    assert "save_attempts" not in app.session_state and "save_count" not in app.session_state
+    assert all(document["KMW2"] == before["KMW2"] for document in seen)
+    assert any("기본 동파매매 / 기존 반반매매 보유분 관리" in heading.value for heading in app.subheader)
+
+    buy, sell = map(column_text, app.columns)
+    if enabled:
+        assert "기본 동파 · 2회차 매수 추천" not in buy and "$71.20" not in buy
+        assert any("동파 신규 매수 중단" in warning.value for warning in app.warning)
+    else:
+        assert "기본 동파 · 2회차 매수 추천" in buy and "$71.20" in buy and "5주" in buy
+        assert "매수 추천: 1건" in buy
+    assert "저장된 매수 주문: 1건" in buy and "$90.00" in buy and "2주" in buy
+    assert "예약금 보존" in buy and "주문번호: 202" in buy
+    assert "R2 · 2회차 매도 추천" in sell and "$102.00" in sell and "10주" in sell
+    assert "35거래일 원래 규칙 유지" in sell and "모드: SF (안전모드)" in sell
+    assert "기본 동파 · 1회차 매도 추천" in sell and "$74.76" in sell
+    assert "모드: AG (공세모드)" in sell and "매수체결일: 2026-10-29" in sell
+    assert not app.number_input and not app.button
+
+    summary = next(item.value for item in app.dataframe if "장부 현금" in item.value.columns)
+    cash = dict(zip(summary["전략"], summary["장부 현금"]))
+    assert cash == {"기본 동파": "$8,750.00", "ATR Wilder70": "$0.00", "정배열 R2": "$250.00"}
+    holdings = next(item.value for item in app.dataframe if "매도 관리" in item.value.columns)
+    assert dict(zip(holdings["전략"], holdings["수량"])) == {"정배열 R2": 10, "기본 동파": 3}
+    assert before["KMW2"]["atr70_r2"]["orders"]["reserved-buy"]["quantity"] == 2
+
+
+def test_streamlit_hybrid_signal_failure_shows_saved_receipt_without_simulated_dongpa_buy():
+    from streamlit.testing.v1 import AppTest
+    with patch("requests.Session.request", side_effect=AssertionError("No real account access")), \
+            patch("kmw_order_plan.build_kmw_plan", side_effect=ValueError("Synthetic unavailable signal")):
+        app = AppTest.from_string(component_script(running=True, enabled=False, hybrid=True)).run(timeout=20)
+    assert not app.exception and not app.error
+    buy = column_text(app.columns[0])
+    assert "저장된 매수 주문: 1건" in buy and "$90.00" in buy
+    assert not app.success and "$71.20" not in buy
+    assert any("최신 신호 확인 불가" in warning.value for warning in app.warning)
+    assert app.session_state._stored["KMW2"]["available_cash"] == 8750
+    assert "save_attempts" not in app.session_state

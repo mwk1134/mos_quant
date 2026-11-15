@@ -319,6 +319,11 @@ def test_monthly_sale_uses_confirmed_actual_fill_before_half_split(tmp_path):
         assert len(broker.calls) == 1 and broker.calls[0]["side"] == "sell"
         assert saved[0]["atr"]["cash"] == "500"
         assert "2026-11" not in saved[0]["rebalance_months"]
+        pending = deepcopy(saved[0]["pending_rebalance"])
+        run(broker, saved, ctx, ledger, now=monday, enabled=False,
+            market_quote=quote(monday, "300", "300"))
+        assert len(broker.calls) == 1 and saved[0]["pending_rebalance"] == pending
+        assert "2026-11" not in saved[0]["rebalance_months"]
         broker.fill(1, "280")
         result = run(broker, saved, ctx, ledger, now=monday, enabled=False,
                      market_quote=quote(monday, "280", "300"))
@@ -327,6 +332,111 @@ def test_monthly_sale_uses_confirmed_actual_fill_before_half_split(tmp_path):
         r2_nav = Decimal(saved[0]["r2"]["cash"]) + sum(lot["shares"] for lot in saved[0]["r2"]["lots"]) * 280
         assert atr_nav == r2_nav
         assert len(broker.calls) == 1
+
+
+def test_flag_off_skips_monthly_rebalance_and_cash_check_but_keeps_frozen_r2_exit(tmp_path):
+    broker, saved = Broker(), [state()]
+    raw = {"side": "BUY", "quantity": 4, "price": "100", "order_type": "LOC",
+           "round": 1, "lot_id": "R2:2026-10-30", "frozen_rules": core.r2_rules("SF", True)}
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        run(broker, saved, context(r2_orders=[raw]), ledger)
+        broker.fill(1, "100")
+        run(broker, saved, context(), ledger)
+        frozen = deepcopy(saved[0]["r2"]["lots"][0]["frozen_rules"])
+        monday = datetime(2026, 11, 2, 10, tzinfo=ET)
+        ctx = context(session_date="2026-11-02", previous_session="2026-10-30", next_session="2026-11-03",
+                      first_session_of_month=True, daily_rows=None,
+                      r2_orders=[{"side": "SELL", "quantity": 4, "price": "101.50", "order_type": "LOC",
+                                  "round": 1, "lot_id": raw["lot_id"]}])
+        broker.currencies = Mock(side_effect=AssertionError("Draining must not start a new monthly cash transfer"))
+        result = run(broker, saved, ctx, ledger, now=monday, enabled=False,
+                     market_quote=quote(monday, "300", "300"))
+        assert len(broker.calls) == 2 and len(result["orders"]) == 1
+        assert result["orders"][0]["order"]["event"] == "R2_EXIT"
+        assert broker.calls[-1]["order_type"] == "LOC" and broker.calls[-1]["quantity"] == 4
+        assert saved[0]["r2"]["lots"][0]["frozen_rules"] == frozen
+        assert "2026-11" not in saved[0]["rebalance_months"] and "pending_rebalance" not in saved[0]
+        broker.currencies.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_cash_only_rebalance_restart_waits_for_quote_then_settles_before_session_catchup(tmp_path, enabled):
+    broker = Broker()
+    broker.cash = "10000.54"
+    saved = [core.advance_r2_session(state(), "2026-11-02")]
+    saved[0]["atr"]["cash"], saved[0]["r2"]["cash"] = "6000", "4000"
+    pending = core.plan_monthly_rebalance(saved[0], session_date="2026-11-02", valuation_price="100")
+    assert pending["orders"] == []
+    saved[0]["pending_rebalance"] = deepcopy(pending)
+    before = deepcopy(saved[0])
+    tuesday = datetime(2026, 11, 3, 10, tzinfo=ET)
+    ctx = context(session_date="2026-11-03", previous_session="2026-11-02", next_session="2026-11-04",
+                  daily_rows=None)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        waiting = run(broker, saved, ctx, ledger, now=tuesday, enabled=enabled)
+        assert waiting == {"handled": True, "state": "WAITING_REBALANCE", "phase": "WAITING_FILLS", "orders": []}
+        assert saved[0] == before
+        result = run(broker, saved, ctx, ledger, now=tuesday, enabled=enabled,
+                     market_quote=quote(tuesday, "100", "100"))
+        assert result["handled"] is True and result["orders"] == []
+        assert ledger.rows("fake-kmw2") == []
+    expected = core.settle_monthly_rebalance(before, pending, valuation_price="100")
+    expected.pop("pending_rebalance")
+    expected["unallocated_cost_cash"] = "0.54"
+    expected = core.advance_r2_session(expected, "2026-11-03")
+    assert saved[0] == expected and saved[0]["r2"]["last_seed_session"] == "2026-11-03"
+    assert Decimal(saved[0]["atr"]["cash"]) == Decimal(saved[0]["r2"]["cash"]) == 5000
+    assert saved[0]["r2"]["trading_days"] == before["r2"]["trading_days"] + 1
+    transferred = core.transfer_cash(saved[0], strategy="ATR", amount="5000", transfer_id="off:after-restart",
+                                     session_date="2026-11-03")
+    assert transferred["atr"]["cash"] == "0"
+    assert broker.calls == []
+
+
+def test_partial_monthly_sale_restart_freezes_sizing_until_original_fill_is_complete(tmp_path):
+    broker, saved = Broker(), [state("1000")]
+    buy = {"side": "BUY", "quantity": 4, "price": "100", "order_type": "LOC", "round": 1,
+           "lot_id": "R2:2026-10-30", "frozen_rules": core.r2_rules("SF", True)}
+    entry = core.build_runtime_plan(saved[0], session_date="2026-10-30", previous_session="2026-10-29",
+        next_session="2026-11-02", r2_orders=[buy])["orders"][0]
+    saved[0] = core.register_order(saved[0], entry, "77")
+    saved[0] = core.reconcile_fills(saved[0], [{"order_id": entry["intent_id"], "broker_order_id": "77",
+        "cumulative_quantity": 4, "cumulative_notional": "400", "cumulative_fee": "2", "status": "FILLED"}])
+    broker.held = 4
+    broker.history = [{"iscd": "SOXL", "oder_date": "20261030", "oder_no": "77", "cntg_dqty": 4,
+                       "cntg_crnc_prc": "100", "cntg_camt": "400", "seln_byov_clcd": "2"}]
+    monday = datetime(2026, 11, 2, 10, tzinfo=ET)
+    ctx = context(session_date="2026-11-02", previous_session="2026-10-30", next_session="2026-11-03",
+                  first_session_of_month=True, daily_rows=None)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        run(broker, saved, ctx, ledger, now=monday, market_quote=quote(monday, "300", "300"))
+        assert len(broker.calls) == 1 and broker.calls[0]["quantity"] == 2
+        pending = deepcopy(saved[0]["pending_rebalance"])
+        frozen = deepcopy(saved[0]["r2"])
+        broker.orders[0]["cntg_qty"] = 1
+        broker.held = 3
+        broker.history.append({"iscd": "SOXL", "oder_date": "20261102", "oder_no": "1", "cntg_dqty": 1,
+                               "cntg_crnc_prc": "280", "cntg_camt": "280", "seln_byov_clcd": "1"})
+        tuesday = datetime(2026, 11, 3, 10, tzinfo=ET)
+        ctx = context(session_date="2026-11-03", previous_session="2026-11-02", next_session="2026-11-04",
+                      daily_rows=None)
+        result = run(broker, saved, ctx, ledger, now=tuesday, enabled=False,
+                     market_quote=quote(tuesday, "280", "280"))
+        assert result["state"] == "WAITING_REBALANCE" and result["orders"] == []
+        assert saved[0]["pending_rebalance"] == pending and len(broker.calls) == 1
+        assert saved[0]["r2"]["last_seed_session"] == frozen["last_seed_session"]
+        assert saved[0]["r2"]["trading_days"] == frozen["trading_days"]
+        assert saved[0]["r2"]["seed"] == frozen["seed"]
+        broker.orders[0]["cntg_qty"] = 2
+        broker.history[-1].update(cntg_dqty=2, cntg_camt="560")
+        broker.held = 2
+        run(broker, saved, ctx, ledger, now=tuesday, enabled=False,
+            market_quote=quote(tuesday, "280", "280"))
+        assert "pending_rebalance" not in saved[0] and "2026-11" in saved[0]["rebalance_months"]
+        assert saved[0]["r2"]["last_seed_session"] == "2026-11-03"
+        assert saved[0]["r2"]["trading_days"] == frozen["trading_days"] + 1
+        assert len(broker.calls) == 1
+        core.validate_state(saved[0])
 
 
 def test_late_start_exits_atr_with_market_and_does_not_buy_again(tmp_path):
@@ -718,6 +828,107 @@ def test_usd_buying_power_cap_initializes_only_requested_cap_and_excludes_surplu
     rebalanced = core.settle_monthly_rebalance(activated, plan)
     assert rebalanced["atr"]["cash"] == rebalanced["r2"]["cash"] == "37003"
     assert rebalanced["unallocated_cost_cash"] == "0.54"
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("waiting", [None, requested_funding_state()])
+def test_transition_reactivation_uses_only_current_strategy_budget_and_preserves_outside_cash(tmp_path, waiting):
+    broker, persist = buying_power_broker(), Mock()
+    before = deepcopy(waiting)
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    ctx = funding_context()
+    ctx.update(activation_budget="70000", activation_not_before="2026-11-12")
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        result = run_mixed_tick(broker, waiting, ctx, persist, ledger, now=now, enabled=True,
+                               account="fake-kmw2", exchange_code="0066")
+        assert result["handled"] is True and result["orders"] == [] and ledger.rows("fake-kmw2") == []
+    activated = persist.call_args.args[0]
+    core.validate_state(activated)
+    assert activated["initial_cash"] == "70000"
+    assert activated["atr"]["cash"] == activated["r2"]["cash"] == "35000"
+    assert activated["unallocated_cost_cash"] == "4006.54"
+    assert activated["activation_request"] == {
+        "session_date": "2026-11-12", "initial_cash": "70000",
+        "funding_policy": "USD_BUYING_POWER_CAP", "requested_at": now.isoformat()}
+    broker.order_estimate.assert_called_once_with(integrated_margin=False)
+    assert waiting == before and broker.calls == []
+
+
+@pytest.mark.parametrize("waiting", [None, requested_funding_state()])
+def test_transition_reactivation_cannot_fall_through_to_legacy_before_allowed_session(tmp_path, waiting):
+    broker, persist = buying_power_broker(), Mock()
+    broker.holdings = Mock(side_effect=AssertionError("No broker reads before the earliest activation session"))
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    ctx = funding_context()
+    ctx.update(activation_budget="70000", activation_not_before="2026-11-13")
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        result = run_mixed_tick(broker, waiting, ctx, persist, ledger, now=now, enabled=True,
+                               account="fake-kmw2", exchange_code="0066")
+        assert result == {"handled": True, "state": "WAITING_ACTIVATION_SESSION", "orders": []}
+        assert ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    broker.holdings.assert_not_called()
+    broker.currencies.assert_not_called()
+    broker.order_estimate.assert_not_called()
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("invalid", [None, False, 70000, "0", "-1", "NaN", "Infinity", "invalid"])
+def test_invalid_transition_budget_never_uses_full_broker_balance(tmp_path, invalid):
+    broker, persist = buying_power_broker(), Mock()
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    ctx = funding_context()
+    ctx["activation_budget"] = invalid
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, None, ctx, persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "INVALID_ACTIVATION_REQUEST" and ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    broker.currencies.assert_not_called()
+    broker.order_estimate.assert_not_called()
+    assert broker.calls == []
+
+
+@pytest.mark.parametrize("invalid", [None, False, 20261113, "20261113", "2026-02-30", "invalid"])
+def test_invalid_transition_activation_session_is_blocked(tmp_path, invalid):
+    broker, persist = buying_power_broker(), Mock()
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    ctx = funding_context()
+    ctx.update(activation_budget="70000", activation_not_before=invalid)
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, None, ctx, persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "INVALID_ACTIVATION_REQUEST" and ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    broker.currencies.assert_not_called()
+    assert broker.calls == []
+
+
+def test_transition_budget_still_requires_independent_sufficient_usd_buying_power(tmp_path):
+    broker, persist = buying_power_broker(), Mock()
+    broker.order_estimate.return_value[0]["oder_crnc_oder_able_camt"] = "69999.99"
+    now = datetime(2026, 11, 12, 4, 2, tzinfo=ET)
+    ctx = funding_context()
+    ctx["activation_budget"] = "70000"
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        with pytest.raises(MixedBlocked) as blocked:
+            run_mixed_tick(broker, None, ctx, persist, ledger, now=now, enabled=True,
+                           account="fake-kmw2", exchange_code="0066")
+        assert blocked.value.code == "BUYING_POWER" and ledger.rows("fake-kmw2") == []
+    persist.assert_not_called()
+    assert broker.calls == []
+
+
+def test_transition_budget_is_not_allowed_to_reset_an_already_active_ledger(tmp_path):
+    broker, saved = Broker(), [state()]
+    ctx = context(activation_budget="invalid", activation_not_before="invalid")
+    with OrderLedgerContext(tmp_path / "orders.sqlite3") as ledger:
+        result = run(broker, saved, ctx, ledger)
+        assert result["handled"] is True and result["orders"] == []
+    assert saved[0]["initial_cash"] == "10000" and "activation_request" not in saved[0]
+    assert saved[0]["atr"]["cash"] == saved[0]["r2"]["cash"] == "5000"
     assert broker.calls == []
 
 

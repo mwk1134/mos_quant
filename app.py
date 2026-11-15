@@ -836,7 +836,7 @@ def _preserve_broker_snapshot_metadata(snapshot: dict, previous_snapshot: dict) 
     """Keep the actual-execution cursor and confirmed session checkpoint."""
     if "manual_buy_confirmations" in (previous_snapshot or {}):
         snapshot["manual_buy_confirmations"] = deepcopy(previous_snapshot["manual_buy_confirmations"])
-    for key in ("atr70_r2", "atr70_r2_mix_enabled", "atr70_r2_status"):
+    for key in ("atr70_r2", "atr70_r2_mix_enabled", "atr70_r2_status", "strategyHistory", "strategyTransition"):
         if key in (previous_snapshot or {}):
             snapshot[key] = deepcopy(previous_snapshot[key])
     if "broker_sync" not in (previous_snapshot or {}):
@@ -849,6 +849,15 @@ def _preserve_broker_snapshot_metadata(snapshot: dict, previous_snapshot: dict) 
 
 def _broker_snapshot_write_allowed(snapshot: dict, latest_snapshot: dict) -> bool:
     """A stale page or a settings reset cannot erase newer confirmed fills."""
+    if not isinstance(snapshot, dict):
+        return False
+    for key in ("strategyHistory", "strategyTransition"):
+        if snapshot.get(key) != (latest_snapshot or {}).get(key):
+            return False
+    transition = (latest_snapshot or {}).get("strategyTransition")
+    if (isinstance(transition, dict) and transition.get("mode") == "DONGPA"
+            and "atr70_r2" in snapshot and "atr70_r2" not in (latest_snapshot or {})):
+        return False
     if "atr70_r2" in (latest_snapshot or {}) or (latest_snapshot or {}).get("atr70_r2_mix_enabled", False):
         # The live mixed ledger belongs to the execution engine.  A settings
         # page may mirror preferences, but cannot replace its cash or lots with
@@ -2135,7 +2144,7 @@ def show_atr70_r2_preference_control():
         selected = bool(st.session_state[toggle_key])
         ok, err = save_preset_atr70_r2_setting("KMW2", selected)
         if ok:
-            message = "KMW2 혼합매매 전환을 예약했습니다. 기존 보유분 전량 매도 확인 전에는 혼합 매수를 시작하지 않습니다." if selected else "혼합매매 신규 매수를 중단했습니다. 기존 혼합 보유분의 매도 관리는 계속합니다."
+            message = "KMW2 반반매매 전환을 예약했습니다. 기존 동파 보유분 정리 전에는 혼합 신규 매수를 시작하지 않습니다." if selected else "기본 동파매매를 선택했습니다. 기존 반반매매 보유분은 원래 규칙으로 관리하고 예약금을 뺀 현금부터 동파에 배정합니다."
             st.session_state.trader = None
         else:
             st.session_state[toggle_key] = bool(
@@ -2151,18 +2160,20 @@ def show_atr70_r2_preference_control():
         "반반매매 (ATR70-R2) 적용",
         key=toggle_key,
         on_change=save_selected_setting,
-        help="기존 보유분은 원래 매도 규칙으로 관리하고 신규 매수를 중단합니다. 실제 전량 매도와 미체결 해소를 확인한 후 ATR70·정배열 R2에 각각 50%를 배분합니다.",
+        help="ON은 반반매매, OFF는 기본 동파매매입니다. OFF에서는 기존 ATR70·R2 보유분의 매도 규칙을 유지하고 예약금을 뺀 현금부터 동파를 운용합니다. 다시 ON이면 기존 동파 보유분 정리 후 반반매매를 재개합니다. 엔진 활성화는 별도입니다.",
     )
     st.caption("ATR70 50% + 정배열 R2 50% · 월초 비중조정 · KMW2 전용")
     mixed_state = snapshot.get("atr70_r2")
-    if isinstance(mixed_state, dict) and mixed_state.get("phase") == "WAITING_FLAT":
+    if not enabled:
+        if "atr70_r2" in snapshot:
+            st.info("기본 동파매매 선택 · 기존 반반매매 보유분 청산 관리 유지 · 예약금을 제외한 현금부터 동파에 배정합니다.")
+        else:
+            st.info("기본 동파매매 적용 중입니다. ON으로 바꾸면 기존 보유분 정리 후 반반매매로 전환합니다.")
+    elif isinstance(mixed_state, dict) and mixed_state.get("phase") == "WAITING_FLAT":
         st.warning(_atr70_r2_waiting_message(snapshot))
         st.caption("실제 SOXL 잔고 0주·미체결 및 활성 예약 없음·USD 예수금과 추정 예수금 일치를 확인한 뒤 시작합니다.")
     elif "atr70_r2" in snapshot:
-        if enabled:
-            st.info("혼합 전략 관리 중입니다. ATR 돌파 매수와 익일 시가 청산, R2 종가 주문을 각 전략의 자금으로 관리합니다.")
-        else:
-            st.warning("혼합매매 신규 매수 중단 · 기존 혼합 보유분의 청산 관리는 유지합니다. 기존 동파법으로 자동 복귀하지 않습니다.")
+        st.info("혼합 전략 관리 중입니다. ATR 돌파 매수와 익일 시가 청산, R2 종가 주문을 각 전략의 자금으로 관리합니다.")
     elif enabled:
         st.warning(_atr70_r2_waiting_message(snapshot))
         st.caption("실제 SOXL 잔고 0주·미체결 및 활성 예약 없음·USD 예수금과 추정 예수금 일치를 확인한 뒤 시작합니다.")
@@ -2754,7 +2765,9 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
         elif not message:
             message = "정규장 시가·돌파 조건 확인 대기" if strategy == "ATR" else "현재 신규 주문 조건 미충족 또는 기존 주문 관리 중"
         if not enabled and not waiting:
-            message = "스위치 OFF · 신규 매수 추천 제외 · 기존 보유분 매도 관리 유지. 기접수 주문은 유지됩니다. " + message
+            message = ("기본 동파매매 운용 중 · 기존 반반매매 신규 매수 중단 · 원래 매도 규칙 유지. 기접수 주문은 유지됩니다. "
+                       if plan.get("dongpa_transition_managed") else
+                       "스위치 OFF · 기본 동파매매 전환 확인 중 · 혼합 신규 매수 추천 제외 · 기존 보유분 매도 관리 유지. 기접수 주문은 유지됩니다. ") + message
         rows = []
         for order in orders:
             if not isinstance(order, dict):
@@ -2844,12 +2857,18 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
     return tables
 
 
-def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_available=True):
+def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_available=True, snapshot=None):
     """Match the standard buy/sell view while retaining strategy order details."""
-    from kmw2_order_ui import show_order_recommendations
+    from kmw2_order_ui import dongpa_order_table, show_order_recommendations
     from order_table_ui import ORDER_TABLE_CSS, render_order_table_html
 
-    tables = _atr70_r2_order_tables(plan, state, enabled=enabled, waiting=waiting, signal_available=signal_available)
+    hybrid = isinstance(snapshot, dict) and isinstance(snapshot.get("strategyTransition"), dict) and snapshot["strategyTransition"].get("mode") == "DONGPA"
+    carried_plan = plan
+    if hybrid and isinstance(plan, dict):
+        carried_plan = {**plan, "strategy_order_tables": plan.get("carried_mixed_tables", {}), "orders": []}
+    tables = _atr70_r2_order_tables(carried_plan, state, enabled=enabled and not hybrid, waiting=waiting, signal_available=signal_available)
+    if hybrid:
+        tables = {"DONGPA": dongpa_order_table(plan, snapshot, signal_available=signal_available), **tables}
     if signal_available and isinstance(plan, dict):
         if plan.get("order_date"):
             st.caption("표시용 주문안 · 미국 주문일 " + str(plan["order_date"]))
@@ -2860,7 +2879,7 @@ def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_av
     show_order_recommendations(tables, waiting=waiting, signal_available=signal_available)
     with st.expander("📑 전략별 주문 상세", expanded=False):
         st.markdown(ORDER_TABLE_CSS, unsafe_allow_html=True)
-        for strategy in ("ATR", "R2"):
+        for strategy in tables:
             table = tables[strategy]
             st.subheader(table["label"])
             st.markdown(render_order_table_html(table, strategy), unsafe_allow_html=True)
@@ -2869,15 +2888,19 @@ def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_av
 
 def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
     """Display the live mixed ledger instead of rebuilding a legacy simulation."""
-    if ma_alignment_placeholder is not None:
-        ma_alignment_placeholder.info("KMW2 반반매매 (ATR70-R2) · R2 정배열 판단은 혼합 전략에서 관리합니다.")
     enabled = bool((st.session_state.get("kmw2_preset") or {}).get(ATR70_R2_SWITCH_KEY, False))
     state = snapshot.get(ATR70_R2_STATE_KEY)
-    st.subheader("🔀 KMW2 · 반반매매 (ATR70-R2)")
+    transition = snapshot.get("strategyTransition")
+    hybrid = isinstance(transition, dict) and transition.get("mode") == "DONGPA" and state is not None
+    if ma_alignment_placeholder is not None:
+        ma_alignment_placeholder.info("KMW2 기본 동파매매 · 기존 반반매매 보유분은 원래 매도 규칙으로 관리합니다." if hybrid
+                                      else "KMW2 반반매매 (ATR70-R2) · R2 정배열 판단은 혼합 전략에서 관리합니다.")
+    st.subheader("🔀 KMW2 · 기본 동파매매 / 기존 반반매매 보유분 관리" if hybrid else "🔀 KMW2 · 반반매매 (ATR70-R2)")
     live_start = _atr70_r2_live_start(snapshot)
     if live_start:
         capital, started = live_start
-        st.caption(f"실계좌 운용 시작일 {started} · 시작자금 ${capital:,.2f} · ATR70 50% + R2 50%")
+        st.caption(f"최초 반반매매 시작일 {started} · 시작자금 ${capital:,.2f} · 기존 보유분 관리" if hybrid
+                   else f"실계좌 운용 시작일 {started} · 시작자금 ${capital:,.2f} · ATR70 50% + R2 50%")
     if state is None or (isinstance(state, dict) and state.get("phase") == "WAITING_FLAT"):
         st.warning(_atr70_r2_waiting_message(snapshot))
         st.write("자동매매 엔진이 실제 SOXL 잔고 0주·미체결 및 활성 예약 없음·USD 예수금과 추정 예수금 일치를 확인한 뒤 운용자금을 반반 배분합니다.")
@@ -2909,16 +2932,33 @@ def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
         st.error("혼합 전략 장부를 확인하지 못했습니다. 자동매매 관리 화면에서 상태를 확인해 주세요.")
         show_atr70_r2_order_tables(None, state, enabled=enabled, signal_available=False)
         return
-    if enabled:
+    if hybrid:
+        st.info("기존 반반매매 보유분은 원래 매도 규칙을 유지합니다. 동파는 별도로 배정된 현금으로 운용하며 기존 보유분의 순매도대금은 확인 후 동파 자금에 더합니다.")
+        if enabled:
+            st.warning("반반매매 재전환 대기 · 동파 신규 매수 중단 · 기존 동파와 반반매매 보유분의 매도 관리는 유지합니다.")
+        st.metric("💵 기본 동파 장부 현금", f"${float(snapshot.get('available_cash', 0)):,.2f}")
+        legacy_quantity = 0
+        for key, lot in snapshot.items():
+            if re.fullmatch(r"[1-9][0-9]*_\d{4}-\d{2}-\d{2}", key) and isinstance(lot, dict):
+                quantity = int(lot.get("shares", 0))
+                legacy_quantity += quantity
+                if quantity:
+                    holdings.append({"전략": "기본 동파", "진입일": key.split("_", 1)[1],
+                                     "수량": quantity, "체결가": f"${float(lot['buy_price']):,.2f}",
+                                     "매도 관리": "진입 당시 기본 동파 매도 조건 유지"})
+        for row in summary:
+            row["목표 비중"] = "기존 보유 관리"
+        summary.insert(0, {"전략": "기본 동파", "목표 비중": "전환된 현금", "장부 현금": f"${float(snapshot.get('available_cash', 0)):,.2f}", "SOXL 보유": legacy_quantity})
+    elif enabled:
         st.success("혼합 전략 설정 켜짐 · 각 전략의 현금과 보유수량을 따로 관리합니다. 자동매매 실행 상태는 관리 화면에서 확인합니다.")
     else:
-        st.warning("혼합매매 신규 매수 중단 · 기존 보유분 청산 관리 유지. 기존 동파법으로 자동 복귀하지 않습니다.")
+        st.warning("기본 동파매매 전환 확인 중 · 반반매매 신규 매수 중단 · 기존 보유분 청산 관리 유지. 예약금을 뺀 현금부터 동파에 배정합니다.")
     try:
         preview = _atr70_r2_readonly_plan(snapshot)
         signal_available = True
     except Exception:
         preview, signal_available = None, False
-    show_atr70_r2_order_tables(preview, state, enabled=enabled, signal_available=signal_available)
+    show_atr70_r2_order_tables(preview, state, enabled=enabled, signal_available=signal_available, snapshot=snapshot)
     st.subheader("💼 포트폴리오 현황")
     if summary:
         st.write("**전략별 장부 현금·보유수량**")
@@ -2947,7 +2987,8 @@ def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
             st.caption("엔진 상태: " + labels[status["state"]])
         if status.get("error_code"):
             st.warning("자동매매 관리 화면에서 실행 상태를 확인해 주세요.")
-    st.caption("월중 비중은 변동하며 매월 첫 미국 거래일에 50:50을 목표로 조정합니다. 실시간 잔고와 체결 상태는 자동매매 관리 화면에서 확인합니다.")
+    st.caption("기존 반반매매의 예약금과 동파 운용 현금은 별도 관리합니다. 실시간 잔고·체결 상태는 자동매매 관리 화면에서 확인합니다." if hybrid
+               else "월중 비중은 변동하며 매월 첫 미국 거래일에 50:50을 목표로 조정합니다. 실시간 잔고와 체결 상태는 자동매매 관리 화면에서 확인합니다.")
 
 
 def show_daily_recommendation(ma_alignment_placeholder=None):

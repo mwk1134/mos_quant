@@ -368,6 +368,28 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
     latest_quote = quote_provider or (lambda: quote)
     if state is None and not enabled:
         return {"handled": False, "state": "INACTIVE", "orders": []}
+    activation_pending = state is None or state["phase"] == "WAITING_FLAT"
+    activation_request = None
+    if activation_pending and enabled:
+        if "activation_not_before" in context:
+            try:
+                earliest = context["activation_not_before"]
+                if not isinstance(earliest, str) or date.fromisoformat(earliest).isoformat() != earliest:
+                    raise ValueError
+            except (TypeError, ValueError):
+                raise MixedBlocked("INVALID_ACTIVATION_REQUEST", "반반매매 재시작 거래일을 확인하세요.") from None
+            if session < earliest:
+                return {"handled": True, "state": "WAITING_ACTIVATION_SESSION", "orders": []}
+        if "activation_budget" in context:
+            try:
+                budget = context["activation_budget"]
+                if not isinstance(budget, str):
+                    raise ValueError
+                _money(budget, positive=True)
+            except (ValueError, MixedBlocked):
+                raise MixedBlocked("INVALID_ACTIVATION_REQUEST", "반반매매 재시작 운용자금을 확인하세요.") from None
+            activation_request = {"session_date": session, "initial_cash": budget,
+                                  "funding_policy": "USD_BUYING_POWER_CAP", "requested_at": now.isoformat()}
     if (not is_us_equity_trading_day(now.astimezone(ET).date())
             or context.get("session_date", session) != session):
         return {"handled": bool(state and state.get("phase") == "ACTIVE"),
@@ -392,8 +414,12 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
             return {"handled": False, "state": "WAITING_FLAT", "orders": []}
         if actual_shares or context.get("legacy_shares", 0) or today_orders or reservations or context.get("broker_confirmed") is not True:
             return {"handled": False, "state": "WAITING_FLAT", "orders": []}
-        cash, surplus = _activation_funds(client, state, session_date=session)
-        activation_request = deepcopy(state.get("activation_request")) if state is not None else None
+        funding_state = state
+        if activation_request is not None:
+            funding_state = deepcopy(state) if state is not None else {}
+            funding_state["activation_request"] = activation_request
+        cash, surplus = _activation_funds(client, funding_state, session_date=session)
+        activation_request = deepcopy(funding_state.get("activation_request")) if funding_state is not None else None
         state = core.initial_state("KMW2", session_date=session, broker_cash=str(cash), broker_shares=0,
                                    open_order_count=0, broker_confirmed=True,
                                    fee_rate=context.get("fee_rate", "0.005"))
@@ -406,7 +432,10 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
     core.validate_state(state)
     state, active_rows = reconcile_broker(state, client, now=now,
         reservation_start_date=context.get("reservation_start_date", "2026-04-29"))
-    state = core.advance_r2_session(state, session)
+    # A persisted rebalance freezes its sizing basis and (for cash-only plans)
+    # the whole accounting hash. Catch up sessions only after that plan settles.
+    if not state.get("pending_rebalance"):
+        state = core.advance_r2_session(state, session)
     persist_state(state)
     usable_quote = None
     try:
@@ -414,7 +443,8 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
     except MixedBlocked:
         pass
     pending_rebalance = state.get("pending_rebalance")
-    month_due = session[:7] not in state["rebalance_months"]
+    month_due = enabled and session[:7] not in state["rebalance_months"]
+    outside_cash = None
     if usable_quote and (pending_rebalance or month_due) and not any(lot["shares"] for lot in state["atr"]["lots"]):
         actual_cash = _money(_broker_cash(client))
         accounted_cash = _money(state["atr"]["cash"]) + _money(state["r2"]["cash"])
@@ -422,8 +452,10 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
             raise MixedBlocked("CASH_RECONCILIATION", "실제 USD 현금이 혼합 장부보다 적습니다. 비용과 외부 거래를 대조하세요.")
         # Excess broker cash may be settlement/commission differences or an
         # external flow. Preserve it outside both strategy spending budgets.
-        state["unallocated_cost_cash"] = str(actual_cash - accounted_cash)
-        persist_state(state)
+        outside_cash = str(actual_cash - accounted_cash)
+        if not pending_rebalance:
+            state["unallocated_cost_cash"] = outside_cash
+            persist_state(state)
     if pending_rebalance and usable_quote:
         try:
             state = core.settle_monthly_rebalance(state, pending_rebalance,
@@ -436,7 +468,12 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
             # All partial sales must become confirmed full fills first.
         else:
             state.pop("pending_rebalance", None)
+            if outside_cash is not None:
+                state["unallocated_cost_cash"] = outside_cash
+            state = core.advance_r2_session(state, session)
             persist_state(state)
+    if state.get("pending_rebalance"):
+        return {"handled": True, "state": "WAITING_REBALANCE", "phase": "WAITING_FILLS", "orders": []}
     if context.get("qqq_rows"):
         from atr70_r2_adapter import build_r2_orders
         try:
@@ -454,7 +491,8 @@ def run_mixed_tick(client, state, context, persist_state, ledger, *, now, enable
         last_price=usable_quote["last_price"] if usable_quote else None,
         daily_rows=context.get("daily_rows"), r2_orders=r2_orders,
         first_session_of_month=context.get("first_session_of_month", False),
-        atr_exit_order_type="MOO" if now.astimezone(ET).time().replace(tzinfo=None) < time(9, 25) else "MARKET")
+        atr_exit_order_type="MOO" if now.astimezone(ET).time().replace(tzinfo=None) < time(9, 25) else "MARKET",
+        allow_rebalance=enabled)
     if plan.get("rebalance"):
         state["pending_rebalance"] = plan["rebalance"]
         persist_state(state)

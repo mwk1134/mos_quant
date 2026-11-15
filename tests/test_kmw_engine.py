@@ -633,3 +633,56 @@ def test_malformed_persisted_time_change_fails_closed(tmp_path, change):
     with pytest.raises(EngineStateError):
         KMWEngine(backend, engine.state_file, clock=lambda: moment[0])
     backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('allow_legacy', [False, True])
+def test_carried_mixed_exit_poll_does_not_hide_the_dongpa_schedule(tmp_path, allow_legacy):
+    moment = [NOW]
+
+    class HybridBackend:
+        preset = 'KMW2'
+
+        def __init__(self):
+            self.execute = Mock(return_value={'state': 'DIRECT_ACCEPTED', 'orders': []})
+
+        def mixed_tick(self, **kwargs):
+            return {'handled': True, 'state': 'WAITING', 'orders': [],
+                    'allow_legacy_schedule': allow_legacy}
+
+        def refresh_preview(self, **kwargs):
+            return {**plan(), 'preset': 'KMW2', 'dongpa_transition_managed': True}
+
+    backend = HybridBackend()
+    engine = KMWEngine(backend, state_file=tmp_path / 'hybrid.json',
+                       preset='KMW2', clock=lambda: moment[0])
+    engine.enable()
+    moment[0] = NOW + timedelta(minutes=1)
+    engine.tick()
+    assert backend.execute.call_count == (1 if allow_legacy else 0)
+
+
+def test_first_cash_switch_waits_for_next_normal_schedule_and_persists_preview(tmp_path):
+    moment = [NOW]
+
+    class HybridBackend:
+        preset = 'KMW2'
+
+        def __init__(self):
+            self.execute = Mock()
+
+        def mixed_tick(self, **kwargs):
+            return {'handled': True, 'state': 'WAITING', 'orders': [],
+                    'dongpa_transition_started': True, 'allow_legacy_schedule': True,
+                    'plan': {**plan(), 'preset': 'KMW2', 'dongpa_transition_managed': True}}
+
+    backend = HybridBackend()
+    path = tmp_path / 'switched.json'
+    engine = KMWEngine(backend, state_file=path, preset='KMW2', clock=lambda: moment[0])
+    engine.enable()
+    moment[0] = NOW + timedelta(minutes=2)
+    engine.tick()
+    backend.execute.assert_not_called()
+    assert engine.status()['next_run'].startswith('2026-10-13T17:01')
+    saved = json.loads(path.read_text())
+    assert saved['plan']['dongpa_transition_managed'] is True
+    assert saved['enabled'] is True

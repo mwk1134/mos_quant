@@ -325,6 +325,8 @@ def _ledger_facts(path, account):
             mapping = {key: deepcopy(order[key]) for key in ("position_key", "round") if key in order}
             mapping["side"] = order.get("side")
             mapping["quantity"] = _number(order.get("quantity"), positive=True, whole=True)
+            if order.get("side") == "BUY" and "entry_rules" in order:
+                mapping["entry_rules"] = _frozen_buy_rules(order["entry_rules"])
             if identity in mappings and mappings[identity] != mapping:
                 _blocked("CONFLICTING_LEDGER", "Broker receipts identify conflicting saved lots.")
             mappings[identity] = mapping
@@ -346,6 +348,8 @@ def _attach_lot_identifiers(fills, mappings):
         for key in ("position_key", "round"):
             if key in mapping:
                 fill[key] = mapping[key]
+        if fill["side"] == "BUY" and "entry_rules" in mapping:
+            fill.update(deepcopy(mapping["entry_rules"]))
     return attached
 
 
@@ -414,7 +418,9 @@ def _needed_buy_rules(document, preset, fills):
         if isinstance(snapshot.get(key), dict) and snapshot[key].get("mode") in {"SF", "AG"}:
             continue  # The pure refresher preserves the existing lot's rules.
         fields = ("mode", "buy_threshold", "sell_threshold", "max_hold_days", "strategy_name")
-        if pending.get("order_date") == fill["trade_date"] and all(pending.get(field) is not None for field in fields):
+        if all(fill.get(field) is not None for field in fields):
+            rules[fill["trade_date"]] = _frozen_buy_rules(fill)
+        elif pending.get("order_date") == fill["trade_date"] and all(pending.get(field) is not None for field in fields):
             rules[fill["trade_date"]] = {field: deepcopy(pending[field]) for field in fields}
         else:
             historical.add(fill["trade_date"])
@@ -578,11 +584,22 @@ def refresh_and_load_snapshots(*, preset, env: Mapping[str, str], ledger_path, n
             broker_session = requests.Session()
             broker_session.trust_env = False
             client = MeritzClient.from_env(env=isolated, session=broker_session)
+            transition = snapshot.get("strategyTransition")
+            if isinstance(transition, dict) and transition.get("mode") == "DONGPA":
+                from kmw2_hybrid import sync_hybrid
+                updated, _ = sync_hybrid(document, sha, github=github, client=client,
+                    ledger_path=ledger_path, account=account, now=now)
+                return updated, SOURCE
             return refresh_mixed_document(document, sha, github=github, client=client, now=now)
         baseline = _day(snapshot.get("broker_sync", {}).get("baseline_date", snapshot.get("as_of_date")))
         if baseline > basis or (basis - baseline).days > 3660:
             _blocked("INVALID_REFRESH_DATE", "The confirmed execution history range is invalid.")
         mappings, ledger_unresolved = _ledger_facts(ledger_path, account)
+        mixed_ids = set()
+        if preset == "KMW2" and snapshot.get("strategyHistory"):
+            from kmw2_broker_view import mixed_owned_ids
+            mixed_ids = mixed_owned_ids(snapshot)
+            mappings = {identity: mapping for identity, mapping in mappings.items() if identity not in mixed_ids}
         if ledger_unresolved:
             _blocked("UNRESOLVED_ORDER", "A prior account submission must be reconciled before snapshot refresh.")
         broker_session = requests.Session()
@@ -590,7 +607,10 @@ def refresh_and_load_snapshots(*, preset, env: Mapping[str, str], ledger_path, n
         client = MeritzClient.from_env(env=isolated, session=broker_session)
         quantity = _holding_quantity(client.holdings())
         history = client.orders_history(baseline.strftime("%Y%m%d"), basis.strftime("%Y%m%d"))
-        fills = _attach_lot_identifiers(normalize_confirmed_fills(history), mappings)
+        normalized = normalize_confirmed_fills(history)
+        if mixed_ids:
+            normalized = [fill for fill in normalized if (fill["trade_date"], fill["order_id"]) not in mixed_ids]
+        fills = _attach_lot_identifiers(normalized, mappings)
         if any(not baseline <= _day(fill["trade_date"]) <= basis for fill in fills):
             _blocked("INVALID_BROKER_FACT", "Broker execution history exceeds its requested session range.")
         unresolved = _open_orders(client.orders_today(), completed_basis=basis)

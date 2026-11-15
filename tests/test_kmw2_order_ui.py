@@ -6,6 +6,8 @@ import pytest
 
 from streamlit.testing.v1 import AppTest
 
+from kmw2_order_ui import dongpa_order_table
+
 
 SCRIPT = """
 import streamlit as st
@@ -118,3 +120,56 @@ def test_saved_buy_and_sell_orders_never_show_the_empty_recommendation_notice(wa
         assert not column.get("success")
     assert "69주" in text(app.columns[0])
     assert "부분체결 · 체결 3/26주" in text(app.columns[1])
+
+
+def dongpa_plan():
+    return {"order_date": "2026-11-16", "mode": "AG", "buy_entry_rules": {"mode": "AG"}, "orders": [
+        {"ticker": "SOXL", "side": "BUY", "round": 2, "quantity": 5, "price": "71.20", "order_type": "LOC"},
+        {"ticker": "SOXL", "side": "SELL", "round": 1, "quantity": 3, "price": "0", "order_type": "MOC",
+         "position_key": "1_2026-11-12"}]}
+
+
+def test_dongpa_table_preserves_supplied_plan_terms_and_entry_mode_without_mutating_sources():
+    plan = dongpa_plan()
+    source = {"available_cash": 8750, "1_2026-11-12": {"mode": "SF", "buy_price": 68.5,
+                                                       "shares": 3, "sell_threshold": 1.5}}
+    original = deepcopy(plan), deepcopy(source)
+    with patch("requests.Session.request", side_effect=AssertionError("Presentation cannot query accounts")):
+        table = dongpa_order_table(plan, source)
+    buy, sell = table["rows"]
+    assert (buy["회차"], buy["수량"], buy["기준가격"], buy["모드"]) == (2, 5, "$71.20", "AG")
+    assert sell["유형"] == "MOC" and sell["기준가격"] == "종가 시장가" and sell["모드"] == "SF"
+    assert sell["매수일"] == "2026-11-12" and "보유 만기" in sell["조건"]
+    assert all(row["기존주문"] is False and "표시용 주문안" in row["상태"] for row in table["rows"])
+    assert (plan, source) == original
+
+
+def test_dongpa_and_carried_atr_r2_are_separate_cards_in_the_same_buy_sell_columns():
+    source = {"1_2026-11-12": {"mode": "SF", "buy_price": 68.5, "shares": 3}}
+    values = {"DONGPA": dongpa_order_table(dongpa_plan(), source),
+              "ATR": {"rows": [{"매매": "매도", "유형": "MOO", "기준가격": "시가 시장가", "수량": 4,
+                                 "조건": "원래 ATR 익일 시가 청산", "상태": "조건 확인 대기", "기존주문": False}]},
+              "R2": {"rows": [{"매매": "매도", "회차": 2, "유형": "LOC", "기준가격": "$102.00", "수량": 10,
+                                "조건": "진입 당시 R2 목표가 유지", "상태": "조건 확인 대기", "기존주문": False}]}}
+    app = render(values)
+    buy, sell = map(text, app.columns)
+    assert "기본 동파 · 2회차 매수 추천" in buy and "$71.20" in buy and "5주" in buy
+    assert "ATR70" not in "\n".join(item.value for item in app.columns[0].get("success"))
+    assert "기본 동파 · 1회차 매도 추천" in sell and "종가 시장가" in sell
+    assert "ATR70 매도 추천" in sell and "시가 시장가" in sell and "4주" in sell
+    assert "R2 · 2회차 매도 추천" in sell and "$102.00" in sell and "10주" in sell
+    assert "진입 당시 R2 목표가 유지" in sell and "매도 추천: 3건" in sell
+
+
+def test_dongpa_table_respects_empty_reselected_on_plan_and_stale_signal_instead_of_inventing_buy():
+    source = {"available_cash": 8750}
+    plan = dongpa_plan()
+    plan["orders"] = [order for order in plan["orders"] if order["side"] == "SELL"]
+    assert all(row["매매"] == "매도" for row in dongpa_order_table(plan, source)["rows"])
+    assert dongpa_order_table(dongpa_plan(), source, signal_available=False)["rows"] == []
+    values = {"DONGPA": dongpa_order_table(dongpa_plan(), source, signal_available=False),
+              "R2": {"rows": [{"매매": "매도", "유형": "LOC", "기준가격": "$102.00", "수량": 10,
+                                "상태": "저장된 주문 · 접수 여부 확인 필요", "기존주문": True}]}}
+    app = render(values, signal_available=False)
+    assert not app.success and "$71.20" not in text(app)
+    assert "저장된 매도 주문" in text(app.columns[1]) and "접수 여부 확인 필요" in text(app.columns[1])

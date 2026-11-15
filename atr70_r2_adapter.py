@@ -222,14 +222,16 @@ class MixedSnapshotStore:
             raise ValueError("KMW2 snapshot is required")
         enabled = mixed_requested(document, self.preset)
         state = deepcopy(snapshot.get(STATE_KEY))
+        transition = snapshot.get("strategyTransition")
+        hybrid = isinstance(transition, dict) and transition.get("mode") == "DONGPA" and state is not None
         if state is not None:
             validate_state(state)
-            if legacy_quantity(snapshot):
+            if state["phase"] == "ACTIVE" and legacy_quantity(snapshot) and not hybrid:
                 raise ValueError("Legacy and mixed holdings overlap")
         basis = completed_trading_date(now.astimezone(ET)).isoformat()
         session = next_trading_date(date.fromisoformat(basis)).isoformat()
         previous, following, first = _sessions(session)
-        context = {"enabled": enabled, "state": state, "snapshot": deepcopy(snapshot),
+        context = {"enabled": enabled, "state": state, "snapshot": deepcopy(snapshot), "hybrid_managed": hybrid,
                    "document": document, "sha": sha, "basis_date": basis, "session_date": session,
                    "previous_session": previous, "next_session": following,
                    "first_session_of_month": first, "daily_rows": [], "qqq_rows": [], "r2_orders": [],
@@ -237,11 +239,24 @@ class MixedSnapshotStore:
                    "broker_confirmed": isinstance(snapshot.get("broker_sync"), dict) and snapshot.get("as_of_date") == basis,
                    "reservation_start_date": document.get("_preset_configs", {}).get("KMW2", {}).get("session_start_date", "2026-04-29"),
                    "fee_rate": self.env.get("MERITZ_MIX_FEE_RATE", "0.005")}
+        transition = snapshot.get("strategyTransition")
+        if enabled and state is None and isinstance(transition, dict) and transition.get("mode") == "DONGPA":
+            context["activation_budget"] = str(_money(snapshot.get("available_cash")))
+            history = snapshot.get("strategyHistory", [])
+            previous_sessions = [order["session_date"]
+                for entry in history if isinstance(entry, dict)
+                for order in (entry.get("mixed_state", {}).get("orders", {}) or {}).values()
+                if isinstance(order, dict) and order.get("session_date")]
+            if previous_sessions:
+                context["activation_not_before"] = next_trading_date(date.fromisoformat(max(previous_sessions))).isoformat()
         if state is not None and state["phase"] == "ACTIVE":
             advanced = advance_r2_session(state, session)
             context.update(advanced_state=advanced,
                            r2_orders=build_r2_exit_orders(advanced, session_date=session))
             try:
+                if not enabled or hybrid:
+                    self._context = deepcopy(context)
+                    return context
                 if self._market_cache is None or self._market_cache[0] != basis:
                     self._market_cache = (basis, *self._market_loader(now, basis))
                 _, daily, qqq = self._market_cache
@@ -267,11 +282,33 @@ class MixedSnapshotStore:
             if snapshot.get(STATE_KEY) != expected["state"] or mixed_requested(document) != expected["enabled"]:
                 raise ValueError("Mixed state or switch changed; refresh before dispatch")
             candidate = deepcopy(document)
-            candidate[self.preset] = mirror_mixed_snapshot(snapshot, state, completed_trading_date(now.astimezone(ET)).isoformat(), now)
+            if expected.get("hybrid_managed"):
+                candidate[self.preset][STATE_KEY] = deepcopy(state)
+                candidate[self.preset]["mixed_updated_at"] = now.isoformat()
+            else:
+                candidate[self.preset] = mirror_mixed_snapshot(snapshot, state, completed_trading_date(now.astimezone(ET)).isoformat(), now)
+                previous_transition = snapshot.get("strategyTransition")
+                if (state.get("phase") == "ACTIVE" and (expected["state"] is None or expected["state"].get("phase") == "WAITING_FLAT")
+                        and isinstance(previous_transition, dict) and previous_transition.get("mode") == "DONGPA"):
+                    candidate[self.preset]["strategyTransition"] = {
+                        "mode": "MIXED", "phase": "ACTIVE", "started_at": now.isoformat(),
+                        "previous_transition_id": previous_transition.get("id")}
             if candidate == document or connection.save(candidate, sha, self.preset) == "saved":
                 self._context.update(state=deepcopy(state), snapshot=candidate[self.preset], document=candidate)
                 return deepcopy(state)
         raise ValueError("Mixed state save conflicted repeatedly")
+
+    def sync_dongpa_transition(self, client, *, ledger_path, account, now, should_continue=None):
+        """Reconcile both books and transfer free cash in one remote CAS."""
+        from kmw2_hybrid import sync_hybrid
+        context = self._context
+        if context is None:
+            raise ValueError("Read the latest strategy state before switching")
+        document, result = sync_hybrid(context["document"], context["sha"],
+            github=self._connection(), client=client, ledger_path=ledger_path,
+            account=account, now=now, should_continue=should_continue)
+        self._context = None
+        return document, result
 
     def close(self):
         if self._github is not None and self._owns_github:
@@ -367,11 +404,14 @@ def build_mixed_preview(document, snapshot, now, plan):
     session = plan["order_date"]
     previous, following, first = _sessions(session)
     advanced = advance_r2_session(state, session)
+    enabled = mixed_requested(document)
     warnings = []
     try:
-        daily, qqq = load_market_rows(now, previous)
-        r2 = build_r2_orders(advanced, session_date=session, daily_rows=daily, qqq_rows=qqq,
-                             enabled=mixed_requested(document))
+        if enabled:
+            daily, qqq = load_market_rows(now, previous)
+            r2 = build_r2_orders(advanced, session_date=session, daily_rows=daily, qqq_rows=qqq)
+        else:
+            daily, r2 = [], build_r2_exit_orders(advanced, session_date=session)
     except Exception:
         daily = []
         r2 = build_r2_exit_orders(advanced, session_date=session)
@@ -382,8 +422,8 @@ def build_mixed_preview(document, snapshot, now, plan):
     overdue_exit = market_now.date().isoformat() == session and market_now.time().replace(tzinfo=None) >= time(9, 25)
     mixed = build_runtime_plan(advanced, session_date=session, previous_session=previous,
                                next_session=following, daily_rows=daily, r2_orders=r2,
-                               first_session_of_month=first, atr_exit_order_type="MARKET" if overdue_exit else "MOO")
-    enabled = mixed_requested(document)
+                               first_session_of_month=first, atr_exit_order_type="MARKET" if overdue_exit else "MOO",
+                               allow_rebalance=enabled)
     if not enabled:
         mixed["orders"] = [order for order in mixed["orders"] if order["side"] != "BUY"]
     tables = strategy_order_tables(advanced, session_date=session, enabled=enabled,

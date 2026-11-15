@@ -285,6 +285,38 @@ class KMWBackend:
                 return True
 
             client = MeritzClient.from_env(env=credentials, before_submission=may_dispatch)
+            transition_result = None
+            if state is not None and (not requested or context.get("hybrid_managed")):
+                transition_document, transition_result = store.sync_dongpa_transition(client,
+                    ledger_path=self.ledger_path, account=account, now=current,
+                    should_continue=should_continue)
+                if transition_result.get("state") == "WAITING_ACTIVATION_SESSION":
+                    return transition_result
+                context = store.read(current)
+                if context["document"][self.preset] != transition_document[self.preset]:
+                    return {"handled": True, "state": "WAITING_STRATEGY_REFRESH", "orders": [],
+                            "allow_legacy_schedule": False}
+                state = context["state"]
+                if state is None:
+                    self._mixed_managed = False
+                    if self._mixed_feed is not None:
+                        self._mixed_feed.close()
+                        self._mixed_feed = None
+                    try:
+                        transition_result["plan"] = self.preview(current)
+                    except EngineBlocked:
+                        transition_result["plan"] = None
+                    return transition_result
+                if context.get("hybrid_managed"):
+                    from kmw2_broker_view import make_broker_view
+                    view_options = {}
+                    if transition_result.get("mixed_quantity") is not None:
+                        view_options.update(mixed_quantity=transition_result["mixed_quantity"],
+                                            legacy_quantity=transition_result["legacy_quantity"])
+                    client = make_broker_view(client, context["document"], strategy="MIXED",
+                        ledger_path=self.ledger_path, account=account, now=current, **view_options)
+                if r2_not_before is not None:
+                    context["r2_not_before"] = _now(r2_not_before).isoformat()
             vendor = credentials.get("MERITZ_SOXL_EXCHANGE_CODE", "").strip()
             matches = [row for row in client.exchanges()
                        if str(row.get("ovrs_exch_vndr_idno", "")).strip() == vendor
@@ -300,14 +332,23 @@ class KMWBackend:
                 self._mixed_feed = MeritzTradeFeed(client, key=f"{market}@SOXL", clock=self._clock)
                 self._mixed_feed_account = account
             self._mixed_feed.start()
-            ledger = OrderLedger(self.ledger_path, secrets=environment_secret_values(credentials))
+            if ledger is None:
+                ledger = OrderLedger(self.ledger_path, secrets=environment_secret_values(credentials))
             result = run_mixed_tick(client, state, context,
                 lambda updated: store.save(updated, _now(self._clock())), ledger,
-                now=current, enabled=requested, account=account, exchange_code=vendor,
+                now=current, enabled=requested and not context.get("hybrid_managed"), account=account, exchange_code=vendor,
                 quote=self._mixed_feed.latest(), should_continue=should_continue,
                 clock=self._clock, before_order=lambda order: dispatch.update(order=order),
                 quote_provider=self._mixed_feed.latest)
             self._mixed_managed = result.get("handled") is True
+            if transition_result is not None:
+                result["allow_legacy_schedule"] = transition_result.get("allow_legacy_schedule", False)
+                if transition_result.get("state") == "DONGPA_STARTED":
+                    result["dongpa_transition_started"] = True
+                    try:
+                        result["plan"] = self.preview(current)
+                    except EngineBlocked:
+                        result["plan"] = None
             if result.get("orders"):
                 # The existing outbox deduplicates delivery independently from
                 # order dispatch. Status/quote polls never send notifications.
@@ -446,6 +487,11 @@ class KMWBackend:
             # Validate the recommendation date and each row's format before
             # constructing a client. Do not compare independent rows' prices.
             validate_plan(plan, current, order_route="direct", preset=self.preset)
+            if self.preset == "KMW2" and plan.get("dongpa_transition_managed"):
+                from preset_snapshot_sync import _frozen_buy_rules
+                for order in plan["orders"]:
+                    if order.get("side") == "BUY":
+                        order["entry_rules"] = _frozen_buy_rules(plan.get("buy_entry_rules"))
             credentials = self._load_credentials()
             validate_account_configuration(self.preset, env=credentials)
             account = account_id(self.preset, env=credentials)
@@ -474,7 +520,26 @@ class KMWBackend:
                            "preflight": None, "error_code": "ALREADY_ATTEMPTED",
                            "error": f"오늘 같은 계좌·회차의 주문 기록이 있습니다. {detail}을 확인해 주세요. 기록을 삭제하거나 자동 재전송하지 않습니다."}
                 raise OrderBlocked("This account/date/position was already attempted")
-            client = MeritzClient.from_env(env=credentials)
+            client = MeritzClient.from_env(env=credentials, before_submission=may_dispatch)
+            if self.preset == "KMW2" and plan.get("dongpa_transition_managed"):
+                from atr70_r2_adapter import MixedSnapshotStore, mixed_requested
+                from kmw2_broker_view import make_broker_view
+                if self._mixed_store is None:
+                    self._mixed_store = MixedSnapshotStore(credentials, preset=self.preset)
+                    self._mixed_store_credentials = dict(credentials)
+                current_context = self._mixed_store.read(_now(self._clock()))
+
+                def transition_guard(request):
+                    if not may_dispatch():
+                        return False
+                    if str(request.get("side", "")).lower() == "buy":
+                        latest, _ = self._mixed_store._connection().read()
+                        return not mixed_requested(latest, self.preset)
+                    return True
+
+                client = make_broker_view(client, current_context["document"], strategy="DONGPA",
+                    ledger_path=self.ledger_path, account=account, now=_now(self._clock()),
+                    before_submission=transition_guard)
             checked = preflight(client, plan, current, Decimal("0.005"), order_route="direct",
                                 preset=self.preset, env=credentials)
             # Recheck activation after read-only preflight, before claiming or

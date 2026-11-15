@@ -289,6 +289,26 @@ def build_kmw_plan(
         plan["warnings"].append(stale_message + " Preview only; submission is prohibited.")
     if preset == "KMW2" and "atr70_r2" in snapshot:
         from atr70_r2_adapter import build_mixed_preview
+        transition = snapshot.get("strategyTransition")
+        if isinstance(transition, dict) and transition.get("mode") == "DONGPA":
+            legacy_document = deepcopy(all_snapshots)
+            legacy_document[preset].pop("atr70_r2")
+            legacy = build_kmw_plan(legacy_document, now=now, preset=preset,
+                                    allow_stale_snapshot=allow_stale_snapshot)
+            carried_snapshot = deepcopy(snapshot)
+            for key in list(carried_snapshot):
+                if _POSITION_KEY.fullmatch(key):
+                    carried_snapshot.pop(key)
+            carried_document = deepcopy(all_snapshots)
+            carried_document[preset] = carried_snapshot
+            carried_document.setdefault("_preset_configs", {}).setdefault(preset, {})["atr70_r2_mix_enabled"] = False
+            carried = build_mixed_preview(carried_document, carried_snapshot, now, plan)
+            legacy.update(dongpa_transition_managed=True, atr70_r2_managed=False,
+                          carried_mixed_tables=carried["strategy_order_tables"],
+                          carried_mixed_state=deepcopy(snapshot["atr70_r2"]),
+                          strategy_name="기본 동파매매 · 기존 반반매매 청산 관리")
+            legacy["warnings"].append("기본 동파매매는 별도 배정 현금으로 신규 매수하며 기존 ATR70·R2 보유분은 진입 당시 매도 규칙을 유지합니다.")
+            return legacy
         return build_mixed_preview(all_snapshots, snapshot, now, plan)
     cash = _number(snapshot.get("available_cash"), f"{preset} available_cash")
     for field in ("compound_seed", "compound_reference_seed"):
@@ -371,6 +391,9 @@ def build_kmw_plan(
         "buy_budget": float(recommendation.get("next_buy_amount", 0)),
         "snapshot_positions": [],
     })
+    transition = snapshot.get("strategyTransition")
+    if preset == "KMW2" and isinstance(transition, dict) and transition.get("mode") == "DONGPA":
+        plan["dongpa_transition_managed"] = True
     active_config = recommendation.get("active_config")
     entry_fields = ("buy_threshold", "sell_threshold", "max_hold_days")
     if isinstance(active_config, dict) and all(field in active_config for field in entry_fields):

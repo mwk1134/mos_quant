@@ -152,6 +152,19 @@ def activate_if_flat(state, *, session_date, broker_cash, broker_shares, open_or
     return result
 
 
+def _validate_cash_transfer(transfer):
+    if not isinstance(transfer, dict) or set(transfer) != {"id", "strategy", "amount", "session_date", "sink"}:
+        raise ValueError("Invalid cash transfer record")
+    identity = transfer["id"]
+    if not isinstance(identity, str) or not identity.strip() or any(ord(char) < 32 for char in identity):
+        raise ValueError("Invalid cash transfer identity")
+    _sleeve(transfer["strategy"])
+    if transfer["sink"] != "DONGPA" or not isinstance(transfer["amount"], str):
+        raise ValueError("Invalid cash transfer destination or amount")
+    _amount(transfer["amount"], positive=True)
+    _day(transfer["session_date"])
+
+
 def validate_state(state):
     if not isinstance(state, dict) or type(state.get("schema_version")) is not int or state.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("Unsupported mixed state schema")
@@ -169,6 +182,17 @@ def validate_state(state):
             raise ValueError("Active state contains unallocated cash")
     elif state.get("activated_session") is not None:
         raise ValueError("Waiting state already activated")
+    transfers = state.get("cash_transfers", [])
+    if not isinstance(transfers, list):
+        raise ValueError("Cash transfer history must be a list")
+    transfer_ids = set()
+    for transfer in transfers:
+        _validate_cash_transfer(transfer)
+        if transfer["id"] in transfer_ids:
+            raise ValueError("Duplicate cash transfer identity")
+        transfer_ids.add(transfer["id"])
+        if state["phase"] != "ACTIVE" or transfer["session_date"] < state["activated_session"]:
+            raise ValueError("Cash transfer precedes active mixed accounting")
     lot_ids = set()
     for strategy in ("ATR", "R2"):
         sleeve = state.get(_sleeve(strategy))
@@ -249,7 +273,7 @@ def validate_state(state):
         raise ValueError("Waiting state cannot dispatch orders")
     if state["phase"] == "ACTIVE":
         cash = _amount(state["atr"]["cash"]) + _amount(state["r2"]["cash"])
-        expected_cash = _amount(state["initial_cash"])
+        expected_cash = _amount(state["initial_cash"]) - sum((_amount(item["amount"]) for item in transfers), Decimal(0))
         quantities = {}
         for order in state["orders"].values():
             side = 1 if order["side"] == "SELL" else -1
@@ -365,6 +389,37 @@ def available_cash(state, strategy):
                    (1 + _amount(state["fee_rate"])) for order in _pending(state, strategy)
                    if order["side"] == "BUY"), Decimal(0))
     return max(Decimal(0), _amount(state[_sleeve(strategy)]["cash"]) - reserve)
+
+
+def transfer_cash(state, *, strategy, amount, transfer_id, session_date):
+    """Debit unreserved sleeve cash; the caller must atomically credit Dongpa."""
+    validate_state(state)
+    if state["phase"] != "ACTIVE":
+        raise ValueError("Cash transfers require active mixed accounting")
+    value = _amount(amount, positive=True)
+    transfer = {"id": transfer_id, "strategy": strategy, "amount": str(value),
+                "session_date": session_date, "sink": "DONGPA"}
+    _validate_cash_transfer(transfer)
+    if session_date < state["activated_session"]:
+        raise ValueError("Cash transfer precedes active mixed accounting")
+    existing = next((item for item in state.get("cash_transfers", []) if item["id"] == transfer_id), None)
+    if existing is not None:
+        if (any(existing[key] != transfer[key] for key in ("strategy", "session_date", "sink"))
+                or _amount(existing["amount"]) != value):
+            raise ValueError("Cash transfer identity was reused with changed terms")
+        return deepcopy(state)
+    if "pending_rebalance" in state:
+        raise ValueError("Cash transfer waits for the pending rebalance")
+    if any(order["status"] in {"UNKNOWN", "SENDING"} for order in state["orders"].values()):
+        raise ValueError("Cash transfer waits for uncertain orders")
+    if value > available_cash(state, strategy):
+        raise ValueError("Cash transfer exceeds unreserved strategy cash")
+    result = deepcopy(state)
+    sleeve = result[_sleeve(strategy)]
+    sleeve["cash"] = str(_amount(sleeve["cash"]) - value)
+    result.setdefault("cash_transfers", []).append(transfer)
+    validate_state(result)
+    return result
 
 
 def register_order(state, intent, broker_order_id=None):
@@ -650,13 +705,16 @@ def settle_monthly_rebalance(state, plan, *, valuation_price=None):
 
 def build_runtime_plan(state, *, session_date, previous_session, next_session,
                        regular_open=None, last_price=None, daily_rows=None, r2_orders=None,
-                       first_session_of_month=False, fee_rate=None, atr_exit_order_type="MOO"):
+                       first_session_of_month=False, fee_rate=None, atr_exit_order_type="MOO",
+                       allow_rebalance=True):
     validate_state(state)
     _day(session_date)
     if _day(previous_session) >= session_date or _day(next_session) <= session_date:
         raise ValueError("Invalid adjacent market sessions")
     if type(first_session_of_month) is not bool:
         raise ValueError("Month-boundary flag must be explicit")
+    if type(allow_rebalance) is not bool:
+        raise ValueError("Rebalance permission must be explicit")
     if atr_exit_order_type not in {"MOO", "MARKET"}:
         raise ValueError("ATR exit order must be MOO or overdue MARKET")
     base = {"preset": "KMW2", "strategy_id": STRATEGY_ID, "session_date": session_date,
@@ -678,7 +736,7 @@ def build_runtime_plan(state, *, session_date, previous_session, next_session,
     # A restart after the first session still has to finish the month's transfer
     # before either sleeve takes new risk.
     month_due = session_date[:7] not in state["rebalance_months"]
-    if month_due:
+    if month_due and allow_rebalance:
         if pending:
             return {**base, "phase": "WAITING_FILLS"}
         if regular_open is None:

@@ -745,7 +745,8 @@ def test_separate_account_backends_send_their_own_mapping_and_notification_label
         notifiers[preset] = Mock()
         notifiers[preset].send.return_value = 123
 
-    def make_client(*, env):
+    def make_client(*, env, before_submission=None):
+        assert callable(before_submission)
         captured.append(dict(env))
         return clients[env["MERITZ_ACCOUNT_PRESET"]]
 
