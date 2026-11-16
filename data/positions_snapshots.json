@@ -376,14 +376,14 @@
     }
   },
   "JEH": {
-    "available_cash": 24299.08958770752,
+    "available_cash": 19691.80958770752,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-12",
-    "compound_seed": 43851.990497863764,
+    "as_of_date": "2026-11-13",
+    "compound_seed": 44187.570497863766,
     "compound_reference_seed": 43626.765497863766,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
@@ -399,13 +399,8 @@
       "peakValue": 34001.511327209475,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 24,
+    "compound_trading_days": 25,
     "compound_settlements": [
-      {
-        "trade_date": "2026-11-06",
-        "settlement_date": "2026-11-13",
-        "pnl": 479.4
-      },
       {
         "trade_date": "2026-11-09",
         "settlement_date": "2026-11-16",
@@ -420,6 +415,11 @@
         "trade_date": "2026-11-11",
         "settlement_date": "2026-11-18",
         "pnl": 1714.84
+      },
+      {
+        "trade_date": "2026-11-13",
+        "settlement_date": "2026-11-20",
+        "pnl": -568.48
       }
     ],
     "broker_sync": {
@@ -704,21 +704,27 @@
           "fees": "0",
           "position_key": "2_2026-11-12",
           "recommended_quantity": 81
+        },
+        "2026-11-13:2902395": {
+          "trade_date": "2026-11-13",
+          "side": "SELL",
+          "quantity": 68,
+          "notional": "3965.7600",
+          "fees": "0",
+          "position_key": "3_2026-11-04"
+        },
+        "2026-11-13:2902493": {
+          "trade_date": "2026-11-13",
+          "side": "BUY",
+          "quantity": 147,
+          "notional": "8573.0400",
+          "fees": "0",
+          "position_key": "3_2026-11-13",
+          "recommended_quantity": 147
         }
       }
     },
     "cash_snapshot_date": "2026-10-28",
-    "3_2026-11-04": {
-      "mode": "AG",
-      "buy_threshold": 3.6,
-      "sell_threshold": 3.5,
-      "max_hold_days": 7,
-      "strategy_name": "기본",
-      "round": 3,
-      "shares": 68,
-      "buy_price": 66.68,
-      "amount": 4534.24
-    },
     "2_2026-11-12": {
       "mode": "SF",
       "buy_threshold": 3.5,
@@ -730,12 +736,23 @@
       "buy_price": 65.53,
       "amount": 5307.93
     },
+    "3_2026-11-13": {
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본",
+      "round": 3,
+      "shares": 147,
+      "buy_price": 58.32,
+      "amount": 8573.04
+    },
     "pending_buy": {
       "round": 3,
-      "quantity": 147,
-      "target_price": 67.82,
-      "order_date": "2026-11-13",
-      "basis_date": "2026-11-12",
+      "quantity": 166,
+      "target_price": 60.36,
+      "order_date": "2026-11-16",
+      "basis_date": "2026-11-13",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
