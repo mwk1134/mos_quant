@@ -1,13 +1,13 @@
 {
   "KMW": {
-    "available_cash": 48426.2493765259,
+    "available_cash": 28093.3293765259,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-13",
-    "compound_seed": 111005.91550396726,
+    "as_of_date": "2026-11-16",
+    "compound_seed": 110442.39750396727,
     "compound_reference_seed": 109602.06550396726,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
@@ -23,13 +23,8 @@
       "peakValue": 97923.902661438,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 24,
+    "compound_trading_days": 25,
     "compound_settlements": [
-      {
-        "trade_date": "2026-11-09",
-        "settlement_date": "2026-11-16",
-        "pnl": -2817.59
-      },
       {
         "trade_date": "2026-11-10",
         "settlement_date": "2026-11-17",
@@ -336,6 +331,15 @@
           "fees": "0",
           "position_key": "3_2026-11-13",
           "recommended_quantity": 371
+        },
+        "2026-11-16:85171": {
+          "trade_date": "2026-11-16",
+          "side": "BUY",
+          "quantity": 417,
+          "notional": "20332.9200",
+          "fees": "0",
+          "position_key": "3_2026-11-16",
+          "recommended_quantity": 417
         }
       }
     },
@@ -362,12 +366,23 @@
       "buy_price": 58.32,
       "amount": 21636.72
     },
-    "pending_buy": {
+    "3_2026-11-16": {
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본",
       "round": 3,
-      "quantity": 417,
-      "target_price": 60.36,
-      "order_date": "2026-11-16",
-      "basis_date": "2026-11-13",
+      "shares": 417,
+      "buy_price": 48.76,
+      "amount": 20332.92
+    },
+    "pending_buy": {
+      "round": 4,
+      "quantity": 558,
+      "target_price": 50.47,
+      "order_date": "2026-11-17",
+      "basis_date": "2026-11-16",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
