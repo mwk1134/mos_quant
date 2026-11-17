@@ -169,6 +169,18 @@ def test_read_poll_error_is_cleared_by_a_valid_status_without_hiding_engine_erro
     assert result["result"]["error"] == "엔진 전송 차단"
 
 
+def test_post_close_snapshot_error_is_visible_until_successful_refresh():
+    failed = dict(STATUS, broker_status={"state": "OK", "orders": [],
+                  "snapshot_sync": {"state": "ERROR", "error": "확정 체결 동기화 대기"}})
+    recovered = dict(STATUS, broker_status={"state": "OK", "orders": [],
+                     "snapshot_sync": {"state": "UPDATED"}})
+    result = frontend("await pollStatus();const failedError=$('block').textContent;"
+                      "await pollStatus();return {failedError,error:$('block').textContent};",
+                      [{"json": failed}, {"json": recovered}])
+    assert result["result"]["failedError"] == "확정 체결 동기화 대기"
+    assert result["result"]["error"] == ""
+
+
 @pytest.mark.parametrize("url,prefix", [("http://127.0.0.1:8701/", "http://127.0.0.1:8701/?kmw_api=enable"),
                                        ("https://preview.example/private/8701/?ticket=fake&kmw_api=old#part", "https://preview.example/private/8701/?ticket=fake&kmw_api=enable")])
 def test_api_uses_current_page_path_and_preserves_proxy_query(url, prefix):

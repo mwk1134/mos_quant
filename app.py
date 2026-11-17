@@ -2506,7 +2506,10 @@ def main():
         st.session_state.active_tab = None
     
     with tab1:
-        show_daily_recommendation(ma_alignment_placeholder)
+        if _broker_daily_selected():
+            show_broker_daily_fragment(st.session_state.active_preset)
+        else:
+            show_daily_recommendation(ma_alignment_placeholder)
     
     with tab2:
         show_backtest()
@@ -2991,7 +2994,63 @@ def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
                else "월중 비중은 변동하며 매월 첫 미국 거래일에 50:50을 목표로 조정합니다. 실시간 잔고와 체결 상태는 자동매매 관리 화면에서 확인합니다.")
 
 
-def show_daily_recommendation(ma_alignment_placeholder=None):
+def _broker_daily_selected(expected_preset=None):
+    """Only the selected confirmed live account participates in this view."""
+    snapshot = st.session_state.get("positions_snapshot") or {}
+    selected = st.session_state.get("active_preset")
+    return (selected in ("KMW", "KMW2", "JEH", "JEH2", "KHW")
+            and (expected_preset is None or selected == expected_preset)
+            and ((isinstance(snapshot, dict) and "broker_sync" in snapshot)
+                 or selected in st.session_state.get("_broker_daily_presets", [])))
+
+
+@st.fragment(run_every="60s")
+def show_broker_daily_fragment(expected_preset):
+    # A previously registered timer may fire after the user selects another
+    # preset. Never run another account from a previously registered timer.
+    if (st.session_state.get("active_preset") != expected_preset
+            or expected_preset not in ("KMW", "KMW2", "JEH", "JEH2", "KHW")):
+        return
+    seen = st.session_state.get("_broker_daily_presets", [])
+    if expected_preset not in seen:
+        st.session_state._broker_daily_presets = [*seen, expected_preset]
+    st.caption(f"화면이 열려 있으면 1분마다 {expected_preset}의 저장된 실제 체결 장부를 다시 확인합니다.")
+    show_daily_recommendation(broker_only=True)
+
+
+def _show_broker_daily_snapshot_status(snapshot, now=None):
+    """Distinguish the confirmed inventory checkpoint from quote freshness."""
+    from kmw_order_plan import ET, completed_trading_date
+
+    current = now if now is not None else datetime.now(ET)
+    expected = completed_trading_date(current.astimezone(ET)).isoformat()
+    recorded = snapshot.get("as_of_date")
+    st.caption(f"실제 체결 반영일: {recorded or '확인 불가'} · 체결 확인 기준일: {expected}")
+    sync = snapshot.get("broker_sync")
+    try:
+        valid = (isinstance(sync, dict) and type(sync.get("version")) is int and sync["version"] == 1
+                 and isinstance(sync.get("executions"), dict)
+                 and isinstance(recorded, str)
+                 and datetime.strptime(recorded, "%Y-%m-%d").strftime("%Y-%m-%d") == recorded)
+    except (TypeError, ValueError):
+        valid = False
+    if not valid or recorded != expected:
+        st.warning(f"체결 동기화 대기 · 저장 장부 기준일 {recorded or '확인 불가'} / 필요한 기준일 {expected}. "
+                   "저장 보유분이 실계좌 최신 내역이 아닐 수 있어 현재 매수·매도 추천 계산을 기다립니다.")
+        st.info("자동주문 엔진의 확정 체결 갱신을 기다립니다. 아래는 이전 저장 내역이며, 시세로 매도나 신규 매수를 추정하지 않습니다.")
+        rows = [{"회차": lot.get("round"), "매수일": key.split("_", 1)[1],
+                 "저장 수량": lot.get("shares"), "저장 매수가": lot.get("buy_price")}
+                for key, lot in snapshot.items()
+                if isinstance(key, str) and re.fullmatch(r"[1-9][0-9]*_\d{4}-\d{2}-\d{2}", key)
+                and isinstance(lot, dict)]
+        if rows:
+            st.subheader("📦 이전 저장 보유내역 · 체결 동기화 대기")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        return False
+    return True
+
+
+def show_daily_recommendation(ma_alignment_placeholder=None, *, broker_only=False):
     """일일 매매 추천 페이지"""
     st.header("📊 일일 매매 추천")
     
@@ -3016,6 +3075,18 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
             )
             st.caption("Streamlit Secrets의 GITHUB_TOKEN과 GitHub 연결 상태를 확인한 뒤 다시 시도해주세요.")
             return
+    if broker_only and (st.session_state.get("active_preset") not in ("KMW", "KMW2", "JEH", "JEH2", "KHW")
+                        or "broker_sync" not in (st.session_state.get("positions_snapshot") or {})):
+        st.warning("확정 체결 장부를 확인하지 못해 추천 계산을 보류했습니다. 저장 장부를 다시 확인합니다.")
+        return
+    snapshot = st.session_state.get("positions_snapshot") or {}
+    if ("broker_sync" in snapshot and _broker_daily_selected()
+            and not _show_broker_daily_snapshot_status(snapshot)):
+        if _atr70_r2_ui_selected():
+            show_atr70_r2_order_tables(None, snapshot.get(ATR70_R2_STATE_KEY),
+                enabled=bool((st.session_state.get("kmw2_preset") or {}).get(ATR70_R2_SWITCH_KEY, False)),
+                signal_available=False, snapshot=snapshot)
+        return
     if _atr70_r2_ui_selected():
         show_atr70_r2_recommendation(st.session_state.get("positions_snapshot") or {}, ma_alignment_placeholder)
         return
@@ -3619,7 +3690,7 @@ def show_daily_recommendation(ma_alignment_placeholder=None):
     mdd_info = st.session_state.trader.calculate_mdd(mdd_records)
     mdd_percent = float(mdd_info.get('mdd_percent', 0.0) or 0.0)
     max_mdd_info = _snapshot_max_mdd(st.session_state.get('positions_snapshot', {}))
-    if st.session_state.get('active_preset'):
+    if st.session_state.get('active_preset') and not broker_only:
         updated_snapshot, max_mdd_info, max_mdd_changed = _record_snapshot_max_mdd(
             st.session_state.active_preset,
             st.session_state.get('positions_snapshot', {}),

@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from kmw_engine import EngineStateError, KMWEngine, review_id, validate_time
+from kmw_order_plan import SUPPORTED_PRESETS
 
 
 NOW = datetime(2026, 10, 12, 17, 0, tzinfo=ZoneInfo("Asia/Seoul"))
@@ -428,6 +429,164 @@ class RefreshingAccountBackend(SeparateAccountBackend):
 
     def refresh_preview(self, *, now):
         return self.refresh(now=now)
+
+
+class CompletedSnapshotBackend(SeparateAccountBackend):
+    def __init__(self, preset="KMW"):
+        super().__init__(preset)
+        updated = deepcopy(self.preview.return_value)
+        updated.update(basis_date="2026-11-13", snapshot_date="2026-11-13", snapshot_fresh=True,
+                       snapshot_positions=[{"quantity": 203}, {"quantity": 371}])
+        self.completed = Mock(return_value={"state": "UPDATED", "basis_date": "2026-11-13",
+                                            "checked_at": NOW.isoformat(), "plan": updated})
+
+    def refresh_completed_snapshot(self, *, now):
+        return self.completed(now=now)
+
+
+def completed_snapshot_engine(tmp_path, *, preset="KMW"):
+    backend = CompletedSnapshotBackend(preset)
+    engine = KMWEngine(backend, tmp_path / "completed.json", clock=lambda: NOW, preset=preset)
+    engine.preview()
+    engine.enable()
+    return engine, backend
+
+
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_status_poll_updates_only_fresh_plan_under_the_same_account_lock(tmp_path, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    backend.poll_status.return_value = {"state": "OK", "orders": [{"state": "FILLED", "quantity": 171}]}
+    before, next_run = deepcopy(engine._state), engine._next
+    expected = deepcopy(backend.completed.return_value)
+    def under_lock(**kwargs):
+        assert engine._run_lock.locked()
+        return expected
+    backend.completed.side_effect = under_lock
+    result = engine.poll_status()
+    after = deepcopy(engine._state)
+    assert result["state"] == "OK" and result["orders"] == backend.poll_status.return_value["orders"]
+    assert result["snapshot_sync"]["state"] == "UPDATED" and "plan" not in result["snapshot_sync"]
+    assert sum(row["quantity"] for row in after["plan"]["snapshot_positions"]) == 574
+    assert {key: value for key, value in after.items() if key != "plan"} == {
+        key: value for key, value in before.items() if key != "plan"}
+    assert engine._next == next_run and after["enabled"] is True
+    assert json.loads(engine.state_file.read_text())["plan"] == expected["plan"]
+    assert engine.status()["broker_status"] == result
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("state", ["WAITING", "SKIPPED", "ERROR"])
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_status_snapshot_wait_or_failure_preserves_plan_activation_and_schedule(tmp_path, state, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    backend.completed.return_value = {"state": state, "basis_date": "2026-11-13"}
+    before, next_run = deepcopy(engine._state), engine._next
+    result = engine.poll_status()
+    assert result["snapshot_sync"]["state"] == state and engine._state == before
+    assert engine._next == next_run and engine.status()["enabled"] is True
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_snapshot_sync_error_survives_throttled_polls_until_real_retry_succeeds(tmp_path, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    updated = deepcopy(backend.completed.return_value)
+    original_error = {"state": "ERROR", "basis_date": "2026-11-13", "checked_at": "2026-11-14T06:01:00+09:00",
+                      "error_code": "HOLDINGS_MISMATCH", "error": "확정 보유수량을 대조하지 못했습니다."}
+    retry_error = {**original_error, "checked_at": "2026-11-14T06:06:00+09:00", "error_code": "STALE_SNAPSHOT"}
+    throttled = {"state": "WAITING", "reason": "THROTTLED", "basis_date": "2026-11-13",
+                 "checked_at": "2026-11-14T06:02:00+09:00"}
+    backend.completed.side_effect = [original_error, throttled, retry_error, throttled, updated]
+    before, next_run = deepcopy(engine._state), engine._next
+    for expected in (original_error, original_error, retry_error, retry_error):
+        actual = engine.poll_status()
+        assert actual["snapshot_sync"] == expected
+        assert engine._state == before and engine._next == next_run
+    recovered = engine.poll_status()
+    assert recovered["snapshot_sync"]["state"] == "UPDATED"
+    assert "error" not in recovered["snapshot_sync"] and "error_code" not in recovered["snapshot_sync"]
+    assert {key: value for key, value in engine._state.items() if key != "plan"} == {
+        key: value for key, value in before.items() if key != "plan"}
+    assert engine._next == next_run
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_snapshot_sync_error_is_not_carried_into_a_new_completed_basis(tmp_path, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    backend.completed.side_effect = [
+        {"state": "ERROR", "basis_date": "2026-11-13", "error_code": "STALE_SNAPSHOT", "error": "전일 동기화 실패"},
+        {"state": "WAITING", "basis_date": "2026-11-16", "reason": "THROTTLED"}]
+    before, next_run = deepcopy(engine._state), engine._next
+    assert engine.poll_status()["snapshot_sync"]["state"] == "ERROR"
+    current = engine.poll_status()["snapshot_sync"]
+    assert current == {"state": "WAITING", "basis_date": "2026-11-16", "reason": "THROTTLED"}
+    assert engine._state == before and engine._next == next_run
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_unexpected_snapshot_sync_exception_is_safe_and_does_not_stop_engine(tmp_path, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    backend.completed.side_effect = RuntimeError("https://private-token.example/credential")
+    before = deepcopy(engine._state)
+    result = engine.poll_status()
+    assert result["snapshot_sync"]["state"] == "ERROR" and engine._state == before
+    assert "private-token" not in json.dumps(result)
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("changes", [{"preset": "KMW2"}, {"snapshot_fresh": False}, {"basis_date": "2026-11-12"}])
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_status_poll_rejects_invalid_sync_plan_without_replacing_saved_plan(tmp_path, changes, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    if "preset" in changes:
+        changes = {"preset": "KMW2" if preset == "KMW" else "KMW"}
+    backend.completed.return_value["plan"].update(changes)
+    before = deepcopy(engine._state)
+    result = engine.poll_status()
+    assert result["snapshot_sync"]["error_code"] == "INVALID_SYNC_PLAN"
+    assert engine._state == before
+
+
+@pytest.mark.parametrize("reenable", [False, True])
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_disable_during_completed_snapshot_read_prevents_stale_plan_commit(tmp_path, reenable, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    old_plan = deepcopy(engine._state["plan"])
+    next_run = engine._next
+    def racing_read(**kwargs):
+        engine.disable()
+        if reenable:
+            engine.enable()
+        return backend.completed.return_value
+    backend.completed.side_effect = racing_read
+    engine.poll_status()
+    assert engine._state["plan"] == old_plan and engine._state["enabled"] is reenable
+    assert engine._next == next_run
+    assert json.loads(engine.state_file.read_text())["plan"] == old_plan
+    backend.execute.assert_not_called()
+
+
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_inactive_engine_never_starts_completed_snapshot_sync(tmp_path, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    engine.disable()
+    backend.poll_status.reset_mock()
+    assert engine.poll_status() is None
+    backend.poll_status.assert_not_called()
+    backend.completed.assert_not_called()
+
+
+@pytest.mark.parametrize("preset", SUPPORTED_PRESETS)
+def test_local_snapshot_plan_save_failure_keeps_engine_enabled_and_original_plan(tmp_path, monkeypatch, preset):
+    engine, backend = completed_snapshot_engine(tmp_path, preset=preset)
+    before = deepcopy(engine._state)
+    monkeypatch.setattr(engine, "_commit", Mock(side_effect=EngineStateError("Synthetic save failure")))
+    result = engine.poll_status()
+    assert result["snapshot_sync"]["error_code"] == "SNAPSHOT_SYNC_SAVE_FAILED"
+    assert engine._state == before and engine.status()["enabled"] is True
+    backend.execute.assert_not_called()
 
 
 @pytest.mark.parametrize("preset", ["KMW", "KMW2", "JEH", "JEH2", "KHW"])

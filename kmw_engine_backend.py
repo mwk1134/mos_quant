@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import io
 import json
@@ -27,7 +27,7 @@ from kmw_autotrade import (
     direct_order_window, load_env, load_snapshots, notify_order_result, preflight, submit_plan,
     symbol, validate_account_configuration, validate_plan, validate_preset,
 )
-from kmw_order_plan import build_kmw_plan
+from kmw_order_plan import build_kmw_plan, completed_trading_date, exchange_calendar
 from meritz_api import AmbiguousSubmission, MeritzClient, MeritzError
 
 
@@ -205,6 +205,8 @@ class KMWBackend:
         self._mixed_feed_account = None
         self._mixed_last_check = float("-inf")
         self._mixed_managed = False
+        self._completed_snapshot_last_attempt = float("-inf")
+        self._completed_snapshot_last_basis = None
 
     def _load_credentials(self):
         # Never update process globals: a partial second-account file cannot
@@ -652,6 +654,35 @@ class KMWBackend:
         except Exception as exc:
             code, message = self._failure(exc)
             raise EngineBlocked(message, code=code) from None
+
+    def refresh_completed_snapshot(self, now: datetime | None = None) -> dict:
+        """Recheck this preset's completed fills without submitting orders."""
+        result = {"state": "ERROR", "checked_at": None, "basis_date": None}
+        try:
+            current = _now(now)
+            result["checked_at"] = current.isoformat()
+            basis = completed_trading_date(current.astimezone(ET))
+            result["basis_date"] = basis.isoformat()
+            closed = exchange_calendar().session_close(basis.isoformat()).to_pydatetime()
+            if current < closed + timedelta(minutes=1):
+                return {**result, "state": "WAITING", "reason": "CLOSE_GRACE"}
+            instant = monotonic_time.monotonic()
+            if (self._completed_snapshot_last_basis == basis.isoformat()
+                    and instant - self._completed_snapshot_last_attempt < 300):
+                return {**result, "state": "WAITING", "reason": "THROTTLED"}
+            # Failed reads are bounded too. Recheck even a previously successful
+            # basis so a delayed brokerage fill cannot be missed for a whole day.
+            self._completed_snapshot_last_attempt = instant
+            self._completed_snapshot_last_basis = basis.isoformat()
+            plan = self.refresh_preview(now=current)
+            if not isinstance(plan, dict) or plan.get("preset") != self.preset:
+                raise EngineBlocked(f"체결 동기화 결과의 {self.preset} 계좌를 확인하세요.", code="PRESET_MISMATCH")
+            if plan.get("snapshot_fresh") is not True or plan.get("basis_date") != basis.isoformat():
+                raise EngineBlocked(f"완료 거래일 기준의 {self.preset} 체결 동기화를 확인하지 못했습니다.", code="STALE_SNAPSHOT")
+            return {**result, "state": "UPDATED", "plan": deepcopy(plan)}
+        except Exception as exc:
+            code, message = self._failure(exc)
+            return {**result, "error_code": code, "error": message}
 
     def poll_status(self, now: datetime | None = None) -> dict:
         """Read ordinary SOXL order/fill status; no submission or notifications."""

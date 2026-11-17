@@ -390,10 +390,47 @@ class KMWEngine:
         with self._lock:
             if not self._state["enabled"] or self._running:
                 return None
+            generation = self._generation
         if not self._run_lock.acquire(blocking=False):
             return None
         try:
             result = self.backend.poll_status(now=self.clock())
+            if (callable(getattr(type(self.backend), "refresh_completed_snapshot", None))
+                    and self._may_continue(generation)):
+                try:
+                    sync = self.backend.refresh_completed_snapshot(now=self.clock())
+                    if not isinstance(sync, dict):
+                        raise ValueError("Invalid snapshot sync result")
+                except Exception:
+                    sync = {"state": "ERROR", "error_code": "SNAPSHOT_SYNC_FAILED",
+                            "error": "확정 체결 동기화를 확인하지 못했습니다. 다음 확인 시 다시 시도합니다."}
+                updated = sync.get("plan")
+                if sync.get("state") == "UPDATED":
+                    if not (isinstance(updated, dict) and updated.get("preset") == self.preset
+                            and updated.get("snapshot_fresh") is True
+                            and updated.get("basis_date") == sync.get("basis_date")):
+                        sync = {**sync, "state": "ERROR", "error_code": "INVALID_SYNC_PLAN",
+                                "error": f"최신 {self.preset} 체결 동기화 결과를 확인하지 못했습니다."}
+                    else:
+                        with self._lock:
+                            if (self._state["enabled"] and self._generation == generation
+                                    and not self._stop.is_set()):
+                                try:
+                                    self._commit(plan=deepcopy(updated))
+                                except EngineStateError:
+                                    sync = {**sync, "state": "ERROR", "error_code": "SNAPSHOT_SYNC_SAVE_FAILED",
+                                            "error": "갱신한 주문안의 로컬 저장을 확인하지 못했습니다."}
+                metadata = {key: deepcopy(value) for key, value in sync.items() if key != "plan"}
+                with self._lock:
+                    previous_sync = (self._broker_status or {}).get("snapshot_sync")
+                    if (metadata.get("state") == "WAITING" and metadata.get("reason") == "THROTTLED"
+                            and metadata.get("basis_date") is not None and isinstance(previous_sync, dict)
+                            and previous_sync.get("state") == "ERROR"
+                            and previous_sync.get("basis_date") == metadata["basis_date"]):
+                        # A skipped retry is not evidence that the last failed
+                        # reconciliation recovered. Retain its original details.
+                        metadata = deepcopy(previous_sync)
+                result = {**result, "snapshot_sync": metadata}
             with self._lock:
                 self._broker_status = result
             return result

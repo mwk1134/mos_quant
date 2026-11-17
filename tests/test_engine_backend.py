@@ -1,6 +1,6 @@
 """Engine adapter tests: fake broker, fake snapshots, and no external network."""
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
 import importlib
 import json
 from unittest.mock import Mock
@@ -11,6 +11,7 @@ import pytest
 import kmw_engine_backend as backend_module
 from kmw_autotrade import OrderLedger, account_id
 from kmw_engine_backend import EngineBlocked, KMWBackend
+from kmw_order_plan import SUPPORTED_PRESETS
 from meritz_api import AmbiguousSubmission, MeritzAPIError
 from telegram_notify import TelegramNotificationError
 
@@ -557,6 +558,190 @@ def test_poll_status_network_failure_is_safe(setup_backend):
     assert result["state"] == "ERROR" and result["orders"] == []
     assert "private-token" not in json.dumps(result)
     notifier.send.assert_not_called()
+
+
+@pytest.fixture(params=SUPPORTED_PRESETS)
+def setup_completed_backend(setup_backend, request):
+    original, client, notifier, create_client = setup_backend
+    backend = KMWBackend(env_file=None,
+        ledger_path=original.ledger_path.with_name(f"completed_{request.param}.db"), preset=request.param)
+    return backend, client, notifier, create_client
+
+
+def completed_plan(basis="2026-11-13", quantity=574, *, preset="KMW"):
+    value = plan()
+    value.update(preset=preset, basis_date=basis, expected_basis_date=basis, snapshot_date=basis,
+                 snapshot_positions=[{"position_key": "2_2026-11-12", "quantity": 203},
+                                     {"position_key": "3_2026-11-13", "quantity": quantity - 203}])
+    return value
+
+
+def test_completed_snapshot_reconciles_factual_holdings_without_submitting_or_notifying(setup_completed_backend, monkeypatch):
+    backend, client, notifier, create_client = setup_completed_backend
+    instant = datetime(2026, 11, 16, 14, 10, tzinfo=ZoneInfo("Asia/Seoul"))
+    refresh = Mock(return_value=completed_plan(preset=backend.preset))
+    monkeypatch.setattr(backend, "refresh_preview", refresh)
+    actual = backend.refresh_completed_snapshot(now=instant)
+    assert actual["state"] == "UPDATED" and actual["basis_date"] == "2026-11-13"
+    assert actual["checked_at"] == instant.isoformat()
+    assert sum(row["quantity"] for row in actual["plan"]["snapshot_positions"]) == 574
+    refresh.assert_called_once_with(now=instant)
+    create_client.assert_not_called()
+    client.submit_order.assert_not_called()
+    client.submit_reserved_order.assert_not_called()
+    notifier.send.assert_not_called()
+    assert not backend.ledger_path.exists()
+
+
+def test_completed_snapshot_rechecks_same_basis_after_five_minutes_for_delayed_fills(setup_completed_backend, monkeypatch):
+    backend, _, _, _ = setup_completed_backend
+    instant = datetime(2026, 11, 13, 16, 1, tzinfo=ZoneInfo("America/New_York"))
+    monotonic = [1000.0]
+    monkeypatch.setattr(backend_module.monotonic_time, "monotonic", lambda: monotonic[0])
+    refresh = Mock(side_effect=[completed_plan(quantity=374, preset=backend.preset), completed_plan(quantity=574, preset=backend.preset)])
+    monkeypatch.setattr(backend, "refresh_preview", refresh)
+    first = backend.refresh_completed_snapshot(now=instant)
+    assert first["state"] == "UPDATED"
+    monotonic[0] += 299
+    waiting = backend.refresh_completed_snapshot(now=instant + timedelta(seconds=299))
+    assert waiting["state"] == "WAITING" and waiting["reason"] == "THROTTLED" and "plan" not in waiting
+    monotonic[0] += 1
+    final = backend.refresh_completed_snapshot(now=instant + timedelta(minutes=5))
+    assert final["state"] == "UPDATED" and final["basis_date"] == first["basis_date"]
+    assert sum(row["quantity"] for row in final["plan"]["snapshot_positions"]) == 574
+    assert refresh.call_count == 2
+
+
+def test_completed_snapshot_failure_is_throttled_and_retried_without_leaking_details(setup_completed_backend, monkeypatch):
+    backend, _, notifier, _ = setup_completed_backend
+    instant = datetime(2026, 11, 13, 16, 1, tzinfo=ZoneInfo("America/New_York"))
+    monotonic = [1000.0]
+    monkeypatch.setattr(backend_module.monotonic_time, "monotonic", lambda: monotonic[0])
+    refresh = Mock(side_effect=[RuntimeError("https://private-token.example/credential"), completed_plan(preset=backend.preset)])
+    monkeypatch.setattr(backend, "refresh_preview", refresh)
+    failed = backend.refresh_completed_snapshot(now=instant)
+    assert failed["state"] == "ERROR" and failed["basis_date"] == "2026-11-13" and "plan" not in failed
+    assert "private-token" not in json.dumps(failed)
+    monotonic[0] += 299
+    assert backend.refresh_completed_snapshot(now=instant + timedelta(seconds=299))["state"] == "WAITING"
+    monotonic[0] += 1
+    assert backend.refresh_completed_snapshot(now=instant + timedelta(minutes=5))["state"] == "UPDATED"
+    assert refresh.call_count == 2
+    notifier.send.assert_not_called()
+
+
+def test_new_completed_basis_is_not_delayed_by_previous_basis_throttle(setup_completed_backend, monkeypatch):
+    backend, _, _, _ = setup_completed_backend
+    instant = datetime(2026, 11, 13, 15, 59, tzinfo=ZoneInfo("America/New_York"))
+    monotonic = [1000.0]
+    monkeypatch.setattr(backend_module.monotonic_time, "monotonic", lambda: monotonic[0])
+    refresh = Mock(side_effect=[completed_plan("2026-11-12", preset=backend.preset), completed_plan("2026-11-13", preset=backend.preset)])
+    monkeypatch.setattr(backend, "refresh_preview", refresh)
+    assert backend.refresh_completed_snapshot(now=instant)["basis_date"] == "2026-11-12"
+    monotonic[0] += 119
+    grace = backend.refresh_completed_snapshot(now=instant + timedelta(seconds=119))
+    assert grace["state"] == "WAITING" and grace["reason"] == "CLOSE_GRACE"
+    monotonic[0] += 1
+    result = backend.refresh_completed_snapshot(now=instant + timedelta(minutes=2))
+    assert result["state"] == "UPDATED" and result["basis_date"] == "2026-11-13"
+    assert refresh.call_count == 2
+
+
+@pytest.mark.parametrize("session,hour", [("2026-11-13", 16), ("2026-11-27", 13)])
+def test_completed_snapshot_waits_one_minute_after_official_normal_or_early_close(setup_completed_backend, monkeypatch, session, hour):
+    backend, _, _, _ = setup_completed_backend
+    closed = datetime.fromisoformat(session).replace(hour=hour, tzinfo=ZoneInfo("America/New_York"))
+    refresh = Mock(return_value=completed_plan(session, preset=backend.preset))
+    monkeypatch.setattr(backend, "refresh_preview", refresh)
+    before = backend.refresh_completed_snapshot(now=closed + timedelta(seconds=59))
+    assert before["state"] == "WAITING" and before["reason"] == "CLOSE_GRACE"
+    refresh.assert_not_called()
+    assert backend.refresh_completed_snapshot(now=closed + timedelta(minutes=1))["state"] == "UPDATED"
+    refresh.assert_called_once()
+
+
+@pytest.mark.parametrize("changes,code", [
+    ({"preset": "KMW2"}, "PRESET_MISMATCH"),
+    ({"snapshot_fresh": False}, "STALE_SNAPSHOT"),
+    ({"snapshot_fresh": None}, "STALE_SNAPSHOT"),
+    ({"basis_date": "2026-11-12"}, "STALE_SNAPSHOT"),
+])
+def test_completed_snapshot_never_publishes_wrong_account_or_stale_plan(setup_completed_backend, monkeypatch, changes, code):
+    backend, _, _, _ = setup_completed_backend
+    if "preset" in changes:
+        changes = {"preset": "KMW2" if backend.preset == "KMW" else "KMW"}
+    refresh = Mock(return_value={**completed_plan(preset=backend.preset), **changes})
+    monkeypatch.setattr(backend, "refresh_preview", refresh)
+    actual = backend.refresh_completed_snapshot(now=datetime(2026, 11, 13, 16, 1, tzinfo=ZoneInfo("America/New_York")))
+    assert actual["state"] == "ERROR" and actual["error_code"] == code and "plan" not in actual
+
+
+def test_completed_snapshot_retry_caches_are_isolated_between_accounts(tmp_path, monkeypatch):
+    instant = datetime(2026, 11, 13, 16, 1, tzinfo=ZoneInfo("America/New_York"))
+    monkeypatch.setattr(backend_module.monotonic_time, "monotonic", lambda: 1000.0)
+    backends = []
+    for preset in SUPPORTED_PRESETS:
+        backend = KMWBackend(preset=preset, env_file=tmp_path / f"{preset}.absent.env",
+                             ledger_path=tmp_path / f"{preset}.absent.db")
+        backend.refresh_preview = Mock(return_value=completed_plan(preset=preset))
+        backends.append(backend)
+        result = backend.refresh_completed_snapshot(now=instant)
+        assert result["state"] == "UPDATED" and result["plan"]["preset"] == preset
+    for backend in backends:
+        assert backend.refresh_completed_snapshot(now=instant)["reason"] == "THROTTLED"
+        backend.refresh_preview.assert_called_once_with(now=instant)
+        assert not backend.ledger_path.exists()
+
+
+@pytest.mark.parametrize("mode", ["mixed", "hybrid"])
+def test_kmw2_completed_snapshot_reaches_specialized_reconciliation_on_weekends(setup_backend, tmp_path, monkeypatch, mode):
+    import atr70_r2_adapter
+    import kmw2_hybrid
+    import preset_snapshot_sync
+
+    _, client, notifier, create_client = setup_backend
+    path = tmp_path / "kmw2-completed.env"
+    values = write_account_env(path, "KMW2", GITHUB_TOKEN="synthetic-kmw2-snapshot-token")
+    backend = KMWBackend(preset="KMW2", env_file=path, ledger_path=tmp_path / "kmw2-completed.db")
+    backend._mixed_managed = True
+    snapshot = {"as_of_date": "2026-11-12", "atr70_r2": {"phase": "ACTIVE"}}
+    if mode == "hybrid":
+        snapshot["strategyTransition"] = {"mode": "DONGPA"}
+    original = {"KMW2": snapshot, "JEH": {"keep": "unchanged"}}
+    updated = deepcopy(original)
+    updated["KMW2"]["as_of_date"] = "2026-11-13"
+    github = Mock()
+    github.read.return_value = (original, "synthetic-snapshot-sha")
+    monkeypatch.setattr(preset_snapshot_sync, "_GithubSnapshots", Mock(return_value=github))
+    if mode == "mixed":
+        reconcile = Mock(return_value=(updated, "github:synthetic-updated-source"))
+        monkeypatch.setattr(atr70_r2_adapter, "refresh_mixed_document", reconcile)
+    else:
+        reconcile = Mock(return_value=(updated, {"state": "HYBRID_ACTIVE"}))
+        monkeypatch.setattr(kmw2_hybrid, "sync_hybrid", reconcile)
+    fresh = completed_plan(preset="KMW2")
+    planner = Mock(return_value=fresh)
+    monkeypatch.setattr(backend_module, "build_kmw_plan", planner)
+    instant = datetime(2026, 11, 14, 8, tzinfo=ZoneInfo("America/New_York"))
+    result = backend.refresh_completed_snapshot(now=instant)
+    assert result["state"] == "UPDATED" and result["basis_date"] == "2026-11-13"
+    assert result["plan"]["preset"] == "KMW2"
+    assert reconcile.call_args.args[:2] == (original, "synthetic-snapshot-sha")
+    assert reconcile.call_args.kwargs["github"] is github
+    assert reconcile.call_args.kwargs["client"] is client
+    assert reconcile.call_args.kwargs["now"] == instant
+    if mode == "hybrid":
+        assert reconcile.call_args.kwargs["ledger_path"] == backend.ledger_path
+        assert reconcile.call_args.kwargs["account"] == account_id("KMW2", env=values)
+    planner.assert_called_once_with(updated, now=instant, preset="KMW2")
+    assert create_client.call_args.kwargs["env"] == values
+    client.submit_order.assert_not_called()
+    client.submit_reserved_order.assert_not_called()
+    client.submit_mixed_order.assert_not_called()
+    notifier.send.assert_not_called()
+    github.close.assert_called_once()
+    assert original["KMW2"]["as_of_date"] == "2026-11-12"
+    assert updated["JEH"] == original["JEH"]
 
 
 def test_bad_time_and_missing_credentials_fail_without_raw_details(tmp_path):
