@@ -2346,7 +2346,7 @@
     "pending_buy": {
       "round": 5,
       "quantity": 12,
-      "target_price": 50.76,
+      "target_price": 50.79,
       "order_date": "2026-11-18",
       "basis_date": "2026-11-17",
       "mode": "SF",
