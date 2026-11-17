@@ -1965,7 +1965,7 @@
     }
   },
   "KHW": {
-    "available_cash": 7514.71009002685,
+    "available_cash": 2018.87009002685,
     "processed_seed_dates": [
       "2026-09-15"
     ],
@@ -2298,6 +2298,14 @@
           "fees": "0",
           "position_key": "3_2026-11-16",
           "recommended_quantity": 84
+        },
+        "2026-11-17:725014": {
+          "trade_date": "2026-11-17",
+          "side": "BUY",
+          "quantity": 112,
+          "notional": "5495.8400",
+          "fees": "0",
+          "position_key": "4_2026-11-17"
         }
       }
     },
@@ -2336,8 +2344,8 @@
       "amount": 4095.84
     },
     "pending_buy": {
-      "round": 4,
-      "quantity": 111,
+      "round": 5,
+      "quantity": 12,
       "target_price": 50.76,
       "order_date": "2026-11-18",
       "basis_date": "2026-11-17",
@@ -2346,6 +2354,17 @@
       "sell_threshold": 1.1,
       "max_hold_days": 35,
       "strategy_name": "기본"
+    },
+    "4_2026-11-17": {
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본",
+      "round": 4,
+      "shares": 112,
+      "buy_price": 49.07,
+      "amount": 5495.84
     }
   },
   "_preset_configs": {
