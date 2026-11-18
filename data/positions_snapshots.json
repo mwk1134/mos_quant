@@ -1602,6 +1602,46 @@
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
           "cumulative_fee": "0"
+        },
+        "7bd9ea8e2c4a83185f2c85c6bed99fe3904bd29b8103120458d3b465342b20b8": {
+          "intent_id": "7bd9ea8e2c4a83185f2c85c6bed99fe3904bd29b8103120458d3b465342b20b8",
+          "strategy": "R2",
+          "ticker": "SOXL",
+          "side": "BUY",
+          "quantity": 20,
+          "price": "50.55",
+          "order_type": "LOC",
+          "session_date": "2026-11-18",
+          "lot_id": "R2:2026-11-18",
+          "position_key": "R2:2026-11-18",
+          "round": 5,
+          "event": "R2_ENTRY",
+          "frozen_rules": {
+            "buy_multiplier": "1.035",
+            "sell_multiplier": "1.011",
+            "max_holding_days": 35,
+            "round_weights": [
+              "0.049",
+              "0.127",
+              "0.23",
+              "0.257",
+              "0.028",
+              "0.169",
+              "0.14"
+            ],
+            "profit_reflection_rate": "0.72",
+            "loss_reflection_rate": "0.213",
+            "reference_seed_renewal_days": 10,
+            "settlement_delay_days": 7,
+            "mode": "SF",
+            "ma_aligned": false,
+            "strategy_id": "dongpa_modified"
+          },
+          "status": "PLANNED",
+          "broker_order_id": null,
+          "cumulative_quantity": 0,
+          "cumulative_notional": "0",
+          "cumulative_fee": "0"
         }
       },
       "last_atr_entry_session": null,
@@ -1636,7 +1676,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-18T18:02:38.714174+09:00",
+    "mixed_updated_at": "2026-11-18T18:02:42.006160+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
