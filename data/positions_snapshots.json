@@ -820,9 +820,9 @@
     }
   },
   "KMW2": {
-    "available_cash": 52166.99825,
+    "available_cash": 51176.87225,
     "processed_seed_dates": [],
-    "as_of_date": "2026-11-17",
+    "as_of_date": "2026-11-18",
     "compound_seed": 83546.45925811768,
     "compound_reference_seed": 83130.65925811768,
     "compound_profit_rate": 0.7,
@@ -1102,7 +1102,7 @@
         "lots": []
       },
       "r2": {
-        "cash": "15163.9982500",
+        "cash": "14173.8722500",
         "lots": [
           {
             "lot_id": "R2:2026-11-12",
@@ -1238,6 +1238,40 @@
             "round": 4,
             "entry_notional": "9176.0900",
             "remaining_cost": "9221.9704500",
+            "entry_fee_source": "CONFIGURED_RESERVE"
+          },
+          {
+            "lot_id": "R2:2026-11-18",
+            "strategy": "R2",
+            "shares": 20,
+            "entered_shares": 20,
+            "entry_date": "2026-11-18",
+            "entry_price": "49.2600",
+            "entry_fee": "4.9260000",
+            "frozen_rules": {
+              "buy_multiplier": "1.035",
+              "sell_multiplier": "1.011",
+              "max_holding_days": 35,
+              "round_weights": [
+                "0.049",
+                "0.127",
+                "0.23",
+                "0.257",
+                "0.028",
+                "0.169",
+                "0.14"
+              ],
+              "profit_reflection_rate": "0.72",
+              "loss_reflection_rate": "0.213",
+              "reference_seed_renewal_days": 10,
+              "settlement_delay_days": 7,
+              "mode": "SF",
+              "ma_aligned": false,
+              "strategy_id": "dongpa_modified"
+            },
+            "round": 5,
+            "entry_notional": "985.2000",
+            "remaining_cost": "990.1260000",
             "entry_fee_source": "CONFIGURED_RESERVE"
           }
         ],
@@ -1540,7 +1574,7 @@
           "position_key": "R2:2026-11-12",
           "round": 1,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "1389631",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -1559,7 +1593,7 @@
           "position_key": "R2:2026-11-13",
           "round": 2,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "1389814",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -1578,7 +1612,7 @@
           "position_key": "R2:2026-11-16",
           "round": 3,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "1389993",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -1597,7 +1631,7 @@
           "position_key": "R2:2026-11-17",
           "round": 4,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "1390164",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -1637,11 +1671,12 @@
             "ma_aligned": false,
             "strategy_id": "dongpa_modified"
           },
-          "status": "ACCEPTED",
+          "status": "FILLED",
           "broker_order_id": "1390352",
-          "cumulative_quantity": 0,
-          "cumulative_notional": "0",
-          "cumulative_fee": "0"
+          "cumulative_quantity": 20,
+          "cumulative_notional": "985.2000",
+          "cumulative_fee": "4.9260000",
+          "fee_source": "CONFIGURED_RESERVE"
         }
       },
       "last_atr_entry_session": null,
@@ -1676,7 +1711,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-19T05:56:50.297569+09:00",
+    "mixed_updated_at": "2026-11-19T06:01:31.289892+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
