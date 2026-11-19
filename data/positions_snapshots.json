@@ -1275,8 +1275,8 @@
         ],
         "seed": "37003",
         "reference_seed": "37003",
-        "trading_days": 5,
-        "last_seed_session": "2026-11-18",
+        "trading_days": 6,
+        "last_seed_session": "2026-11-19",
         "settlements": [],
         "mode": "SF"
       },
@@ -1709,7 +1709,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-19T13:55:54.716920+09:00",
+    "mixed_updated_at": "2026-11-19T14:00:14.913712+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
