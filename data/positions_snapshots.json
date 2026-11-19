@@ -1805,7 +1805,7 @@
             "ma_aligned": false,
             "strategy_id": "dongpa_modified"
           },
-          "status": "PLANNED",
+          "status": "SENDING",
           "broker_order_id": null,
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -1844,7 +1844,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-19T18:03:00.608006+09:00",
+    "mixed_updated_at": "2026-11-19T18:03:02.427962+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
