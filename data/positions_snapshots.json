@@ -1833,18 +1833,16 @@
       "unallocated_cost_cash": "0.540",
       "fee_source": "configured_reserve",
       "atr_breakout_test": {
-        "id": "e1f821ac5e21334ba208296699e978863ade5fd882e3d672",
-        "owner_boot_id": "076793138ae6e09bc0d5140393a1297d4d3f87caf14e667f",
-        "session_date": "2026-11-16",
+        "id": "3d4efb81863f1ea22f824ce9db734ce251b0bafd7fdf5895",
+        "owner_boot_id": "88fb673c07dc949103b012d1b346d00a7bb5706bd11647f8",
+        "session_date": "2026-11-19",
         "breakout_pct": "1.5",
-        "status": "EXPIRED",
-        "armed_at": "2026-11-16T09:34:00.541697+09:00",
-        "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99",
-        "ended_at": "2026-11-17T16:51:46.516137+09:00",
-        "reason": "TARGET_SESSION_ENDED"
+        "status": "ARMED",
+        "armed_at": "2026-11-19T21:05:54.366171+09:00",
+        "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99"
       }
     },
-    "mixed_updated_at": "2026-11-19T21:04:47.347415+09:00",
+    "mixed_updated_at": "2026-11-19T21:05:54.366171+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
