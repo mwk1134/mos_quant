@@ -2308,11 +2308,11 @@
     }
   },
   "KHW": {
-    "available_cash": 1427.75009002685,
+    "available_cash": 476.45009002685,
     "processed_seed_dates": [
       "2026-09-15"
     ],
-    "as_of_date": "2026-11-18",
+    "as_of_date": "2026-11-19",
     "compound_seed": 22709.692956604,
     "compound_reference_seed": 22048.051956604002,
     "compound_profit_rate": 0.7,
@@ -2329,7 +2329,7 @@
       "peakValue": 21554.320251464844,
       "soxlPrice": 105.91
     },
-    "compound_trading_days": 27,
+    "compound_trading_days": 28,
     "compound_settlements": [
       {
         "trade_date": "2026-11-13",
@@ -2652,6 +2652,15 @@
           "notional": "591.1200",
           "fees": "0",
           "position_key": "5_2026-11-18"
+        },
+        "2026-11-19:2055734": {
+          "trade_date": "2026-11-19",
+          "side": "BUY",
+          "quantity": 21,
+          "notional": "951.3000",
+          "fees": "0",
+          "position_key": "6_2026-11-19",
+          "recommended_quantity": 28
         }
       }
     },
@@ -2700,18 +2709,6 @@
       "buy_price": 49.07,
       "amount": 5495.84
     },
-    "pending_buy": {
-      "round": 6,
-      "quantity": 28,
-      "target_price": 50.98,
-      "order_date": "2026-11-19",
-      "basis_date": "2026-11-18",
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
-      "strategy_name": "기본"
-    },
     "5_2026-11-18": {
       "mode": "SF",
       "buy_threshold": 3.5,
@@ -2722,6 +2719,29 @@
       "shares": 12,
       "buy_price": 49.26,
       "amount": 591.12
+    },
+    "6_2026-11-19": {
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본",
+      "round": 6,
+      "shares": 21,
+      "buy_price": 45.3,
+      "amount": 951.3
+    },
+    "pending_buy": {
+      "round": 7,
+      "quantity": 10,
+      "target_price": 46.89,
+      "order_date": "2026-11-20",
+      "basis_date": "2026-11-19",
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본"
     }
   },
   "_preset_configs": {
