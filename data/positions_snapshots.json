@@ -1765,8 +1765,8 @@
           "position_key": "R2:2026-11-18",
           "round": 5,
           "event": "R2_EXIT",
-          "status": "SENDING",
-          "broker_order_id": null,
+          "status": "ACCEPTED",
+          "broker_order_id": "1983925",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
           "cumulative_fee": "0"
@@ -1804,7 +1804,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-19T18:02:52.717007+09:00",
+    "mixed_updated_at": "2026-11-19T18:02:56.414999+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
