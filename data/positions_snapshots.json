@@ -1,6 +1,6 @@
 {
   "KMW": {
-    "available_cash": 712.2693765259,
+    "available_cash": 22.6293765259,
     "processed_seed_dates": [
       "2025-10-21",
       "2026-06-21",
@@ -338,6 +338,15 @@
           "notional": "27381.0600",
           "fees": "0",
           "position_key": "4_2026-11-17"
+        },
+        "2026-11-18:1481498": {
+          "trade_date": "2026-11-18",
+          "side": "BUY",
+          "quantity": 14,
+          "notional": "689.6400",
+          "fees": "0",
+          "position_key": "5_2026-11-18",
+          "recommended_quantity": 14
         }
       }
     },
@@ -386,17 +395,16 @@
       "buy_price": 49.07,
       "amount": 27381.06
     },
-    "pending_buy": {
-      "round": 5,
-      "quantity": 61,
-      "target_price": 49.86,
-      "order_date": "2026-11-19",
-      "basis_date": "2026-11-18",
+    "5_2026-11-18": {
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
       "max_hold_days": 35,
-      "strategy_name": "기본"
+      "strategy_name": "기본",
+      "round": 5,
+      "shares": 14,
+      "buy_price": 49.26,
+      "amount": 689.64
     }
   },
   "JEH": {
