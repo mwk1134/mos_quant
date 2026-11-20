@@ -6,8 +6,8 @@
       "2026-06-21",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-19",
-    "compound_seed": 112880.78250396728,
+    "as_of_date": "2026-11-20",
+    "compound_seed": 112594.87050396728,
     "compound_reference_seed": 109602.06550396726,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
@@ -23,14 +23,8 @@
       "peakValue": 97923.902661438,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 28,
-    "compound_settlements": [
-      {
-        "trade_date": "2026-11-13",
-        "settlement_date": "2026-11-20",
-        "pnl": -1429.56
-      }
-    ],
+    "compound_trading_days": 29,
+    "compound_settlements": [],
     "broker_sync": {
       "version": 1,
       "baseline_date": "2026-10-12",
