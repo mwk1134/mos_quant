@@ -405,18 +405,6 @@
       "shares": 14,
       "buy_price": 49.26,
       "amount": 689.64
-    },
-    "pending_buy": {
-      "round": 6,
-      "quantity": 395,
-      "target_price": 46.89,
-      "order_date": "2026-11-20",
-      "basis_date": "2026-11-19",
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
-      "strategy_name": "기본"
     }
   },
   "JEH": {
