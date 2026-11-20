@@ -408,15 +408,15 @@
     }
   },
   "JEH": {
-    "available_cash": 115.20958770752,
+    "available_cash": 53.44958770752,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-19",
-    "compound_seed": 44935.356497863766,
-    "compound_reference_seed": 43626.765497863766,
+    "as_of_date": "2026-11-20",
+    "compound_seed": 44821.66049786376,
+    "compound_reference_seed": 44821.66049786376,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "ma_alignment_switch_enabled": false,
@@ -431,14 +431,8 @@
       "peakValue": 34001.511327209475,
       "soxlPrice": 140.25
     },
-    "compound_trading_days": 29,
-    "compound_settlements": [
-      {
-        "trade_date": "2026-11-13",
-        "settlement_date": "2026-11-20",
-        "pnl": -568.48
-      }
-    ],
+    "compound_trading_days": 30,
+    "compound_settlements": [],
     "broker_sync": {
       "version": 1,
       "baseline_date": "2026-10-09",
@@ -765,6 +759,15 @@
           "fees": "0",
           "position_key": "5_2026-11-19",
           "recommended_quantity": 13
+        },
+        "2026-11-20:2712592": {
+          "trade_date": "2026-11-20",
+          "side": "BUY",
+          "quantity": 2,
+          "notional": "61.7600",
+          "fees": "0",
+          "position_key": "6_2026-11-20",
+          "recommended_quantity": 2
         }
       }
     },
@@ -824,12 +827,23 @@
       "buy_price": 45.3,
       "amount": 588.9
     },
-    "pending_buy": {
+    "6_2026-11-20": {
+      "mode": "SF",
+      "buy_threshold": 3.5,
+      "sell_threshold": 1.1,
+      "max_hold_days": 35,
+      "strategy_name": "기본",
       "round": 6,
-      "quantity": 2,
-      "target_price": 46.89,
-      "order_date": "2026-11-20",
-      "basis_date": "2026-11-19",
+      "shares": 2,
+      "buy_price": 30.88,
+      "amount": 61.76
+    },
+    "pending_buy": {
+      "round": 7,
+      "quantity": 1,
+      "target_price": 31.82,
+      "order_date": "2026-11-23",
+      "basis_date": "2026-11-20",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
