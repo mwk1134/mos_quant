@@ -2083,12 +2083,14 @@
         "owner_boot_id": "35f511ec9473c9c82d927faab9ffccba241e58d9c260174b",
         "session_date": "2026-11-20",
         "breakout_pct": "1.5",
-        "status": "ARMED",
+        "status": "DISARMED",
         "armed_at": "2026-11-20T09:17:49.733695+09:00",
-        "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99"
+        "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99",
+        "ended_at": "2026-11-20T22:31:07.408979+09:00",
+        "reason": "OWNER_BOOT_CHANGED"
       }
     },
-    "mixed_updated_at": "2026-11-20T22:29:09.957942+09:00",
+    "mixed_updated_at": "2026-11-20T22:31:17.719245+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
