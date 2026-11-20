@@ -17,12 +17,14 @@ def _is_pending(row):
     return type(quantity) is not int or quantity <= 0
 
 
-def _show_order(strategy, table, row, *, existing=False):
+def _show_order(strategy, table, row, *, existing=False, review_pending=False):
     side = row["매매"]
     label = _label(strategy, row)
     with st.container(border=True):
         if existing:
             st.info(f"📄 {label} · 저장된 {side} 주문")
+        elif review_pending:
+            st.info(f"⏳ {label} · 접수 확인 후 {side} 재검토")
         elif _is_pending(row):
             st.info(f"⏳ {label} · {side} 조건 확인 대기")
         elif side == "매수":
@@ -58,13 +60,15 @@ def _show_order(strategy, table, row, *, existing=False):
                 st.caption(f"매수가: {row['매수가']}")
         if row.get("조건"):
             st.caption(f"조건: {row['조건']}")
-        if row.get("상태"):
+        if review_pending and not existing:
+            st.caption("상태: 기존 주문 접수 확인 후 재검토")
+        elif row.get("상태"):
             st.caption(f"상태: {row['상태']}")
         if row.get("주문번호"):
             st.caption(f"주문번호: {row['주문번호']}")
 
 
-def show_order_recommendations(tables, *, waiting=False, signal_available=True):
+def show_order_recommendations(tables, *, waiting=False, signal_available=True, mixed_phase=None, error_code=None):
     """Present supplied rows without querying, mutating or dispatching anything."""
     tables = tables if isinstance(tables, dict) else {}
     entries = []
@@ -76,7 +80,13 @@ def show_order_recommendations(tables, *, waiting=False, signal_available=True):
         rows = rows if isinstance(rows, list) else []
         entries.append((strategy, table, [row for row in rows if isinstance(row, dict)]))
 
+    uncertain_statuses = ("접수 여부 확인 필요", "접수 확인 중", "UNKNOWN", "SENDING")
+    review_pending = mixed_phase in {"UNKNOWN", "UNKNOWN_SUBMISSION"} or error_code == "UNKNOWN_SUBMISSION" or any(
+        row.get("기존주문") and any(status in str(row.get("상태") or "") for status in uncertain_statuses)
+        for _, _, rows in entries for row in rows)
     st.subheader("📋 주문일 기준 매매 추천")
+    if review_pending:
+        st.warning("접수 여부 확인이 필요한 주문이 있습니다. 기존 주문을 확인한 뒤 신규 주문안을 재검토하세요.")
     if waiting:
         st.caption("실계좌 시작 조건 확인 대기 · 신규 주문 없음")
     elif not signal_available:
@@ -100,7 +110,8 @@ def show_order_recommendations(tables, *, waiting=False, signal_available=True):
             ready = [item for item in drafts if not _is_pending(item[2])]
             pending = [item for item in drafts if _is_pending(item[2])]
             if ready:
-                st.info(f"📋 {side} 추천: {len(ready)}건")
+                st.info(f"⏳ {side} 주문안 재검토 대기: {len(ready)}건" if review_pending
+                        else f"📋 신규 {side} 추천: {len(ready)}건")
             elif not pending and not receipts:
                 if waiting or not signal_available:
                     st.info(f"⏳ {side} 추천 확인 대기")
@@ -108,12 +119,12 @@ def show_order_recommendations(tables, *, waiting=False, signal_available=True):
                     st.info(f"현재 {side} 추천이 없습니다.")
 
             for strategy, table, row in ready + pending:
-                _show_order(strategy, table, row)
+                _show_order(strategy, table, row, review_pending=review_pending)
             if receipts:
-                st.info(f"📋 저장된 {side} 주문: {len(receipts)}건")
-                st.caption("저장된 주문 기록입니다. 신규 추천 건수에 포함하지 않으며, 접수·체결 상태를 확인해 주세요.")
-                for strategy, table, row in receipts:
-                    _show_order(strategy, table, row, existing=True)
+                with st.expander(f"📋 저장된 {side} 주문 기록: {len(receipts)}건", expanded=False):
+                    st.caption("저장된 주문 기록의 미국 주문일과 접수·체결 상태를 확인해 주세요.")
+                    for strategy, table, row in receipts:
+                        _show_order(strategy, table, row, existing=True)
 
             shown = {strategy for strategy, _, _ in drafts + receipts}
             for strategy, table, _ in entries:
