@@ -371,8 +371,19 @@ class KMWBackend:
             code, message = self._failure(exc)
             if isinstance(exc, MixedBlocked):
                 code, message = exc.code, str(exc)
-            return {"handled": self._mixed_managed, "state": "UNKNOWN" if isinstance(exc, AmbiguousSubmission) else "BLOCKED",
-                    "error_code": code, "error": message, "orders": []}
+            result = {"handled": self._mixed_managed, "state": "UNKNOWN" if isinstance(exc, AmbiguousSubmission) else "BLOCKED",
+                      "error_code": code, "error": message, "orders": []}
+            if isinstance(mixed_context, dict):
+                result["orders"] = [_public_result(row) for row in mixed_context.get("results", [])]
+                if mixed_context.get("failed_order"):
+                    result["failed_order"] = _safe_order(mixed_context["failed_order"])
+                failed_state = mixed_context.get("failed_state")
+                if isinstance(failed_state, str) and failed_state in _STATES:
+                    result["failed_state"] = failed_state
+                not_sent_count = _quantity(mixed_context.get("not_sent_count"))
+                if not_sent_count is not None:
+                    result["not_sent_count"] = not_sent_count
+            return result
         finally:
             if ledger is not None:
                 ledger.db.close()
@@ -723,3 +734,4 @@ class KMWBackend:
         except Exception as exc:
             code, message = self._failure(exc)
             return {"state": "ERROR", "orders": [], "error_code": code, "error": message}
+
