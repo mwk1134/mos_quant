@@ -2051,8 +2051,8 @@
             "ma_aligned": false,
             "strategy_id": "dongpa_modified"
           },
-          "status": "SENDING",
-          "broker_order_id": null,
+          "status": "ACCEPTED",
+          "broker_order_id": "2850338",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
           "cumulative_fee": "0"
@@ -2088,7 +2088,7 @@
         "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99"
       }
     },
-    "mixed_updated_at": "2026-11-20T22:29:07.131781+09:00",
+    "mixed_updated_at": "2026-11-20T22:29:09.957942+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
