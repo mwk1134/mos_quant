@@ -2879,7 +2879,13 @@ def show_atr70_r2_order_tables(plan, state, *, enabled, waiting=False, signal_av
             st.caption("주문안 계산 시각: " + str(plan["generated_at"]))
         if plan.get("snapshot_fresh") is False:
             st.caption("과거 저장 장부의 미리보기입니다. 실제 주문 전 확정 체결과 잔고를 갱신합니다.")
-    show_order_recommendations(tables, waiting=waiting, signal_available=signal_available)
+    mixed_status = snapshot.get("atr70_r2_status") if isinstance(snapshot, dict) else None
+    mixed_status = mixed_status if isinstance(mixed_status, dict) else {}
+    show_order_recommendations(
+        tables, waiting=waiting, signal_available=signal_available,
+        mixed_phase=plan.get("mixed_phase") if isinstance(plan, dict) else None,
+        error_code=mixed_status.get("error_code"),
+    )
     with st.expander("📑 전략별 주문 상세", expanded=False):
         st.markdown(ORDER_TABLE_CSS, unsafe_allow_html=True)
         for strategy in tables:
@@ -4552,3 +4558,4 @@ def show_advanced_settings():
 
 if __name__ == "__main__":
     main()
+
