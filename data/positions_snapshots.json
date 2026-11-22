@@ -2569,7 +2569,8 @@
       }
     },
     "compound_trading_days": 30,
-    "cash_snapshot_date": "2026-10-28"
+    "cash_snapshot_date": "2026-10-28",
+    "compound_settlements": []
   },
   "KHW": {
     "2_2026-11-12": {
