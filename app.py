@@ -2736,6 +2736,8 @@ def _atr70_r2_readonly_plan(snapshot: dict) -> dict:
 
 def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -> dict:
     """Keep conditional recommendations and saved receipts distinct per strategy."""
+    from kmw2_order_ui import moc_sell_date
+
     plan = plan if isinstance(plan, dict) else {}
     state = state if isinstance(state, dict) else {}
     raw_tables = plan.get("strategy_order_tables")
@@ -2751,6 +2753,7 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
     for strategy, label in (("ATR", "ATR70 주문표"), ("R2", "R2 주문표")):
         entry = raw_tables.get(strategy)
         entry = entry if isinstance(entry, dict) else {}
+        table_session = entry.get("order_date") or plan.get("order_date")
         message = str(entry.get("message") or "")
         orders = entry.get("orders", entry.get("rows"))
         if not isinstance(orders, list):
@@ -2817,7 +2820,8 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
             if type(filled) is int and filled > 0 and type(quantity) is int and "/" not in status:
                 status += f" · 체결 {filled}/{quantity}주"
             condition = str(order.get("condition") or order.get("reason") or "")
-            session = order.get("order_date", order.get("session_date"))
+            session = order.get("order_date") or order.get("session_date")
+            display_session = session if existing else session or table_session
             if existing:
                 status = "저장된 주문 · " + status
                 if session:
@@ -2846,9 +2850,12 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
                          "가격설명": market_price_note,
                          "회차": round_number if type(round_number) is int and round_number > 0 else None,
                          "종목": order.get("ticker", "SOXL"), "모드": rules.get("mode"),
-                         "주문일": session or plan.get("order_date"),
+                         "주문일": display_session,
                          "주문번호": order.get("broker_order_id"),
                          "매수일": lot.get("entry_date") if side == "SELL" else None,
+                         "MOC일": moc_sell_date(
+                             order, order_date=display_session,
+                             r2_lot=lot if strategy == "R2" else None),
                          "매수가": entry_price})
         if not rows:
             awaiting_open = strategy == "ATR" and enabled and not waiting and signal_available and entry.get("status") in {"WAITING_BREAKOUT", "WAITING_OPEN"}
@@ -2856,7 +2863,7 @@ def _atr70_r2_order_tables(plan, state, *, enabled, waiting, signal_available) -
                      "수량": "미정" if awaiting_open else "-", "조건·상태": message,
                      "조건": "", "상태": message, "기존주문": False}]
         tables[strategy] = {"label": label, "message": message, "rows": rows, "source": source,
-                            "order_date": entry.get("order_date", plan.get("order_date"))}
+                            "order_date": table_session}
     return tables
 
 
@@ -2927,8 +2934,10 @@ def show_atr70_r2_recommendation(snapshot: dict, ma_alignment_placeholder=None):
         except Exception:
             plan, signal_available = None, False
         if isinstance(plan, dict):
+            from kmw2_order_ui import moc_sell_date
             sells = [{"종목": order.get("ticker", "SOXL"), "매매": "매도", "수량": order.get("quantity"),
-                      "주문 유형": order.get("order_type"), "가격": order.get("price")}
+                      "주문 유형": order.get("order_type"), "가격": order.get("price"),
+                      "MOC 예정일 (미국)": moc_sell_date(order, order_date=plan.get("order_date"))}
                      for order in (plan.get("orders") or []) if isinstance(order, dict) and order.get("side") == "SELL"]
             if sells:
                 st.write("**전환 전 기존 보유분 매도 주문안**")
@@ -3640,8 +3649,16 @@ def show_daily_recommendation(ma_alignment_placeholder=None, *, broker_only=Fals
                 # 손절 예정일 계산
                 config = st.session_state.trader.get_position_config(pos)
                 stop_loss_date = ""
+                kmw2_selected = st.session_state.get("active_preset") == "KMW2"
                 if buy_date_dt:
-                    stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
+                    if kmw2_selected:
+                        if sell_info.get("order_type") == "MOC" and recommendation.get("basis_date"):
+                            moc_date = st.session_state.trader.get_trading_date_after(recommendation["basis_date"], 1)
+                        else:
+                            moc_date = st.session_state.trader.get_trading_date_after(buy_date_dt, config["max_hold_days"])
+                        stop_loss_date = moc_date.date().isoformat()
+                    else:
+                        stop_loss_date = st.session_state.trader.calculate_stop_loss_date(buy_date_dt, config['max_hold_days'])
                 
                 # 매도 목표가 계산
                 target_sell_price = st.session_state.trader.calculate_position_sell_price(pos)
@@ -3669,7 +3686,8 @@ def show_daily_recommendation(ma_alignment_placeholder=None, *, broker_only=Fals
                     mode_text = f'<span style="color: {mode_color}; font-weight: bold;">모드: {mode} ({mode_name})</span>'
                     # 손절예정일 빨간색으로 표시 (날짜까지 포함)
                     stop_loss_display = stop_loss_date if stop_loss_date else "-"
-                    stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">손절예정일: {stop_loss_display}</span>'
+                    stop_loss_label = "MOC 예정일 (미국)" if kmw2_selected else "손절예정일"
+                    stop_loss_text = f'<span style="color: #DC3545; font-weight: bold;">{stop_loss_label}: {stop_loss_display}</span>'
                     st.markdown(f"{mode_text} • {stop_loss_text}", unsafe_allow_html=True)
                     # 손절예정일 도달 시 주의 문구
                     if sell_info.get('will_sell', False) and '손절예정일' in sell_info.get('reason', ''):

@@ -17,6 +17,28 @@ def _is_pending(row):
     return type(quantity) is not int or quantity <= 0
 
 
+def moc_sell_date(order, *, order_date, r2_lot=None):
+    """Use the actual MOC session or the frozen expiry for a LOC sell."""
+    if order.get("side") != "SELL":
+        return None
+    kind = order.get("order_type")
+    if kind == "MOC":
+        return order_date
+    if kind != "LOC":
+        return None
+    if order.get("expiry_date"):
+        return order["expiry_date"]
+    shares = r2_lot.get("shares") if r2_lot else None
+    if type(shares) is int and shares > 0:
+        from atr70_r2_adapter import r2_expiry_date
+
+        try:
+            return r2_expiry_date(r2_lot["entry_date"], r2_lot["frozen_rules"]["max_holding_days"])
+        except (KeyError, TypeError, ValueError):
+            return None
+    return None
+
+
 def _show_order(strategy, table, row, *, existing=False, review_pending=False):
     side = row["매매"]
     label = _label(strategy, row)
@@ -32,7 +54,9 @@ def _show_order(strategy, table, row, *, existing=False, review_pending=False):
         else:
             st.warning(f"📦 {label} 매도 추천")
 
-        order_date = row.get("주문일") or table.get("order_date")
+        order_date = row.get("주문일")
+        if not order_date and not existing:
+            order_date = table.get("order_date")
         if order_date:
             st.caption(f"📅 미국 주문일: {order_date}")
         if row.get("종목"):
@@ -58,6 +82,10 @@ def _show_order(strategy, table, row, *, existing=False, review_pending=False):
                 st.caption(f"매수체결일: {row['매수일']}")
             if row.get("매수가") not in (None, "", "-"):
                 st.caption(f"매수가: {row['매수가']}")
+            if row.get("MOC일"):
+                moc_label = "MOC 주문일" if existing and kind == "MOC" else "MOC 예정일"
+                condition_note = " · 미청산 시 종가 시장가" if kind == "LOC" else ""
+                st.markdown(f"**{moc_label} (미국): {row['MOC일']}**{condition_note}")
         if row.get("조건"):
             st.caption(f"조건: {row['조건']}")
         if review_pending and not existing:
@@ -162,6 +190,7 @@ def dongpa_order_table(plan, snapshot, *, signal_available=True):
                      "모드": entry.get("mode", plan.get("mode") if buying else None),
                      "주문일": plan.get("order_date"), "기존주문": False,
                      "매수일": order.get("buy_date") or (order.get("position_key", "").split("_", 1)[-1] if position else None),
+                     "MOC일": moc_sell_date(order, order_date=plan.get("order_date")),
                      "조건": "종가가 주문가 이하이면 매수" if buying else "보유 만기 종가 청산" if kind == "MOC" else "종가가 주문가 이상이면 매도",
                      "상태": "기본 동파매매 표시용 주문안 · 실제 접수·체결 별도 확인"})
     return {"label": "기본 동파 주문표", "source": "기본 동파 표시용 주문안", "rows": rows,

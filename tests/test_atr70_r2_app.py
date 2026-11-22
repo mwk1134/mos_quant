@@ -793,8 +793,9 @@ def hybrid_preview(*, enabled=False):
 
 
 def column_text(block):
-    return "\n".join(element.value for kind in ("subheader", "success", "warning", "info", "caption")
-                     for element in block.get(kind))
+    values = [element.value for kind in ("subheader", "success", "warning", "info", "caption")
+              for element in block.get(kind)]
+    return "\n".join(values + [element.label for element in block.get("expander")])
 
 
 @pytest.mark.parametrize("enabled", [False, True])
@@ -830,7 +831,7 @@ def test_streamlit_hybrid_keeps_carried_sell_rules_and_cash_separate_while_respe
     else:
         assert "기본 동파 · 2회차 매수 추천" in buy and "$71.20" in buy and "5주" in buy
         assert "매수 추천: 1건" in buy
-    assert "저장된 매수 주문: 1건" in buy and "$90.00" in buy and "2주" in buy
+    assert "저장된 매수 주문 기록: 1건" in buy and "$90.00" in buy and "2주" in buy
     assert "예약금 보존" in buy and "주문번호: 202" in buy
     assert "R2 · 2회차 매도 추천" in sell and "$102.00" in sell and "10주" in sell
     assert "35거래일 원래 규칙 유지" in sell and "모드: SF (안전모드)" in sell
@@ -853,8 +854,37 @@ def test_streamlit_hybrid_signal_failure_shows_saved_receipt_without_simulated_d
         app = AppTest.from_string(component_script(running=True, enabled=False, hybrid=True)).run(timeout=20)
     assert not app.exception and not app.error
     buy = column_text(app.columns[0])
-    assert "저장된 매수 주문: 1건" in buy and "$90.00" in buy
+    assert "저장된 매수 주문 기록: 1건" in buy and "$90.00" in buy
     assert not app.success and "$71.20" not in buy
     assert any("최신 신호 확인 불가" in warning.value for warning in app.warning)
     assert app.session_state._stored["KMW2"]["available_cash"] == 8750
     assert "save_attempts" not in app.session_state
+
+
+def test_r2_sell_cards_keep_moc_dates_for_drafts_and_saved_receipts():
+    build = functions("_atr70_r2_order_tables")["_atr70_r2_order_tables"]
+    state = mixed_state()
+    state["r2"]["lots"][0].update(
+        lot_id="R2:2026-11-24", entry_date="2026-11-24",
+        frozen_rules={"mode": "AG", "max_holding_days": 7},
+    )
+    # Thanksgiving is closed. The seven-session AG lot expires on Dec 4.
+    base = {"side": "SELL", "strategy": "R2", "quantity": 10, "lot_id": "R2:2026-11-24"}
+    future = {**base, "order_type": "LOC", "expiry_date": "2026-12-04"}
+    overdue = {**base, "order_type": "MOC", "expiry_date": "2026-12-04"}
+    atr = {"side": "SELL", "strategy": "ATR", "order_type": "MOO", "quantity": 1}
+    for order, order_date, expected in ((future, "2026-11-25", "2026-12-04"),
+                                        (overdue, "2026-12-07", "2026-12-07")):
+        tables = build({"order_date": order_date, "orders": [order, atr]}, state,
+                       enabled=False, waiting=False, signal_available=True)
+        assert tables["R2"]["rows"][0]["MOC일"] == expected
+        assert tables["ATR"]["rows"][0]["MOC일"] is None
+
+    state["orders"] = {
+        "loc": {**base, "order_type": "LOC", "status": "ACCEPTED", "session_date": "2026-11-25"},
+        "moc": {**overdue, "status": "ACCEPTED", "session_date": "2026-12-07"},
+    }
+    saved = build(None, state, enabled=True, waiting=False, signal_available=False)["R2"]["rows"]
+    assert [(row["주문일"], row["MOC일"], row["기존주문"]) for row in saved] == [
+        ("2026-11-25", "2026-12-04", True), ("2026-12-07", "2026-12-07", True),
+    ]

@@ -134,21 +134,31 @@ def r2_market_context(qqq_rows, session_date):
     return {"mode": mode, "rsi_t1": float(rsis.iloc[-1]), "rsi_t2": float(rsis.iloc[-2])}
 
 
+def r2_expiry_date(entry_date, max_holding_days):
+    """Return the lot's MOC date using its frozen holding period."""
+    from kmw_order_plan import next_trading_date
+
+    if type(max_holding_days) is not int or max_holding_days <= 0:
+        raise ValueError("Invalid R2 holding period")
+    expiry = date.fromisoformat(entry_date)
+    for _ in range(max_holding_days):
+        expiry = next_trading_date(expiry)
+    return expiry.isoformat()
+
+
 def build_r2_exit_orders(state, *, session_date):
     validate_state(state)
-    from kmw_order_plan import next_trading_date, order_price
+    from kmw_order_plan import order_price
     lots = [lot for lot in state["r2"]["lots"] if lot["shares"]]
     orders = []
     for lot in lots:
-        expiry = date.fromisoformat(lot["entry_date"])
-        for _ in range(lot["frozen_rules"]["max_holding_days"]):
-            expiry = next_trading_date(expiry)
-        expired = session_date >= expiry.isoformat()
+        expiry = r2_expiry_date(lot["entry_date"], lot["frozen_rules"]["max_holding_days"])
+        expired = session_date >= expiry
         orders.append({"ticker": "SOXL", "side": "SELL", "quantity": lot["shares"],
                        "price": "0" if expired else order_price(_money(lot["entry_price"]) * _money(lot["frozen_rules"]["sell_multiplier"])),
                        "order_type": "MOC" if expired else "LOC", "round": lot["round"],
                        "lot_id": lot["lot_id"], "position_key": lot["lot_id"],
-                       "frozen_rules": deepcopy(lot["frozen_rules"]), "expiry_date": expiry.isoformat()})
+                       "frozen_rules": deepcopy(lot["frozen_rules"]), "expiry_date": expiry})
     return orders
 
 

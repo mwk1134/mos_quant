@@ -31,8 +31,9 @@ def render(tables, *, waiting=False, signal_available=True):
 
 
 def text(block):
-    return "\n".join(element.value for kind in ("subheader", "success", "warning", "info", "caption")
-                     for element in block.get(kind))
+    values = [element.value for kind in ("subheader", "success", "warning", "info", "caption")
+              for element in block.get(kind)]
+    return "\n".join(values + [element.label for element in block.get("expander")])
 
 
 def tables():
@@ -72,7 +73,7 @@ def test_saved_partial_and_uncertain_orders_keep_status_and_are_not_counted_as_r
          "가격설명": "예산 기준 $70.00", "상태": "접수 여부 확인 필요", "기존주문": True}]
     app = render(value, signal_available=False)
     buy = text(app.columns[0])
-    assert "저장된 매수 주문: 2건" in buy and "신규 추천 건수에 포함하지 않으며" in buy
+    assert "저장된 매수 주문 기록: 2건" in buy and "미국 주문일과 접수·체결 상태" in buy
     assert "부분체결 · 체결 3/10주" in buy and "접수 여부 확인 필요" in buy
     assert "시장가 · 예산 기준 $70.00" in buy
     assert "매수금액" not in buy and "$280" not in buy
@@ -114,7 +115,7 @@ def test_saved_buy_and_sell_orders_never_show_the_empty_recommendation_notice(wa
     app = render(value, waiting=waiting, signal_available=signal_available)
     for side, column in zip(("매수", "매도"), app.columns):
         shown = text(column)
-        assert f"저장된 {side} 주문: 1건" in shown
+        assert f"저장된 {side} 주문 기록: 1건" in shown
         assert f"현재 {side} 추천이 없습니다." not in shown
         assert f"{side} 추천 확인 대기" not in shown
         assert not column.get("success")
@@ -173,3 +174,20 @@ def test_dongpa_table_respects_empty_reselected_on_plan_and_stale_signal_instead
     app = render(values, signal_available=False)
     assert not app.success and "$71.20" not in text(app)
     assert "저장된 매도 주문" in text(app.columns[1]) and "접수 여부 확인 필요" in text(app.columns[1])
+
+
+def test_sell_cards_show_dongpa_expiry_and_saved_moc_session():
+    plan = dongpa_plan()
+    plan["orders"][1].update(order_type="LOC", price="72.50", expiry_date="2027-01-05")
+    table = dongpa_order_table(plan, {})
+    assert table["rows"][1]["MOC일"] == "2027-01-05"
+    receipt = {"매매": "매도", "유형": "MOC", "기존주문": True, "MOC일": "2026-11-16",
+               "기준가격": "종가 시장가", "수량": 3, "주문일": "2026-11-16"}
+
+    app = render({"DONGPA": table, "R2": {"rows": [receipt]}})
+    buy, sell = app.columns
+    assert "MOC 예정일" not in "\n".join(item.value for item in buy.get("markdown"))
+    sell_text = "\n".join(item.value for item in sell.get("markdown"))
+    assert "MOC 예정일 (미국): 2027-01-05" in sell_text
+    assert "미청산 시 종가 시장가" in sell_text
+    assert "MOC 주문일 (미국): 2026-11-16" in sell_text
