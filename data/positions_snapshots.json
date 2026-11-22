@@ -3006,7 +3006,8 @@
       }
     },
     "compound_trading_days": 29,
-    "cash_snapshot_date": "2026-10-28"
+    "cash_snapshot_date": "2026-10-28",
+    "compound_settlements": []
   },
   "_preset_configs": {
     "KMW": {
