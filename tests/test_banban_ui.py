@@ -4,7 +4,6 @@ import base64
 from copy import deepcopy
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -82,83 +81,73 @@ def test_default_config_survives_app_normalization_and_json_roundtrip():
     assert json.loads(json.dumps(normalized)) == DEFAULT_KMW3_CONFIG
 
 
-def test_kmw3_snapshot_uses_bundled_fallback_without_replacing_remote_records():
-    class Session(dict):
-        __setattr__ = dict.__setitem__
-
-    remote = {"KMW": {"available_cash": 12345.0},
-              "_preset_configs": {"KMW": {"initial_capital": 9000.0}}}
-    bundled = {"KMW": {"available_cash": 999.0},
-               "KMW3": {"preset": "KMW3", "simulation": True, "available_cash": 80000.0,
-                        "as_of_date": "2026-10-19"}}
-    state = Session(kmw3_preset=deepcopy(DEFAULT_KMW3_CONFIG))
-    generic_fallback = Mock(return_value={})
-    bundled_fallback = Mock(return_value=deepcopy(bundled))
+def test_deleted_preset_is_ignored_in_saves_and_cached_data():
     tree = ast.parse(APP.read_text())
-    node = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                and node.name == "load_preset_snapshot")
-    namespace = {"st": SimpleNamespace(session_state=state),
-                 "MA_ALIGNMENT_SWITCH_KEY": "ma_alignment_switch_enabled",
-                 "_gh_load_all_snapshots": Mock(return_value=(deepcopy(remote), "remote-sha")),
-                 "_load_snapshot_fallback": generic_fallback,
-                 "_load_all_snapshots_fallback": bundled_fallback}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(APP), "exec"), namespace)
+    wanted = {"_without_kmw3", "load_preset_snapshot", "save_preset_snapshot"}
+    nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in wanted]
+    read = Mock(side_effect=AssertionError("Deleted preset should never reach storage"))
+    namespace = {"_PRESET_CONFIGS_KEY": "_preset_configs", "_gh_load_all_snapshots": read}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(APP), "exec"), namespace)
+    assert namespace["load_preset_snapshot"]("KMW3") == {}
+    assert namespace["save_preset_snapshot"]("KMW3", {})[0] is False
+    read.assert_not_called()
 
-    result = namespace["load_preset_snapshot"]("KMW3")
-
-    generic_fallback.assert_called_once_with("KMW3")
-    bundled_fallback.assert_called_once_with(prefer_local=True)
-    assert result == {**bundled["KMW3"], "ma_alignment_switch_enabled": False}
-    assert state["_gh_snapshot_all"] == {**remote, "KMW3": bundled["KMW3"]}
-    assert state["_gh_snapshot_sha"] == "remote-sha"
-
-
-def test_full_app_kmw3_button_loads_requested_settings_and_bypasses_legacy_trader():
-    document = {
-        "KMW3": {"simulation": True, "available_cash": 80000.0, "as_of_date": "2026-10-19"},
-        "KMW2": {"available_cash": 67612.0, "as_of_date": "2026-10-19"},
-        "_preset_configs": {"KMW2": {"initial_capital": 67612.0,
-                                        "session_start_date": "2026-04-29", "seed_increases": []}},
+    cached = {"KMW3": {"simulation": True}, "KMW2": {"atr70_r2": {"r2": {"cash": "42"}}},
+              "_preset_configs": {"KMW3": {"initial_capital": 80000},
+                                  "KMW2": {"atr70_r2_mix_enabled": True}}}
+    before = deepcopy(cached)
+    assert namespace["_without_kmw3"](cached) == {
+        "KMW2": cached["KMW2"], "_preset_configs": {"KMW2": cached["_preset_configs"]["KMW2"]},
     }
+    assert cached == before
+
+
+def test_full_app_clears_retired_selection_and_offers_only_supported_presets():
+    stale_snapshot = {"simulation": True, "available_cash": 80000.0, "as_of_date": "2026-11-20"}
+    document = {"KMW3": stale_snapshot, "KMW2": {"available_cash": 123.0},
+                "_preset_configs": {"KMW3": deepcopy(DEFAULT_KMW3_CONFIG),
+                                    "KMW2": {"initial_capital": 67612.0}}}
     encoded = base64.b64encode(json.dumps(document).encode()).decode()
 
     def fake_get(url, **kwargs):
         assert url == "https://api.github.com/repos/mwk1134/mos_quant/contents/data/positions_snapshots.json"
         response = Mock(status_code=200)
-        response.json.return_value = {"content": encoded, "sha": "kmw3-fake-sha"}
+        response.json.return_value = {"content": encoded, "sha": "retired-preset-sha"}
         return response
 
-    def render_marker(config):
-        import streamlit as st
-        st.write("KMW3 전용 반반매매 화면")
-
     with patch("requests.get", side_effect=fake_get), \
-            patch("requests.put", side_effect=AssertionError("No account writes")), \
+            patch("requests.put", side_effect=AssertionError("No account writes")) as writes, \
             patch("requests.Session.request", side_effect=AssertionError("No broker or market calls")), \
-            patch("soxl_quant_system.SOXLQuantTrader.__init__", side_effect=AssertionError("No legacy trader")), \
-            patch("banban_ui.show_workspace", side_effect=render_marker) as workspace:
+            patch("soxl_quant_system.SOXLQuantTrader.simulate_from_start_to_today",
+                  return_value={"error": "synthetic market data unavailable"}), \
+            patch("banban_ui.show_workspace", side_effect=AssertionError("Retired workspace")) as workspace:
         app = AppTest.from_file(str(APP))
-        app.secrets["GITHUB_TOKEN"] = "synthetic-kmw3-token"
+        app.secrets["GITHUB_TOKEN"] = "synthetic-preset-token"
         app.session_state["authenticated"] = True
         app.session_state["active_preset"] = "KMW3"
-        app.session_state["initial_capital"] = 9000.0
-        app.session_state["session_start_date"] = "2025-08-27"
+        app.session_state["initial_capital"] = 80000.0
+        app.session_state["session_start_date"] = "2026-10-20"
+        app.session_state["positions_snapshot"] = stale_snapshot
+        app.session_state["kmw3_preset"] = DEFAULT_KMW3_CONFIG
+        app.session_state["_kmw3_last_verified_snapshot"] = stale_snapshot
         app.session_state["_rsi_reference_next_check_at"] = 99999999999.0
         app.run(timeout=25)
-        assert not app.exception and not app.error
-        next(button for button in app.button if button.label == "KMW3").click().run(timeout=25)
-
-    assert not app.exception and not app.error
-    assert app.session_state.active_preset == "KMW3"
-    assert app.session_state.initial_capital == 80000.0
-    assert app.session_state.session_start_date == "2026-10-20"
-    assert app.session_state.seed_increases == []
-    assert app.session_state.trader is None
-    assert app.session_state.kmw3_preset == DEFAULT_KMW3_CONFIG
-    assert workspace.call_args.args == (DEFAULT_KMW3_CONFIG,)
-    assert not app.toggle
-    assert next(widget for widget in app.number_input if widget.label == "💰 초기 투자금 (달러)").disabled
-    assert next(widget for widget in app.date_input if widget.label == "📅 투자 시작일").disabled
+    assert not app.exception
+    workspace.assert_not_called()
+    writes.assert_not_called()
+    assert app.session_state.active_preset is None
+    assert app.session_state.initial_capital == 9000
+    assert app.session_state.session_start_date == "2025-08-27"
+    assert app.session_state.positions_snapshot == {}
+    assert "kmw3_preset" not in app.session_state
+    assert "_kmw3_last_verified_snapshot" not in app.session_state
+    assert app.session_state._gh_snapshot_all == {"KMW2": document["KMW2"],
+                                                   "_preset_configs": {"KMW2": document["_preset_configs"]["KMW2"]}}
+    presets = ["KMW", "JEH", "KMW2", "JEH2", "KHW"]
+    labels = [button.label for button in app.button]
+    assert labels[:5] == presets and "KMW3" not in labels
+    table = next(frame.value for frame in app.dataframe if "프리셋" in frame.value.columns)
+    assert table["프리셋"].tolist() == presets
 
 
 def test_workspace_displays_legacy_buy_sell_groups_and_simulation_basis():

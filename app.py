@@ -30,7 +30,6 @@ if str(CURRENT_DIR) not in sys.path:
 
 # 기존 SOXLQuantTrader 클래스 import
 from soxl_quant_system import SOXLQuantTrader, calculate_cash_limited_order
-from banban_strategy import DEFAULT_KMW3_CONFIG
 
 
 def _ensure_current_strategy_class():
@@ -358,7 +357,7 @@ st.markdown("""
 _GH_REPO = "mwk1134/mos_quant"
 _GH_SNAPSHOT_PATH = "data/positions_snapshots.json"
 _PRESET_CONFIGS_KEY = "_preset_configs"
-_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "KHW", "KMW3")
+_PRESET_NAMES = ("KMW", "JEH", "KMW2", "JEH2", "KHW")
 _MAX_MDD_KEY = "maxMdd"
 _MDD_CALCULATION_VERSION = "full_history_v1"
 
@@ -379,6 +378,20 @@ def _gh_headers():
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
+def _without_kmw3(data):
+    """Remove the retired preset without changing any other stored records."""
+    configs = data.get(_PRESET_CONFIGS_KEY)
+    has_config = isinstance(configs, dict) and "KMW3" in configs
+    if "KMW3" not in data and not has_config:
+        return data
+    updated = dict(data)
+    updated.pop("KMW3", None)
+    if has_config:
+        updated[_PRESET_CONFIGS_KEY] = dict(configs)
+        updated[_PRESET_CONFIGS_KEY].pop("KMW3")
+    return updated
+
+
 def _gh_load_all_snapshots() -> tuple:
     """GitHub에서 전체 스냅샷 JSON 로드. (data_dict, sha) 반환"""
     headers = _gh_headers()
@@ -390,7 +403,7 @@ def _gh_load_all_snapshots() -> tuple:
         if resp.status_code == 200:
             info = resp.json()
             content = base64.b64decode(info["content"]).decode("utf-8")
-            return json.loads(content), info["sha"]
+            return _without_kmw3(json.loads(content)), info["sha"]
         return {}, None
     except Exception as e:
         print(f"⚠️ GitHub 스냅샷 로드 실패: {e}")
@@ -408,7 +421,7 @@ def _gh_save_all_snapshots(data: dict, sha: str = None) -> tuple:
             get_resp = _requests.get(url, headers=headers, timeout=10)
             if get_resp.status_code == 200:
                 sha = get_resp.json().get("sha")
-        content_bytes = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        content_bytes = json.dumps(_without_kmw3(data), ensure_ascii=False, indent=2).encode("utf-8")
         body = {
             "message": f"snapshot update {datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "content": base64.b64encode(content_bytes).decode("ascii"),
@@ -445,7 +458,7 @@ def _load_all_snapshots_fallback(prefer_local: bool = False) -> dict:
         try:
             data = loader()
             if data:
-                return data
+                return _without_kmw3(data)
         except Exception:
             pass
     return {}
@@ -455,7 +468,7 @@ def _write_local_all_snapshots(data: dict) -> None:
     local_path = Path(__file__).resolve().parent / _GH_SNAPSHOT_PATH
     local_path.parent.mkdir(parents=True, exist_ok=True)
     with open(local_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(_without_kmw3(data), f, ensure_ascii=False, indent=2)
 
 def _load_snapshot_fallback(preset_name: str) -> dict:
     """GitHub 실패 시 raw URL 또는 로컬 파일에서 로드"""
@@ -463,6 +476,8 @@ def _load_snapshot_fallback(preset_name: str) -> dict:
 
 def load_preset_snapshot(preset_name: str) -> dict:
     """특정 프리셋의 스냅샷 로드. GitHub를 원천으로 사용하고 로컬은 네트워크 실패 시 fallback."""
+    if preset_name == "KMW3":
+        return {}
     # Streamlit 서버의 로컬 파일은 이전 실행에서 자동 저장된 값이 남을 수 있다.
     # 먼저 GitHub의 영구 스냅샷을 읽어 stale 로컬 캐시가 실제 수량을 덮지 못하게 한다.
     all_data, sha = _gh_load_all_snapshots()
@@ -471,10 +486,6 @@ def load_preset_snapshot(preset_name: str) -> dict:
     result = all_data.get(preset_name, {})
     if not result:
         result = _load_snapshot_fallback(preset_name)
-        if not result and preset_name == "KMW3":
-            # A new simulation preset can be bundled locally before the
-            # remote document has a record for it.
-            result = _load_all_snapshots_fallback(prefer_local=True).get(preset_name, {})
         if result:
             all_data[preset_name] = result
             st.session_state._gh_snapshot_all = all_data
@@ -781,7 +792,6 @@ def get_preset_configs() -> dict:
         "KMW2": st.session_state.kmw2_preset,
         "JEH2": st.session_state.jeh2_preset,
         "KHW": st.session_state.khw_preset,
-        "KMW3": st.session_state.kmw3_preset,
     }
 
 def _preserve_position_strategy_fields(
@@ -1140,12 +1150,6 @@ def _pending_buy_from_recommendation(
 
 def _simulate_preset_snapshot(preset_name: str, preset: dict, previous_snapshot: dict) -> tuple:
     """프리셋 하나를 임시 트레이더로 시뮬레이션하고 저장용 스냅샷을 반환."""
-    if preset_name == "KMW3":
-        from banban_ui import load_replay
-        try:
-            return load_replay(preset)["snapshot"], None
-        except (ValueError, RuntimeError):
-            return None, "반반매매의 확정 시세를 확인하지 못해 갱신을 보류했습니다."
     if not previous_snapshot:
         return None, "기존 스냅샷을 불러오지 못해 자동 갱신을 중단했습니다."
     if preset_name == "KMW2" and (
@@ -1251,6 +1255,8 @@ def auto_save_all_preset_snapshots_if_needed(current_snapshot: dict, ttl_seconds
 
 def save_preset_snapshot(preset_name: str, snapshot: dict) -> tuple:
     """특정 프리셋의 스냅샷을 GitHub에 저장. (성공여부, 에러메시지) 반환"""
+    if preset_name == "KMW3":
+        return False, "삭제된 프리셋입니다."
     all_data, sha = _gh_load_all_snapshots()
     if not isinstance(all_data, dict) or not all_data or not isinstance(sha, str) or not sha:
         return False, "전체 프리셋의 최신 원본과 버전을 확인하지 못해 저장을 중단했습니다. 다시 불러온 뒤 시도해 주세요."
@@ -1939,6 +1945,17 @@ def _sync_recommendation_portfolio_cash(recommendation: dict, trader) -> None:
     portfolio['available_cash'] = cash
     portfolio['total_portfolio_value'] = cash + position_value
 
+# 이전 KMW3 화면을 열어 둔 세션은 프리셋 선택 전 상태로 돌아간다.
+if st.session_state.get("active_preset") == "KMW3":
+    for key in ("active_preset", "initial_capital", "session_start_date", "seed_increases",
+                "position_edits", "positions_snapshot", "trader", "active_tab",
+                MA_ALIGNMENT_SWITCH_KEY, ATR70_R2_SWITCH_KEY):
+        st.session_state.pop(key, None)
+for retired_key in ("kmw3_preset", "_kmw3_last_verified_snapshot", "kmw3_refresh"):
+    st.session_state.pop(retired_key, None)
+if isinstance(st.session_state.get("_gh_snapshot_all"), dict):
+    st.session_state._gh_snapshot_all = _without_kmw3(st.session_state._gh_snapshot_all)
+
 # 세션 상태 초기화
 if 'trader' not in st.session_state:
     st.session_state.trader = None
@@ -2032,8 +2049,6 @@ if 'khw_preset' not in st.session_state:
         'position_edits': {},
         MA_ALIGNMENT_SWITCH_KEY: False,
     }
-if 'kmw3_preset' not in st.session_state:
-    st.session_state.kmw3_preset = deepcopy(DEFAULT_KMW3_CONFIG)
 
 apply_persisted_preset_configs()
 ensure_preset_seed_increase("KMW", "2026-06-21", 11293.0)
@@ -2199,7 +2214,7 @@ def show_mobile_settings():
         live_start = _atr70_r2_live_start(st.session_state.get("positions_snapshot"))
         if live_start:
             display_capital, display_start = live_start
-    settings_readonly = _atr70_r2_ui_selected() or st.session_state.get("active_preset") == "KMW3"
+    settings_readonly = _atr70_r2_ui_selected()
 
     # 투자원금 설정
     initial_capital = st.number_input(
@@ -2235,7 +2250,7 @@ def show_mobile_settings():
     )
     
     # 프리셋별 투자 설정과 전략을 함께 불러온다.
-    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5, pr_col6 = st.columns(6)
+    pr_col1, pr_col2, pr_col3, pr_col4, pr_col5 = st.columns(5)
     with pr_col1:
         if st.button("KMW", help="초기설정: 9000달러, 시작일 2025/08/27, 2025/10/21 +31,000, 2026/06/21 +11,293", use_container_width=True):
             kmw = st.session_state.kmw_preset
@@ -2322,31 +2337,9 @@ def show_mobile_settings():
             st.session_state.trader = None
             st.rerun()
 
-    with pr_col6:
-        if st.button("KMW3", help="반반매매 (ATR70-R2): 80,000달러, 시작일 2026/10/20, ATR70·R2 각 50%", use_container_width=True):
-            kmw3 = st.session_state.kmw3_preset
-            st.session_state.initial_capital = kmw3['initial_capital']
-            st.session_state.session_start_date = kmw3['session_start_date']
-            st.session_state.seed_increases = _copy_seed_increases(kmw3.get('seed_increases') or [])
-            st.session_state.position_edits = {}
-            st.session_state.active_preset = "KMW3"
-            st.session_state[MA_ALIGNMENT_SWITCH_KEY] = False
-            st.session_state[ATR70_R2_SWITCH_KEY] = False
-            st.session_state.positions_snapshot = load_preset_snapshot("KMW3")
-            st.session_state.trader = None
-            st.rerun()
-
     show_atr70_r2_preference_control()
     ma_alignment_placeholder = None
-    if st.session_state.get("active_preset") == "KMW3":
-        with st.expander("프리셋별 최고 MDD", expanded=False):
-            show_preset_max_mdd_summary()
-    else:
-        show_preset_max_mdd_summary()
-    if st.session_state.get("active_preset") == "KMW3":
-        st.caption("반반매매 (ATR70-R2) · ATR70 50% + R2 50% · 매월 첫 미국 거래일 비중 조정")
-        st.markdown("</div>", unsafe_allow_html=True)
-        return ma_alignment_placeholder
+    show_preset_max_mdd_summary()
     if _atr70_r2_ui_selected():
         st.caption("혼합매매 전환 대기·운용 중에는 저장된 투자원금·시작일·시드증액을 화면에서 재설정하지 않습니다. 운용자금은 확인된 실제 계좌 기준으로 관리합니다.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -2458,11 +2451,6 @@ def main():
     # 설정 패널 (모든 화면)
     ma_alignment_placeholder = show_mobile_settings()
 
-    if st.session_state.get("active_preset") == "KMW3":
-        from banban_ui import show_workspace
-        show_workspace(st.session_state.kmw3_preset)
-        return
-    
     # 트레이더 초기화
     initialize_trader()
     
