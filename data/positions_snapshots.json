@@ -398,7 +398,8 @@
       }
     },
     "compound_trading_days": 29,
-    "cash_snapshot_date": "2026-10-28"
+    "cash_snapshot_date": "2026-10-28",
+    "compound_settlements": []
   },
   "JEH": {
     "2_2026-11-12": {
