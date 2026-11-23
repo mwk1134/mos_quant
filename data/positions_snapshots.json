@@ -61,9 +61,9 @@
       "2026-06-21",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-20",
+    "as_of_date": "2026-11-23",
     "compound_seed": 112594.87050396728,
-    "compound_reference_seed": 109602.06550396726,
+    "compound_reference_seed": 112594.87050396728,
     "compound_profit_rate": 0.7,
     "compound_loss_rate": 0.2,
     "ma_alignment_switch_enabled": false,
@@ -397,7 +397,7 @@
         }
       }
     },
-    "compound_trading_days": 29,
+    "compound_trading_days": 30,
     "cash_snapshot_date": "2026-10-28",
     "compound_settlements": []
   },
