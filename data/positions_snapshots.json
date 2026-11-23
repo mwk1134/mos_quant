@@ -849,7 +849,7 @@
     }
   },
   "KMW2": {
-    "available_cash": 42239.88965,
+    "available_cash": 46926.2302,
     "processed_seed_dates": [],
     "as_of_date": "2026-11-23",
     "compound_seed": 83546.45925811768,
@@ -1131,7 +1131,7 @@
         "lots": []
       },
       "r2": {
-        "cash": "5236.8896500",
+        "cash": "9923.2302000",
         "lots": [
           {
             "lot_id": "R2:2026-11-12",
@@ -1340,7 +1340,7 @@
           {
             "lot_id": "R2:2026-11-20",
             "strategy": "R2",
-            "shares": 109,
+            "shares": 0,
             "entered_shares": 109,
             "entry_date": "2026-11-20",
             "entry_price": "30.8800",
@@ -1368,7 +1368,7 @@
             },
             "round": 7,
             "entry_notional": "3365.9200",
-            "remaining_cost": "3382.7496000",
+            "remaining_cost": "0E-7",
             "entry_fee_source": "CONFIGURED_RESERVE"
           }
         ],
@@ -1376,7 +1376,34 @@
         "reference_seed": "37003",
         "trading_days": 8,
         "last_seed_session": "2026-11-23",
-        "settlements": [],
+        "settlements": [
+          {
+            "settlement_date": "2026-11-30",
+            "profit_loss": "1303.5909500",
+            "frozen_rules": {
+              "buy_multiplier": "1.035",
+              "sell_multiplier": "1.011",
+              "max_holding_days": 35,
+              "round_weights": [
+                "0.049",
+                "0.127",
+                "0.23",
+                "0.257",
+                "0.028",
+                "0.169",
+                "0.14"
+              ],
+              "profit_reflection_rate": "0.72",
+              "loss_reflection_rate": "0.213",
+              "reference_seed_renewal_days": 10,
+              "settlement_delay_days": 7,
+              "mode": "SF",
+              "ma_aligned": false,
+              "strategy_id": "dongpa_modified"
+            },
+            "sale_intent_id": "cb720727d999e02516f5d592f74abc226b3943930467f931e956ebe698253cf4"
+          }
+        ],
         "mode": "SF"
       },
       "orders": {
@@ -2116,7 +2143,7 @@
           "position_key": "R2:2026-11-12",
           "round": 1,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "103752",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2135,7 +2162,7 @@
           "position_key": "R2:2026-11-13",
           "round": 2,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "103993",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2154,7 +2181,7 @@
           "position_key": "R2:2026-11-16",
           "round": 3,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "104225",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2173,7 +2200,7 @@
           "position_key": "R2:2026-11-17",
           "round": 4,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "104538",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2192,7 +2219,7 @@
           "position_key": "R2:2026-11-18",
           "round": 5,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "104750",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2211,7 +2238,7 @@
           "position_key": "R2:2026-11-19",
           "round": 6,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "105171",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2230,11 +2257,13 @@
           "position_key": "R2:2026-11-20",
           "round": 7,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "FILLED",
           "broker_order_id": "105602",
-          "cumulative_quantity": 0,
-          "cumulative_notional": "0",
-          "cumulative_fee": "0"
+          "cumulative_quantity": 109,
+          "cumulative_notional": "4709.8900",
+          "cumulative_fee": "23.5494500",
+          "realized_profit_loss": "1303.5909500",
+          "fee_source": "CONFIGURED_RESERVE"
         }
       },
       "last_atr_entry_session": null,
@@ -2269,7 +2298,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-24T06:00:10.151388+09:00",
+    "mixed_updated_at": "2026-11-24T06:07:17.708893+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
