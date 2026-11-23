@@ -2099,6 +2099,25 @@
           "cumulative_notional": "3365.9200",
           "cumulative_fee": "16.8296000",
           "fee_source": "CONFIGURED_RESERVE"
+        },
+        "41777e02882208063ad45c993ed01c130ac8515bdbc8eaebb6d5363ca723b622": {
+          "intent_id": "41777e02882208063ad45c993ed01c130ac8515bdbc8eaebb6d5363ca723b622",
+          "strategy": "R2",
+          "ticker": "SOXL",
+          "side": "SELL",
+          "quantity": 26,
+          "price": "66.25",
+          "order_type": "LOC",
+          "session_date": "2026-11-23",
+          "lot_id": "R2:2026-11-12",
+          "position_key": "R2:2026-11-12",
+          "round": 1,
+          "event": "R2_EXIT",
+          "status": "PLANNED",
+          "broker_order_id": null,
+          "cumulative_quantity": 0,
+          "cumulative_notional": "0",
+          "cumulative_fee": "0"
         }
       },
       "last_atr_entry_session": null,
@@ -2131,7 +2150,7 @@
         "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99"
       }
     },
-    "mixed_updated_at": "2026-11-23T17:57:38.054566+09:00",
+    "mixed_updated_at": "2026-11-23T18:02:10.336037+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
