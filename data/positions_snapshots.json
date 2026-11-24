@@ -869,7 +869,7 @@
     }
   },
   "KMW2": {
-    "available_cash": 46926.2302,
+    "available_cash": 43158.4852,
     "processed_seed_dates": [],
     "as_of_date": "2026-11-24",
     "compound_seed": 83546.45925811768,
@@ -1151,7 +1151,7 @@
         "lots": []
       },
       "r2": {
-        "cash": "9923.2302000",
+        "cash": "6155.4852000",
         "lots": [
           {
             "lot_id": "R2:2026-11-12",
@@ -1389,6 +1389,40 @@
             "round": 7,
             "entry_notional": "3365.9200",
             "remaining_cost": "0E-7",
+            "entry_fee_source": "CONFIGURED_RESERVE"
+          },
+          {
+            "lot_id": "R2:2026-11-24",
+            "strategy": "R2",
+            "shares": 115,
+            "entered_shares": 115,
+            "entry_date": "2026-11-24",
+            "entry_price": "32.6000",
+            "entry_fee": "18.7450000",
+            "frozen_rules": {
+              "buy_multiplier": "1.035",
+              "sell_multiplier": "1.011",
+              "max_holding_days": 35,
+              "round_weights": [
+                "0.049",
+                "0.127",
+                "0.23",
+                "0.257",
+                "0.028",
+                "0.169",
+                "0.14"
+              ],
+              "profit_reflection_rate": "0.72",
+              "loss_reflection_rate": "0.213",
+              "reference_seed_renewal_days": 10,
+              "settlement_delay_days": 7,
+              "mode": "SF",
+              "ma_aligned": false,
+              "strategy_id": "dongpa_modified"
+            },
+            "round": 7,
+            "entry_notional": "3749.0000",
+            "remaining_cost": "3767.7450000",
             "entry_fee_source": "CONFIGURED_RESERVE"
           }
         ],
@@ -2298,7 +2332,7 @@
           "position_key": "R2:2026-11-12",
           "round": 1,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "827544",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2317,7 +2351,7 @@
           "position_key": "R2:2026-11-13",
           "round": 2,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "827821",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2336,7 +2370,7 @@
           "position_key": "R2:2026-11-16",
           "round": 3,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "828112",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2355,7 +2389,7 @@
           "position_key": "R2:2026-11-17",
           "round": 4,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "828403",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2374,7 +2408,7 @@
           "position_key": "R2:2026-11-18",
           "round": 5,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "828883",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2393,7 +2427,7 @@
           "position_key": "R2:2026-11-19",
           "round": 6,
           "event": "R2_EXIT",
-          "status": "ACCEPTED",
+          "status": "CANCELLED",
           "broker_order_id": "829182",
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2433,11 +2467,12 @@
             "ma_aligned": false,
             "strategy_id": "dongpa_modified"
           },
-          "status": "ACCEPTED",
+          "status": "FILLED",
           "broker_order_id": "829465",
-          "cumulative_quantity": 0,
-          "cumulative_notional": "0",
-          "cumulative_fee": "0"
+          "cumulative_quantity": 115,
+          "cumulative_notional": "3749.0000",
+          "cumulative_fee": "18.7450000",
+          "fee_source": "CONFIGURED_RESERVE"
         }
       },
       "last_atr_entry_session": null,
@@ -2472,7 +2507,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-25T06:00:06.854712+09:00",
+    "mixed_updated_at": "2026-11-25T06:01:33.438829+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
