@@ -2359,6 +2359,25 @@
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
           "cumulative_fee": "0"
+        },
+        "53942a94c4ac115cad1647cc60915edcf4db6d795f31a653840068d23d4915f8": {
+          "intent_id": "53942a94c4ac115cad1647cc60915edcf4db6d795f31a653840068d23d4915f8",
+          "strategy": "R2",
+          "ticker": "SOXL",
+          "side": "SELL",
+          "quantity": 122,
+          "price": "45.80",
+          "order_type": "LOC",
+          "session_date": "2026-11-24",
+          "lot_id": "R2:2026-11-19",
+          "position_key": "R2:2026-11-19",
+          "round": 6,
+          "event": "R2_EXIT",
+          "status": "PLANNED",
+          "broker_order_id": null,
+          "cumulative_quantity": 0,
+          "cumulative_notional": "0",
+          "cumulative_fee": "0"
         }
       },
       "last_atr_entry_session": null,
@@ -2393,7 +2412,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-24T18:02:56.834353+09:00",
+    "mixed_updated_at": "2026-11-24T18:03:01.440097+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
