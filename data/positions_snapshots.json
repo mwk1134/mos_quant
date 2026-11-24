@@ -851,7 +851,7 @@
   "KMW2": {
     "available_cash": 46926.2302,
     "processed_seed_dates": [],
-    "as_of_date": "2026-11-23",
+    "as_of_date": "2026-11-24",
     "compound_seed": 83546.45925811768,
     "compound_reference_seed": 83130.65925811768,
     "compound_profit_rate": 0.7,
@@ -2445,12 +2445,14 @@
         "owner_boot_id": "234fd8b1a60308f889d89c6edcc768350e5eec197f4ba37d",
         "session_date": "2026-11-24",
         "breakout_pct": "1.5",
-        "status": "ARMED",
+        "status": "EXPIRED",
         "armed_at": "2026-11-24T21:18:24.614889+09:00",
-        "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99"
+        "account_fingerprint": "507b3d957d4a6383209e41e35ed1c34f2ea3b76f078c905777e15410709dee99",
+        "ended_at": "2026-11-25T06:00:00.977501+09:00",
+        "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-25T05:59:06.457215+09:00",
+    "mixed_updated_at": "2026-11-25T06:00:06.854712+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
