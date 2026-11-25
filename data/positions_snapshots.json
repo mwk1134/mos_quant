@@ -399,19 +399,7 @@
     },
     "compound_trading_days": 31,
     "cash_snapshot_date": "2026-10-28",
-    "compound_settlements": [],
-    "pending_buy": {
-      "round": 6,
-      "quantity": 563,
-      "target_price": 33.74,
-      "order_date": "2026-11-25",
-      "basis_date": "2026-11-24",
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
-      "strategy_name": "기본"
-    }
+    "compound_settlements": []
   },
   "JEH": {
     "2_2026-11-12": {
