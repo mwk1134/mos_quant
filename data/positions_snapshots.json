@@ -2544,7 +2544,7 @@
           "position_key": "R2:2026-11-17",
           "round": 4,
           "event": "R2_EXIT",
-          "status": "PLANNED",
+          "status": "SENDING",
           "broker_order_id": null,
           "cumulative_quantity": 0,
           "cumulative_notional": "0",
@@ -2583,7 +2583,7 @@
         "reason": "TARGET_SESSION_ENDED"
       }
     },
-    "mixed_updated_at": "2026-11-25T18:02:54.752378+09:00",
+    "mixed_updated_at": "2026-11-25T18:02:56.679992+09:00",
     "atr70_r2_status": {
       "state": "ACTIVE",
       "checked_at": "2026-11-12T09:24:40.189724+09:00",
