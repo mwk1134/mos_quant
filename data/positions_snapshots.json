@@ -457,13 +457,13 @@
       "max_hold_days": 35,
       "strategy_name": "기본"
     },
-    "available_cash": 10.04958770752,
+    "available_cash": 156.32958770752,
     "processed_seed_dates": [
       "2025-12-22",
       "2026-01-15",
       "2026-10-04"
     ],
-    "as_of_date": "2026-11-25",
+    "as_of_date": "2026-11-27",
     "compound_seed": 44821.66049786376,
     "compound_reference_seed": 44821.66049786376,
     "compound_profit_rate": 0.7,
@@ -841,39 +841,55 @@
           "fees": "0",
           "position_key": "7_2026-11-25",
           "recommended_quantity": 1
+        },
+        "2026-11-27:2319068": {
+          "trade_date": "2026-11-27",
+          "side": "SELL",
+          "quantity": 3,
+          "notional": "109.7100",
+          "fees": "0",
+          "position_key": "6_2026-11-24"
+        },
+        "2026-11-27:2319153": {
+          "trade_date": "2026-11-27",
+          "side": "SELL",
+          "quantity": 1,
+          "notional": "36.5700",
+          "fees": "0",
+          "position_key": "7_2026-11-25"
         }
       }
     },
-    "compound_trading_days": 33,
+    "compound_trading_days": 34,
     "cash_snapshot_date": "2026-10-28",
     "compound_settlements": [
       {
         "trade_date": "2026-11-23",
         "settlement_date": "2026-11-30",
         "pnl": 24.66
+      },
+      {
+        "trade_date": "2026-11-27",
+        "settlement_date": "2026-12-04",
+        "pnl": 11.91
+      },
+      {
+        "trade_date": "2026-11-27",
+        "settlement_date": "2026-12-04",
+        "pnl": 4.55
       }
     ],
-    "6_2026-11-24": {
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
-      "strategy_name": "기본",
+    "pending_buy": {
       "round": 6,
-      "shares": 3,
-      "buy_price": 32.6,
-      "amount": 97.8
-    },
-    "7_2026-11-25": {
+      "quantity": 4,
+      "target_price": 37.85,
+      "order_date": "2026-11-30",
+      "basis_date": "2026-11-27",
       "mode": "SF",
       "buy_threshold": 3.5,
       "sell_threshold": 1.1,
       "max_hold_days": 35,
-      "strategy_name": "기본",
-      "round": 7,
-      "shares": 1,
-      "buy_price": 32.02,
-      "amount": 32.02
+      "strategy_name": "기본"
     }
   },
   "KMW2": {
