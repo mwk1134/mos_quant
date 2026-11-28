@@ -3292,14 +3292,14 @@
     ],
     "pending_buy": {
       "round": 7,
-      "quantity": 20,
-      "target_price": 37.85,
+      "quantity": 26,
+      "target_price": 37.89,
       "order_date": "2026-11-30",
       "basis_date": "2026-11-27",
-      "mode": "SF",
-      "buy_threshold": 3.5,
-      "sell_threshold": 1.1,
-      "max_hold_days": 35,
+      "mode": "AG",
+      "buy_threshold": 3.6,
+      "sell_threshold": 3.5,
+      "max_hold_days": 7,
       "strategy_name": "기본"
     }
   },
